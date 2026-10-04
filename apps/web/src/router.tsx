@@ -9,20 +9,32 @@ import {
 import { AppShell } from './components/AppShell.js';
 import { Spinner } from './components/ui.js';
 import { instanceQuery, queryClient, sessionQuery } from './lib/queries.js';
+import { AccountSecurityPage } from './pages/AccountSecurityPage.js';
 import { AdminSettingsPage } from './pages/AdminSettingsPage.js';
+import { AdminUsersPage } from './pages/AdminUsersPage.js';
 import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
 import { HomePage } from './pages/HomePage.js';
 import { LoginPage } from './pages/LoginPage.js';
+import {
+  ForgotPasswordPage,
+  RegisterPage,
+  ResetPasswordPage,
+  VerifyEmailPage,
+} from './pages/PublicPages.js';
 import { SetupPage } from './pages/SetupPage.js';
 import { SetupPendingPage } from './pages/SetupPendingPage.js';
 
-type Gate = '/login' | '/change-password' | '/setup' | '/setup-pending';
-const GATES: string[] = ['/login', '/change-password', '/setup', '/setup-pending'];
+type Gate = '/login' | '/change-password' | '/account/security' | '/setup' | '/setup-pending';
+/** Screens that only make sense while signed out. */
+const SIGNED_OUT_ONLY = ['/login', '/forgot-password', '/reset-password', '/register', '/invite'];
+/** Screens that are only reachable as the current gate. */
+const GATE_ONLY = ['/change-password', '/setup', '/setup-pending'];
 
 /** Where the user must be right now, or null when the app itself is available. */
 function requiredGate(instance: InstanceStatus, session: SessionInfo | null): Gate | null {
   if (!session) return '/login';
   if (session.user.mustChangePassword) return '/change-password';
+  if (session.user.mustEnrollMfa) return '/account/security';
   if (!instance.setupComplete) return session.user.isAdmin ? '/setup' : '/setup-pending';
   return null;
 }
@@ -35,44 +47,53 @@ async function guard(path: string, opts: { adminOnly?: boolean } = {}) {
     queryClient.fetchQuery(sessionQuery),
   ]);
   const gate = requiredGate(instance, session);
+  if (!session && SIGNED_OUT_ONLY.includes(path)) return;
   if (gate === path) return;
   if (gate) throw redirect({ to: gate });
-  if (GATES.includes(path)) throw redirect({ to: '/' });
+  if (SIGNED_OUT_ONLY.includes(path) || GATE_ONLY.includes(path)) throw redirect({ to: '/' });
   if (opts.adminOnly && !session?.user.isAdmin) throw redirect({ to: '/' });
 }
 
 const rootRoute = createRootRoute({ component: Outlet, pendingComponent: Spinner });
-
-const gateRoute = (path: Gate, component: () => React.ReactNode) =>
-  createRoute({ getParentRoute: () => rootRoute, path, beforeLoad: () => guard(path), component });
+const page = (path: string, component: () => React.ReactNode, opts?: { adminOnly?: boolean }) =>
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path,
+    beforeLoad: () => guard(path, opts),
+    component,
+  });
 
 const appRoute = createRoute({ getParentRoute: () => rootRoute, id: 'app', component: AppShell });
-const homeRoute = createRoute({
-  getParentRoute: () => appRoute,
-  path: '/',
-  beforeLoad: () => guard('/'),
-  component: HomePage,
-});
-const adminSettingsRoute = createRoute({
-  getParentRoute: () => appRoute,
-  path: '/admin/settings',
-  beforeLoad: () => guard('/admin/settings', { adminOnly: true }),
-  component: AdminSettingsPage,
-});
-const accountPasswordRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/account/password',
-  beforeLoad: () => guard('/account/password'),
-  component: ChangePasswordPage,
-});
+const appPage = (path: string, component: () => React.ReactNode, opts?: { adminOnly?: boolean }) =>
+  createRoute({
+    getParentRoute: () => appRoute,
+    path,
+    beforeLoad: () => guard(path, opts),
+    component,
+  });
 
 const routeTree = rootRoute.addChildren([
-  gateRoute('/login', LoginPage),
-  gateRoute('/change-password', ChangePasswordPage),
-  gateRoute('/setup', SetupPage),
-  gateRoute('/setup-pending', SetupPendingPage),
-  accountPasswordRoute,
-  appRoute.addChildren([homeRoute, adminSettingsRoute]),
+  page('/login', LoginPage),
+  page('/forgot-password', ForgotPasswordPage),
+  page('/reset-password', ResetPasswordPage),
+  page('/register', () => <RegisterPage />),
+  page('/invite', () => <RegisterPage invite />),
+  // Works signed in or out (the link may be opened on another device).
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/verify-email',
+    component: VerifyEmailPage,
+  }),
+  page('/change-password', ChangePasswordPage),
+  page('/setup', SetupPage),
+  page('/setup-pending', SetupPendingPage),
+  page('/account/password', ChangePasswordPage),
+  appRoute.addChildren([
+    appPage('/', HomePage),
+    appPage('/account/security', AccountSecurityPage),
+    appPage('/admin/settings', AdminSettingsPage, { adminOnly: true }),
+    appPage('/admin/users', AdminUsersPage, { adminOnly: true }),
+  ]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPendingComponent: Spinner });

@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ (2026-10-04)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ (2026-10-04)
 Owner: Sarel
 
 ---
@@ -347,6 +347,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Sessions list/revoke, "sign out everywhere", new-login email alerts.
 - Admin: create/disable users, reset MFA (audited), invites, registration modes.
 - **Security gate:** credential stuffing/rate limit tests, MFA bypass attempts (skip step, replay TOTP, race recovery codes), session fixation, CSRF on every form, account enumeration timing, reset-token reuse/expiry, WebAuthn origin/RP-ID mismatch, user-verification flag enforcement.
+- *Done 2026-10-04 (ADR 0004). Added beyond the original scope: sudo mode for sensitive changes, sign-in by verified email, `bokydo admin reset-mfa` break-glass, opt-in HIBP check.*
 
 #### W2 — Tasks & projects core UI · XL
 - App shell, sidebar (Inbox, Today, Upcoming, Filters & Labels, Favorites, projects tree with sub-projects, colors, archive), list layout.

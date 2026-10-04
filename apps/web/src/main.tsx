@@ -3,6 +3,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { queryClient } from './lib/queries.js';
+import { ReauthProvider } from './lib/reauth.js';
 import { router } from './router.js';
 import './index.css';
 
@@ -12,7 +13,9 @@ if (!root) throw new Error('Missing #root element');
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ReauthProvider>
+        <RouterProvider router={router} />
+      </ReauthProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

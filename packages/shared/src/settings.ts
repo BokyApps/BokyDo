@@ -101,6 +101,9 @@ export const settingDefinitions = {
     default: 90,
     secret: false,
   },
+  /** Opt-in: checks new passwords against Have I Been Pwned (k-anonymity; only a 5-char hash prefix leaves). */
+  'security.breachedPasswordCheck': { schema: z.boolean(), default: false, secret: false },
+  'security.newLoginAlerts': { schema: z.boolean(), default: true, secret: false },
 
   'email.smtpHost': { schema: hostname.nullable(), default: null, secret: false },
   'email.smtpPort': { schema: z.number().int().min(1).max(65535), default: 587, secret: false },

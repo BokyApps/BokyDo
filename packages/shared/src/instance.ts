@@ -8,6 +8,12 @@ export const instanceStatusSchema = z.object({
   setupComplete: z.boolean(),
   /** Shown on password forms; not sensitive. */
   passwordMinLength: z.number().int(),
+  /** Whether a "Create account" link should be shown (open registration). */
+  registrationOpen: z.boolean(),
+  /** Whether "Forgot password?" can send email. */
+  emailEnabled: z.boolean(),
+  /** Passkeys need the public URL to be set and HTTPS (or localhost). */
+  passkeysAvailable: z.boolean(),
 });
 export type InstanceStatus = z.infer<typeof instanceStatusSchema>;
 

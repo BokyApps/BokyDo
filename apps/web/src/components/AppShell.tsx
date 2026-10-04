@@ -4,6 +4,8 @@ import { api, clearCsrfToken } from '../lib/api.js';
 import { sessionQuery } from '../lib/queries.js';
 import { Button, Logo } from './ui.js';
 
+const navLink = 'rounded-lg px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800';
+
 export function AppShell() {
   const { data: session } = useQuery(sessionQuery);
   const queryClient = useQueryClient();
@@ -25,17 +27,27 @@ export function AppShell() {
         </Link>
         <nav className="flex items-center gap-1 text-sm">
           {session?.user.isAdmin && (
-            <Link
-              to="/admin/settings"
-              className="rounded-lg px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-              activeProps={{ className: 'font-medium' }}
-            >
-              Admin
-            </Link>
+            <>
+              <Link
+                to="/admin/users"
+                className={navLink}
+                activeProps={{ className: 'font-medium' }}
+              >
+                Users
+              </Link>
+              <Link
+                to="/admin/settings"
+                className={navLink}
+                activeProps={{ className: 'font-medium' }}
+              >
+                Settings
+              </Link>
+            </>
           )}
           <Link
-            to="/account/password"
-            className="rounded-lg px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            to="/account/security"
+            className={navLink}
+            activeProps={{ className: 'font-medium' }}
           >
             {session?.user.username}
           </Link>

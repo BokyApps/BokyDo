@@ -54,6 +54,11 @@ export class EventBus {
     for (const sub of this.byUser.get(userId) ?? []) sub.close();
   }
 
+  closeUserExcept(userId: string, keepSessionId: string): void {
+    for (const sub of this.byUser.get(userId) ?? [])
+      if (sub.sessionId !== keepSessionId) sub.close();
+  }
+
   closeAll(): void {
     for (const set of this.byUser.values()) for (const sub of set) sub.close();
   }

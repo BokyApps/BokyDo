@@ -19,10 +19,17 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
-export async function testApp(opts: { webRoot?: string } = {}): Promise<TestApp> {
+export async function testApp(
+  opts: { webRoot?: string; fetchImpl?: typeof fetch } = {},
+): Promise<TestApp> {
   const db = await freshDb();
   const secrets = await ensureAppSecrets(await mkdtemp(path.join(tmpdir(), 'bokydo-test-')));
-  const app = await buildApp({ db, secrets, webRoot: opts.webRoot ?? null });
+  const app = await buildApp({
+    db,
+    secrets,
+    webRoot: opts.webRoot ?? null,
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+  });
   return {
     app,
     db,
@@ -104,4 +111,26 @@ function safeJson(body: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/** Capture outgoing mail instead of sending it, and make email look configured. */
+export async function captureMail(
+  app: FastifyInstance,
+): Promise<{ to: string; subject: string; text: string }[]> {
+  const sent: { to: string; subject: string; text: string }[] = [];
+  app.services.mailer.send = async (mail) => {
+    sent.push(mail);
+  };
+  await app.services.settings.update(
+    { 'email.smtpHost': 'smtp.test', 'email.fromAddress': 'bokydo@example.com' },
+    { userId: null, ip: null },
+  );
+  return sent;
+}
+
+/** The token from the last emailed link (tokens travel in the URL fragment). */
+export function tokenFromMail(mail: { text: string } | undefined): string {
+  const match = mail?.text.match(/#([A-Za-z0-9_-]{43})/);
+  if (!match) throw new Error(`no link token in mail: ${mail?.text}`);
+  return match[1]!;
 }

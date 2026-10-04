@@ -6,7 +6,7 @@ import { verifyPassword } from '../security/password.js';
 import { freshDb, TEST_DATABASE_URL } from '../test/db.js';
 import { ensureInitialAdmin } from './initial-admin.js';
 import { isSetupComplete } from './instance-settings.js';
-import { resetPasswordFromCli } from './reset-password.js';
+import { resetMfaFromCli, resetPasswordFromCli } from './reset-password.js';
 
 describe.skipIf(!TEST_DATABASE_URL)('initial admin (Postgres)', () => {
   let h: DbHandle;
@@ -62,6 +62,26 @@ describe.skipIf(!TEST_DATABASE_URL)('initial admin (Postgres)', () => {
     });
     await resetPasswordFromCli(h.db, 'admin');
     expect(await h.db.select().from(sessions)).toHaveLength(0);
+  });
+
+  it('CLI MFA reset removes every second factor and signs the user out', async () => {
+    const [admin] = await h.db.select().from(users);
+    await h.db
+      .update(users)
+      .set({ totpEnabledAt: new Date(), totpLastStep: 1 })
+      .where(eq(users.id, admin!.id));
+    await h.db.insert(sessions).values({
+      id: 'live',
+      userId: admin!.id,
+      csrfToken: 'x',
+      idleExpiresAt: new Date(Date.now() + 60_000),
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    expect(await resetMfaFromCli(h.db, 'Admin')).toBe(true);
+    const [after] = await h.db.select().from(users);
+    expect(after!.totpEnabledAt).toBeNull();
+    expect(await h.db.select().from(sessions)).toHaveLength(0);
+    expect(await resetMfaFromCli(h.db, 'nobody')).toBe(false);
   });
 
   it('CLI reset reports unknown users', async () => {

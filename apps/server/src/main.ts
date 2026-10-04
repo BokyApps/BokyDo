@@ -46,9 +46,10 @@ async function main(): Promise<void> {
 
   const purge = setInterval(
     () =>
-      void app.services.sessions
-        .purgeExpired()
-        .catch((err: unknown) => app.log.warn({ err }, 'session purge failed')),
+      void Promise.all([
+        app.services.sessions.purgeExpired(),
+        app.services.flows.purgeExpired(),
+      ]).catch((err: unknown) => app.log.warn({ err }, 'expired session/flow purge failed')),
     60 * 60 * 1000,
   );
   purge.unref();

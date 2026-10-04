@@ -1,5 +1,8 @@
 import {
+  useEffect,
   useId,
+  useRef,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -174,6 +177,98 @@ export function Spinner() {
   return (
     <div className="flex min-h-svh items-center justify-center" role="status" aria-label="Loading">
       <span className="size-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+    </div>
+  );
+}
+
+export function Checkbox({
+  label,
+  hint,
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: ReactNode }) {
+  const id = useId();
+  return (
+    <div className="flex items-start gap-2">
+      <input id={id} type="checkbox" className="mt-0.5 size-4 accent-brand" {...rest} />
+      <div>
+        <label htmlFor={id} className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+          {label}
+        </label>
+        {hint && <p className="text-xs text-neutral-500 dark:text-neutral-400">{hint}</p>}
+      </div>
+    </div>
+  );
+}
+
+/** Accessible modal built on the native <dialog> (focus trap and Escape for free). */
+export function Dialog({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (open && !el.open) el.showModal();
+    if (!open && el.open) el.close();
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      aria-labelledby={`${title}-title`}
+      className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/40 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
+    >
+      <h2 id={`${title}-title`} className="mb-4 text-base font-semibold">
+        {title}
+      </h2>
+      {children}
+    </dialog>
+  );
+}
+
+/** Secrets shown once (recovery codes, one-time passphrases), with copy and download. */
+export function SecretList({ items, filename }: { items: string[]; filename: string }) {
+  const [copied, setCopied] = useState(false);
+  const text = items.join('\n');
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([text + '\n'], { type: 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <div className="space-y-3">
+      <ul
+        className={`grid gap-2 rounded-lg bg-neutral-100 p-3 font-mono text-sm break-all dark:bg-neutral-950 ${
+          items.length > 1 && items.every((i) => i.length <= 16) ? 'grid-cols-2' : 'grid-cols-1'
+        }`}
+      >
+        {items.map((i) => (
+          <li key={i}>{i}</li>
+        ))}
+      </ul>
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+        <Button type="button" variant="secondary" onClick={download}>
+          Download
+        </Button>
+      </div>
     </div>
   );
 }

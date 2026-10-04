@@ -2,7 +2,7 @@ import { normalizePublicUrl, type PublicSettings, type SettingsPatch } from '@bo
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
-import { Alert, Button, Card, SelectField, TextField } from '../components/ui.js';
+import { Alert, Button, Card, Checkbox, SelectField, TextField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { adminSettingsQuery } from '../lib/queries.js';
@@ -138,6 +138,8 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
   const [mfa, setMfa] = useState<string>(settings['security.mfaEnforcement']);
   const [idleDays, setIdleDays] = useState(String(settings['security.sessionIdleDays']));
   const [maxDays, setMaxDays] = useState(String(settings['security.sessionMaxDays']));
+  const [breachCheck, setBreachCheck] = useState(settings['security.breachedPasswordCheck']);
+  const [loginAlerts, setLoginAlerts] = useState(settings['security.newLoginAlerts']);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -147,6 +149,8 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
       'security.mfaEnforcement': mfa as 'off' | 'admins' | 'everyone',
       'security.sessionIdleDays': Number(idleDays),
       'security.sessionMaxDays': Number(maxDays),
+      'security.breachedPasswordCheck': breachCheck,
+      'security.newLoginAlerts': loginAlerts,
     });
   };
 
@@ -179,7 +183,7 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
         label="Require two-factor authentication"
         value={mfa}
         onChange={(e) => setMfa(e.target.value)}
-        hint="Enforced once two-factor sign-in ships (W1)."
+        hint="Users without an authenticator app or passkey are asked to set one up before they can continue."
         options={[
           { value: 'off', label: 'Optional' },
           { value: 'admins', label: 'Required for admins' },
@@ -204,6 +208,17 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
           onChange={(e) => setMaxDays(e.target.value)}
         />
       </div>
+      <Checkbox
+        label="Email users about sign-ins from new places"
+        checked={loginAlerts}
+        onChange={(e) => setLoginAlerts(e.target.checked)}
+      />
+      <Checkbox
+        label="Reject passwords found in data breaches"
+        hint="Checks Have I Been Pwned. Only the first 5 characters of a hash of the password leave this server."
+        checked={breachCheck}
+        onChange={(e) => setBreachCheck(e.target.checked)}
+      />
       <SaveRow save={save} />
     </form>
   );

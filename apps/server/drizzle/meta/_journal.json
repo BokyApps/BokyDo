@@ -22,6 +22,13 @@
       "when": 1791112472568,
       "tag": "0002_tasks_domain_and_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791116963017,
+      "tag": "0003_account_security",
+      "breakpoints": true
     }
   ]
 }

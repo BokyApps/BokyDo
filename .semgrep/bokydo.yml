@@ -60,3 +60,12 @@ rules:
     pattern-either:
       - pattern: $REPLY.send($ERR.stack)
       - pattern: '$REPLY.send({..., stack: $ERR.stack, ...})'
+
+  - id: bokydo-no-column-interpolation-in-sql-subquery
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Drizzle can render interpolated columns unqualified inside sql``, so a subquery like
+      `(select ... where ${a.userId} = ${b.id})` may compare columns of the same table. Write the
+      subquery with explicit table aliases instead (see F-018).
+    pattern-regex: 'sql(<[^>]*>)?`[^`]*\((select|exists)[^`]*\$\{\w+\.\w+\}'

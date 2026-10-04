@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Due } from '@bokydo/shared';
 import {
+  bigint,
   bigserial,
   boolean,
   date,
@@ -31,6 +32,12 @@ export const users = pgTable(
     passwordHash: text('password_hash').notNull(),
     isAdmin: boolean('is_admin').notNull().default(false),
     mustChangePassword: boolean('must_change_password').notNull().default(false),
+    emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
+    /** TOTP secret, envelope-encrypted (EncryptedValue). */
+    totpSecret: jsonb('totp_secret'),
+    totpEnabledAt: timestamp('totp_enabled_at', { withTimezone: true }),
+    /** Last accepted TOTP time step: a code can never be used twice. */
+    totpLastStep: integer('totp_last_step'),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),
     ...timestamps,
   },
@@ -58,10 +65,17 @@ export const sessions = pgTable(
   'sessions',
   {
     id: text('id').primaryKey(),
+    /** Identifier shown in the sessions list (the primary key is derived from the secret token). */
+    publicId: uuid('public_id').notNull().defaultRandom().unique(),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     csrfToken: text('csrf_token').notNull(),
+    authMethod: text('auth_method').notNull().default('password'),
+    /** Last time the user proved who they are (login or re-auth); gates sensitive actions. */
+    reauthenticatedAt: timestamp('reauthenticated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
     idleExpiresAt: timestamp('idle_expires_at', { withTimezone: true }).notNull(),
@@ -277,4 +291,92 @@ export const processedCommands = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.uuid] })],
+);
+
+// ---------------------------------------------------------------------------------------------
+// Account security (W1)
+// ---------------------------------------------------------------------------------------------
+
+/** Single-use MFA recovery codes, stored as keyed hashes. */
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('recovery_codes_hash_idx').on(t.userId, t.codeHash)],
+);
+
+/** Passkeys / security keys (WebAuthn credentials). */
+export const webauthnCredentials = pgTable(
+  'webauthn_credentials',
+  {
+    /** Credential ID, base64url. */
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    publicKey: text('public_key').notNull(),
+    counter: bigint('counter', { mode: 'number' }).notNull().default(0),
+    transports: text('transports')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    deviceType: text('device_type').notNull(),
+    backedUp: boolean('backed_up').notNull(),
+    aaguid: text('aaguid'),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  },
+  (t) => [index('webauthn_credentials_user_idx').on(t.userId)],
+);
+
+/**
+ * Short-lived, multi-step authentication state: the MFA step after a password, passkey
+ * challenges, pending TOTP enrolment. `id` is HMAC(session.key, token); the token lives in an
+ * HttpOnly cookie or is bound to the session.
+ */
+export const authFlows = pgTable(
+  'auth_flows',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind', {
+      enum: ['mfa', 'passkey_login', 'passkey_register', 'totp_setup', 'reauth_passkey'],
+    }).notNull(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'cascade' }),
+    challenge: text('challenge'),
+    /** Encrypted payload (e.g. a TOTP secret awaiting confirmation). */
+    secret: jsonb('secret'),
+    attempts: integer('attempts').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('auth_flows_session_idx').on(t.sessionId, t.kind)],
+);
+
+/** Single-use emailed/linked tokens: password reset, email verification, invitations. */
+export const userTokens = pgTable(
+  'user_tokens',
+  {
+    /** HMAC(session.key, token). */
+    id: text('id').primaryKey(),
+    /** Stable public reference (e.g. to revoke an invite). */
+    ref: uuid('ref').notNull().defaultRandom().unique(),
+    kind: text('kind', { enum: ['password_reset', 'email_verify', 'invite'] }).notNull(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    email: text('email'),
+    data: jsonb('data').notNull().default({}),
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+  },
+  (t) => [index('user_tokens_user_idx').on(t.userId, t.kind)],
 );

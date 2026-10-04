@@ -134,6 +134,47 @@ check "event stream opens for a signed-in user" \
 check "event stream refuses anonymous users" \
   test "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/api/v1/sync/events")" = 401
 
+echo "== account security (W1)"
+# Latest email to an address, and the token from its link (tokens travel in the URL fragment).
+mail_token() {
+  local id
+  id=$(curl -s "$MAILPIT/api/v1/search?query=to:$1" | jq -r '.messages[0].ID')
+  curl -s "$MAILPIT/api/v1/message/$id" | jq -r .Text | grep -o '#[A-Za-z0-9_-]\{43\}' | head -1 | cut -c2-
+}
+totp() { # totp <base32 secret> <step offset>
+  node -e 'const c=require("crypto"),A="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";let b=0,v=0,o=[];for(const ch of process.argv[1]){v=(v<<5)|A.indexOf(ch);b+=5;if(b>=8){o.push((v>>>(b-8))&255);b-=8}}const m=Buffer.alloc(8);m.writeBigUInt64BE(BigInt(Math.floor(Date.now()/30000)+Number(process.argv[2])));const h=c.createHmac("sha1",Buffer.from(o)).update(m).digest(),f=h[h.length-1]&15;console.log(String((h.readUInt32BE(f)&0x7fffffff)%1e6).padStart(6,"0"))' "$1" "$2"
+}
+r=$(api PUT /api/v1/account/email '{"email":"admin@example.com"}')
+check "email change sends a verification link" bash -c "jq -e .verificationSent <<<'$(body_of "$r")'"
+sleep 1
+VERIFY=$(mail_token admin@example.com)
+check "email verified from the emailed link" test "$(status_of "$(api POST /api/v1/auth/email/verify "{\"token\":\"$VERIFY\"}")")" = 204
+check "reset request for an unknown user looks identical" \
+  test "$(body_of "$(api POST /api/v1/auth/password-reset '{"login":"nobody"}')")" = '{"ok":true}'
+api POST /api/v1/auth/password-reset '{"login":"admin"}' >/dev/null
+sleep 1
+RESET=$(mail_token admin@example.com)
+NEWPW2='harbor-velvet-cactus-meadow-smoke'
+check "password reset via emailed link" \
+  test "$(status_of "$(api POST /api/v1/auth/password-reset/complete "{\"token\":\"$RESET\",\"newPassword\":\"$NEWPW2\"}")")" = 204
+check "reset link is single-use" \
+  test "$(status_of "$(api POST /api/v1/auth/password-reset/complete "{\"token\":\"$RESET\",\"newPassword\":\"$NEWPW2-again\"}")")" = 400
+CSRF=""; : > "$JAR"
+r=$(api POST /api/v1/auth/login "{\"username\":\"admin@example.com\",\"password\":\"$NEWPW2\"}")
+check "sign in with verified email and new password" test "$(status_of "$r")" = 200
+CSRF=$(body_of "$r" | jq -r .csrfToken)
+r=$(api POST /api/v1/account/totp/setup)
+SECRET=$(body_of "$r" | jq -r .secret)
+r=$(api POST /api/v1/account/totp/confirm "{\"code\":\"$(totp "$SECRET" 0)\"}")
+check "TOTP enrolled, 10 recovery codes issued" test "$(body_of "$r" | jq '.recoveryCodes | length')" = 10
+api POST /api/v1/auth/logout >/dev/null; CSRF=""; : > "$JAR"
+r=$(api POST /api/v1/auth/login "{\"username\":\"admin\",\"password\":\"$NEWPW2\"}")
+check "password alone now asks for a second factor" bash -c "jq -e .mfaRequired <<<'$(body_of "$r")'"
+check "no session before the second factor" test "$(status_of "$(api GET /api/v1/auth/session)")" = 401
+r=$(api POST /api/v1/auth/mfa/totp "{\"code\":\"$(totp "$SECRET" 1)\"}")
+check "TOTP completes sign-in" bash -c "[[ \"$(body_of "$r" | jq -r .authMethod)\" == password+totp ]]"
+CSRF=$(body_of "$r" | jq -r .csrfToken)
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5
@@ -142,6 +183,7 @@ check "restart creates no second admin" \
 check "bootstrap re-run keeps secrets" bash -c "${C[*]} run --rm bootstrap"
 check "CLI reset-password works" bash -c "${C[*]} exec -T app bokydo admin reset-password admin | grep -q 'Passphrase: [a-z]'"
 check "CLI reset-password rejects unknown user" bash -c "! ${C[*]} exec -T app bokydo admin reset-password nobody"
+check "CLI reset-mfa works" bash -c "${C[*]} exec -T app bokydo admin reset-mfa admin | grep -q removed"
 check "CLI clear-public-url works" bash -c "${C[*]} exec -T app bokydo admin clear-public-url | grep -q cleared"
 check "reset revokes existing sessions" test "$(status_of "$(api GET /api/v1/auth/session)")" = 401
 check "reset is audited" \

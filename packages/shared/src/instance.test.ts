@@ -8,6 +8,9 @@ describe('instanceStatusSchema', () => {
       version: '0.0.0',
       setupComplete: false,
       passwordMinLength: 12,
+      registrationOpen: false,
+      emailEnabled: false,
+      passkeysAvailable: false,
       adminPassphrase: 'nope',
     });
     expect(result.success).toBe(false);

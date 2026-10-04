@@ -1,14 +1,15 @@
 import { CSRF_HEADER, isLoopbackHost } from '@bokydo/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
-import type { SessionContext, SessionStore } from '../auth/sessions.js';
+import { REAUTH_WINDOW_MS, type SessionContext, type SessionStore } from '../auth/sessions.js';
 import type { SettingsService } from '../settings/settings-service.js';
 
 /**
  * Who may call a route:
  *  - public:     anyone
- *  - restricted: any signed-in user, even one who must still change their password
- *  - user:       signed-in user with no pending password change
+ *  - restricted: any signed-in user, even one who must still change their password or enrol in
+ *                two-factor authentication (used for exactly those screens)
+ *  - user:       signed-in user with nothing pending
  *  - admin:      `user` + instance admin
  */
 export type Access = 'public' | 'restricted' | 'user' | 'admin';
@@ -90,6 +91,7 @@ export function registerAccessControl(app: FastifyInstance, deps: AccessDeps): v
     if (unsafe && !csrfTokenValid(req, req.session)) return deny(reply, 403, 'csrf_failed');
     if (access === 'restricted') return;
     if (req.session.user.mustChangePassword) return deny(reply, 403, 'password_change_required');
+    if (req.session.user.mustEnrollMfa) return deny(reply, 403, 'mfa_enrollment_required');
     if (access === 'admin' && !req.session.user.isAdmin) return deny(reply, 403, 'forbidden');
   });
 }
@@ -176,4 +178,20 @@ export function insecurePublicUrl(publicUrl: string | null): boolean {
 export function requireSession(req: FastifyRequest): SessionContext {
   if (!req.session) throw new Error(`No session on ${req.method} ${req.url}`);
   return req.session;
+}
+
+/**
+ * "Sudo mode" for sensitive account changes (two-factor, passkeys, email): the user must have
+ * entered their password or used a passkey within the last few minutes, so a stolen session
+ * cookie alone can't lock the real owner out. Sends 403 `reauth_required` and returns false.
+ */
+export function requireRecentAuth(req: FastifyRequest, reply: FastifyReply): boolean {
+  const session = requireSession(req);
+  if (Date.now() - session.reauthenticatedAt.getTime() <= REAUTH_WINDOW_MS) return true;
+  void reply.status(403).send({ error: 'reauth_required' });
+  return false;
+}
+
+export function useSecureCookies(req: FastifyRequest, settings: SettingsService): boolean {
+  return useSecureCookie(req, settings);
 }

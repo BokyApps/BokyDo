@@ -3,7 +3,15 @@ import { type Health, type InstanceStatus } from '@bokydo/shared';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { STATUS_CODES } from 'node:http';
 import { registerAdminSettingsRoutes } from './admin/settings-routes.js';
+import { registerAccountRoutes } from './account/routes.js';
+import { registerAdminUserRoutes } from './admin/users-routes.js';
+import type { AuthDeps } from './auth/deps.js';
+import { FlowStore } from './auth/flows.js';
+import { registerPublicAuthRoutes } from './auth/public-routes.js';
 import { registerAuthRoutes } from './auth/routes.js';
+import { UserTokenStore } from './auth/user-tokens.js';
+import { relyingParty } from './auth/webauthn.js';
+import { Notifier } from './email/notifier.js';
 import { SessionStore } from './auth/sessions.js';
 import type { DbHandle } from './db/client.js';
 import { Mailer } from './email/mailer.js';
@@ -23,6 +31,8 @@ export interface AppDeps {
   secrets: AppSecrets;
   webRoot: string | null;
   logger?: FastifyServerOptions['logger'];
+  /** Outbound fetch (breached-password check); injectable for tests. */
+  fetchImpl?: typeof fetch;
 }
 
 export interface AppServices {
@@ -31,6 +41,8 @@ export interface AppServices {
   mailer: Mailer;
   sync: SyncService;
   events: EventBus;
+  flows: FlowStore;
+  tokens: UserTokenStore;
 }
 
 declare module 'fastify' {
@@ -59,7 +71,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const sync = new SyncService(db, (affected) => {
     events.publish(affected).catch((err: unknown) => app.log.warn({ err }, 'event publish failed'));
   });
-  const services: AppServices = { settings, sessions, mailer, sync, events };
+  const flows = new FlowStore(db, deps.secrets.sessionKey);
+  const tokens = new UserTokenStore(db, deps.secrets.sessionKey);
+  const notifier = new Notifier(db, settings, mailer, app.log);
+  const services: AppServices = { settings, sessions, mailer, sync, events, flows, tokens };
   app.decorate('services', services);
   app.addHook('onClose', async () => events.closeAll());
 
@@ -96,10 +111,27 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       version: VERSION,
       setupComplete: settings.isSetupComplete(),
       passwordMinLength: settings.get('security.passwordMinLength'),
+      registrationOpen: settings.get('access.registrationMode') === 'open',
+      emailEnabled: notifier.canEmail,
+      passkeysAvailable: relyingParty(settings) !== null,
     }),
   );
 
-  await registerAuthRoutes(app, { db, settings, sessions, events });
+  const authDeps: AuthDeps = {
+    db,
+    settings,
+    sessions,
+    events,
+    flows,
+    tokens,
+    notifier,
+    secrets: deps.secrets,
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+  };
+  await registerAuthRoutes(app, authDeps);
+  registerPublicAuthRoutes(app, authDeps);
+  registerAccountRoutes(app, authDeps);
+  registerAdminUserRoutes(app, authDeps);
   registerSetupRoutes(app, settings);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
   registerSyncRoutes(app, { sync, events, sessions });
