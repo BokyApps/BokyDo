@@ -162,6 +162,31 @@ Deterministic parser in `packages/nlp` — **not** an LLM — so it's instant, o
 
 ---
 
+## 4a. Themes
+
+Selectable themes based on the ten most popular terminal/editor color schemes, plus BokyDo's own light and dark defaults. A theme is a **per-user setting that syncs**, so the web app, Android app and Android widgets all follow it.
+
+| Theme | Variants |
+|---|---|
+| Catppuccin | Latte (light), Frappé, Macchiato, Mocha |
+| Gruvbox | Light, Dark |
+| Dracula | Dracula (dark), Alucard (light) |
+| Nord | Dark (Polar Night); light uses Snow Storm |
+| Tokyo Night | Night, Storm, Moon, Day (light) |
+| Solarized | Light, Dark |
+| One Dark / One Light | Dark, Light |
+| Rosé Pine | Main, Moon, Dawn (light) |
+| Everforest | Light, Dark |
+| Kanagawa | Wave, Dragon, Lotus (light) |
+
+**How it works**
+- `packages/themes`: every theme is a set of semantic tokens (background, surface, text, muted text, border, accent, focus ring, success/warning/danger, and the four priority colors p1–p4) derived from the theme's published palette. One source of truth, exported as CSS custom properties for the web and as a generated Kotlin color scheme for Android (Compose `ColorScheme` + Glance widget colors).
+- **Appearance mode**: *System* (pick the theme's light or dark variant from the OS setting), *Light* or *Dark*. Users choose a theme family plus, optionally, a specific variant per mode (e.g. Catppuccin Latte by day, Mocha by night). Themes with only one variant pair with the closest BokyDo default for the other mode.
+- **Project and label colors** (the fixed 20-color palette) are adjusted per theme so they keep readable contrast on that theme's background.
+- **Accessibility gate**: an automated test checks every theme variant for WCAG 2.2 AA contrast (4.5:1 body text, 3:1 large text/UI components/focus ring, priority flags distinguishable). A theme that fails is tuned, not shipped as-is.
+- **Licensing**: these palettes are MIT-licensed (or similar); attributions go in `NOTICE`. Theme names are used descriptively.
+- **Delivery**: theme engine + BokyDo light/dark in **W2**; all ten theme families in **W2** as well (they're cheap once tokens exist); Android picks them up in **A2** (app) and **A4** (widgets).
+
 ## 5. AI layer (BYOK)
 
 ### 5.1 Capability model
@@ -327,7 +352,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - App shell, sidebar (Inbox, Today, Upcoming, Filters & Labels, Favorites, projects tree with sub-projects, colors, archive), list layout.
 - Task CRUD, task detail panel, markdown description, sub-tasks (nested, collapsible, progress), sections, priorities, labels, move/duplicate/copy link, complete/uncomplete (with recurring roll-forward), completed tasks view, archive.
 - Today (with overdue + "reschedule all"), Upcoming (day strip, week view, drag to reschedule).
-- Drag & drop everywhere, multi-select + bulk edit, undo toasts, global search (Postgres FTS), keyboard shortcuts (Todoist-like: `q`, `/`, `g t`, `e`, `t`…), view options (group/sort/filter per view), themes + dark mode, user preferences (start page, week start, time format, date format, smart date recognition).
+- Drag & drop everywhere, multi-select + bulk edit, undo toasts, global search (Postgres FTS), keyboard shortcuts (Todoist-like: `q`, `/`, `g t`, `e`, `t`…), view options (group/sort/filter per view), **theme engine with the ten terminal-theme families from §4a** (system/light/dark modes, synced per user, WCAG AA contrast test per variant), user preferences (start page, week start, time format, date format, smart date recognition).
 - **Security gate:** XSS in every text field (title, description, comment, project/label names) incl. markdown edge cases; IDOR via move/duplicate across projects; bulk endpoints check every item.
 
 #### W3 — Natural-language engine · L
@@ -411,6 +436,7 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 #### A2 — Core screens · L
 - Inbox, Today, Upcoming, projects (list + board), filters, labels, task detail, comments, search, settings — all offline-capable.
 - Quick add with live NLP highlighting. Option: run `packages/nlp` in an embedded JS engine (QuickJS) to keep **one** parser; fall back to server `/parse`. (Decide in A2 spike.)
+- Themes from §4a via a generated Compose `ColorScheme`; follows the user's synced theme and the system light/dark mode; optional Material You dynamic color as an extra choice.
 
 #### A3 — Notifications · M
 - **Reminders scheduled locally** with exact alarms (`SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` justification), re-armed on boot/timezone change/sync — works offline and without any push service.
@@ -418,7 +444,7 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 - Notification actions: complete, snooze, reschedule, reply to comment.
 
 #### A4 — Homescreen widgets & system integration · L
-- **Task list widget** (resizable; configurable to Inbox/Today/Upcoming/any project/filter; tap-to-complete checkboxes; scroll; add button; theme/transparency).
+- **Task list widget** (resizable; configurable to Inbox/Today/Upcoming/any project/filter; tap-to-complete checkboxes; scroll; add button; transparency; uses the user's theme from §4a or a per-widget theme override).
 - **Quick add widget** (1×1 / 4×1), **Ramble widget** (one-tap voice), **Today counter** (1×1).
 - Quick Settings tile, launcher app shortcuts, share target ("share to BokyDo" → new task with link), Assistant/App Actions where feasible.
 
@@ -485,7 +511,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | Calendar feed / calendar sync | ✅ feed / ⏳ 2-way sync | W11 / Phase 3 |
 | Email tasks to a project | ⏳ stretch | W11 |
 | Keyboard shortcuts | ✅ | W2 |
-| Themes, dark mode | ✅ | W2 |
+| Themes, dark mode | ✅ **plus** 10 terminal-theme families (Catppuccin, Gruvbox, Dracula, Nord, Tokyo Night, Solarized, One Dark, Rosé Pine, Everforest, Kanagawa) on web, Android and widgets | W2 / A2 / A4 |
 | Search | ✅ (+ semantic) | W2/W9 |
 | REST/Sync API, webhooks | ✅ | W10 |
 | Integrations marketplace | ➖ replaced by API + MCP + webhooks | W10 |
