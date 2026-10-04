@@ -162,7 +162,7 @@ Deterministic parser in `packages/nlp` — **not** an LLM — so it's instant, o
 
 ---
 
-## 4a. Themes
+## 4a. Appearance: themes and fonts
 
 Selectable themes based on the ten most popular terminal/editor color schemes, plus BokyDo's own light and dark defaults. A theme is a **per-user setting that syncs**, so the web app, Android app and Android widgets all follow it.
 
@@ -186,6 +186,44 @@ Selectable themes based on the ten most popular terminal/editor color schemes, p
 - **Accessibility gate**: an automated test checks every theme variant for WCAG 2.2 AA contrast (4.5:1 body text, 3:1 large text/UI components/focus ring, priority flags distinguishable). A theme that fails is tuned, not shipped as-is.
 - **Licensing**: these palettes are MIT-licensed (or similar); attributions go in `NOTICE`. Theme names are used descriptively.
 - **Delivery**: theme engine + BokyDo light/dark in **W2**; all ten theme families in **W2** as well (they're cheap once tokens exist); Android picks them up in **A2** (app) and **A4** (widgets).
+
+### Fonts
+
+Font choice sits next to theme choice under **Settings → Appearance**, and syncs per user like the theme.
+
+| Option | Why |
+|---|---|
+| **System** (default) | The OS UI font: native look, nothing to download |
+| Inter | Clean, highly legible UI sans |
+| IBM Plex Sans | Neutral, slightly technical |
+| Atkinson Hyperlegible | Designed for low-vision readers |
+| Lexend | Tuned for reading fluency |
+| OpenDyslexic | For readers with dyslexia |
+| JetBrains Mono | Monospace, for the terminal-theme crowd |
+| Fira Code / Fira Mono | Monospace alternative |
+
+- **Self-hosted** WOFF2 files, subset to the scripts we support, served from the app (CSP `font-src 'self'`). No Google Fonts CDN: no third-party requests, works offline and on air-gapped installs. Only the chosen font is loaded.
+- **Text size** (small / default / large / larger) and **density** (comfortable / compact) are separate settings, both rem-based so they scale everything consistently. Browser zoom keeps working.
+- Fonts are chosen only from SIL Open Font License (or similar) families; attributions go in `NOTICE`.
+- **Android**: the same families bundled in the app (subset), plus "System".
+- **Delivery**: with the theme engine in **W2**; Android in **A2**. Widgets use the system font (Glance limitation).
+
+
+
+## 4b. Time zones
+
+Most people don't know their IANA time-zone name (`Asia/Phnom_Penh`), so nobody should have to type one.
+
+- **Detected by default**: the browser's (or phone's) zone is suggested up front, e.g. "Use detected: Phnom Penh, Cambodia (UTC+7, 21:40 now)".
+- **Smart search combobox** wherever a zone is chosen (user preferences, Admin → default time zone, fixed-zone due dates). Matches on:
+  - city and country names, including the major cities that share a zone (Johannesburg, Pretoria, Cape Town → `Africa/Johannesburg`; Bangkok, Hanoi, Phnom Penh → UTC+7 zones)
+  - common abbreviations (SAST, ICT, CET/CEST, PST/PDT, AEST)
+  - UTC offsets typed any way: `+7`, `utc+7`, `GMT+07:00`
+  - the IANA name itself, for people who do know it
+- Each result shows the friendly name, the current UTC offset, and the current local time, so picking the right one is obvious. Results that share an offset are grouped.
+- Data: the zone list comes from the runtime (`Intl.supportedValuesOf('timeZone')`), so it tracks tzdata updates; a small bundled table adds countries, extra city aliases and abbreviations (from tzdata's `zone1970.tab` plus CLDR names). Values are always stored as canonical IANA names.
+- **Travel**: when the device's zone differs from the saved one, offer once: "You're in UTC+2 now. Switch your time zone?" (Todoist does this too).
+- **Delivery**: the shared combobox in **W2** (user preferences), retrofitted into Admin → Settings → default time zone in the same deliverable; Android uses the same search data in **A2**.
 
 ## 5. AI layer (BYOK)
 
@@ -353,7 +391,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - App shell, sidebar (Inbox, Today, Upcoming, Filters & Labels, Favorites, projects tree with sub-projects, colors, archive), list layout.
 - Task CRUD, task detail panel, markdown description, sub-tasks (nested, collapsible, progress), sections, priorities, labels, move/duplicate/copy link, complete/uncomplete (with recurring roll-forward), completed tasks view, archive.
 - Today (with overdue + "reschedule all"), Upcoming (day strip, week view, drag to reschedule).
-- Drag & drop everywhere, multi-select + bulk edit, undo toasts, global search (Postgres FTS), keyboard shortcuts (Todoist-like: `q`, `/`, `g t`, `e`, `t`…), view options (group/sort/filter per view), **theme engine with the ten terminal-theme families from §4a** (system/light/dark modes, synced per user, WCAG AA contrast test per variant), user preferences (start page, week start, time format, date format, smart date recognition).
+- Drag & drop everywhere, multi-select + bulk edit, undo toasts, global search (Postgres FTS), keyboard shortcuts (Todoist-like: `q`, `/`, `g t`, `e`, `t`…), view options (group/sort/filter per view), **theme engine with the ten terminal-theme families from §4a** (system/light/dark modes, synced per user, WCAG AA contrast test per variant), **font, text size and density choices (§4a)**, user preferences (start page, **time zone with detection + smart search (§4b)**, week start, time format, date format, smart date recognition). Admin → default time zone switches to the same smart picker.
 - **Security gate:** XSS in every text field (title, description, comment, project/label names) incl. markdown edge cases; IDOR via move/duplicate across projects; bulk endpoints check every item.
 
 #### W3 — Natural-language engine · L
@@ -437,7 +475,8 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 #### A2 — Core screens · L
 - Inbox, Today, Upcoming, projects (list + board), filters, labels, task detail, comments, search, settings — all offline-capable.
 - Quick add with live NLP highlighting. Option: run `packages/nlp` in an embedded JS engine (QuickJS) to keep **one** parser; fall back to server `/parse`. (Decide in A2 spike.)
-- Themes from §4a via a generated Compose `ColorScheme`; follows the user's synced theme and the system light/dark mode; optional Material You dynamic color as an extra choice.
+- Themes and fonts from §4a via a generated Compose `ColorScheme` and bundled font families; follows the user's synced appearance and the system light/dark mode; optional Material You dynamic color as an extra choice.
+- Time-zone picker with the same detection and smart search as the web (§4b), plus the travel prompt.
 
 #### A3 — Notifications · M
 - **Reminders scheduled locally** with exact alarms (`SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` justification), re-armed on boot/timezone change/sync — works offline and without any push service.
@@ -513,6 +552,8 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | Email tasks to a project | ⏳ stretch | W11 |
 | Keyboard shortcuts | ✅ | W2 |
 | Themes, dark mode | ✅ **plus** 10 terminal-theme families (Catppuccin, Gruvbox, Dracula, Nord, Tokyo Night, Solarized, One Dark, Rosé Pine, Everforest, Kanagawa) on web, Android and widgets | W2 / A2 / A4 |
+| Font choice, text size | ➕ Beyond Todoist: 8 self-hosted font families incl. accessibility fonts, size and density | W2 / A2 |
+| Time zone setting, travel detection | ✅ plus smart search by city, country, abbreviation or offset | W2 / A2 |
 | Search | ✅ (+ semantic) | W2/W9 |
 | REST/Sync API, webhooks | ✅ | W10 |
 | Integrations marketplace | ➖ replaced by API + MCP + webhooks | W10 |
