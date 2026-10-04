@@ -119,6 +119,21 @@ check "setup completes" test "$(status_of "$r")" = 204
 check "instance reports setup complete" bash -c "curl -s $BASE/api/v1/instance | jq -e .setupComplete"
 check "setup wizard gone afterwards" test "$(status_of "$(api GET /api/v1/setup)")" = 404
 
+echo "== sync engine"
+TASK_ID=$(cat /proc/sys/kernel/random/uuid)
+CMD_ID=$(cat /proc/sys/kernel/random/uuid)
+r=$(api POST /api/v1/sync "{\"cursor\":null,\"commands\":[{\"type\":\"task_add\",\"uuid\":\"$CMD_ID\",\"args\":{\"id\":\"$TASK_ID\",\"content\":\"Smoke task\"}}]}")
+check "full sync returns an inbox" bash -c "jq -e '.projects[] | select(.isInbox)' <<<'$(body_of "$r")'"
+check "task_add applied" bash -c "jq -e '.results[\"$CMD_ID\"].ok' <<<'$(body_of "$r")'"
+check "task visible after sync" bash -c "jq -e '.tasks[] | select(.content==\"Smoke task\")' <<<'$(body_of "$r")'"
+r=$(api POST /api/v1/sync "{\"cursor\":null,\"commands\":[{\"type\":\"task_add\",\"uuid\":\"$CMD_ID\",\"args\":{\"id\":\"$TASK_ID\",\"content\":\"Smoke task\"}}]}")
+check "replayed command is idempotent" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from tasks where content='Smoke task'")" = 1
+check "event stream opens for a signed-in user" \
+  bash -c "curl -s -m 2 -b '$JAR' -o /dev/null -w '%{content_type}' $BASE/api/v1/sync/events | grep -q text/event-stream"
+check "event stream refuses anonymous users" \
+  test "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/api/v1/sync/events")" = 401
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5

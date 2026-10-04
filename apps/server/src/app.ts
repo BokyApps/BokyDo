@@ -13,6 +13,9 @@ import { registerWebApp } from './http/static.js';
 import type { AppSecrets } from './security/app-secrets.js';
 import { SettingsService } from './settings/settings-service.js';
 import { registerSetupRoutes } from './setup/routes.js';
+import { EventBus } from './sync/events.js';
+import { registerSyncRoutes } from './sync/routes.js';
+import { SyncService } from './sync/sync-service.js';
 import { VERSION } from './version.js';
 
 export interface AppDeps {
@@ -26,6 +29,8 @@ export interface AppServices {
   settings: SettingsService;
   sessions: SessionStore;
   mailer: Mailer;
+  sync: SyncService;
+  events: EventBus;
 }
 
 declare module 'fastify' {
@@ -39,6 +44,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const settings = await SettingsService.load(db, deps.secrets.masterKey);
   const sessions = new SessionStore(db, deps.secrets.sessionKey, settings);
   const mailer = new Mailer(settings);
+  const events = new EventBus(db);
 
   const app = Fastify({
     logger: deps.logger ?? false,
@@ -50,8 +56,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return503OnClosing: true,
     routerOptions: { maxParamLength: 200 },
   });
-  const services: AppServices = { settings, sessions, mailer };
+  const sync = new SyncService(db, (affected) => {
+    events.publish(affected).catch((err: unknown) => app.log.warn({ err }, 'event publish failed'));
+  });
+  const services: AppServices = { settings, sessions, mailer, sync, events };
   app.decorate('services', services);
+  app.addHook('onClose', async () => events.closeAll());
 
   app.setErrorHandler((err: { statusCode?: number; message?: string }, req, reply) => {
     const statusCode = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
@@ -89,9 +99,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     }),
   );
 
-  await registerAuthRoutes(app, { db, settings, sessions });
+  await registerAuthRoutes(app, { db, settings, sessions, events });
   registerSetupRoutes(app, settings);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
+  registerSyncRoutes(app, { sync, events, sessions });
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);
   app.setNotFoundHandler((req, reply) => {

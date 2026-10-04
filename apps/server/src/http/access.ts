@@ -125,7 +125,7 @@ function csrfTokenValid(req: FastifyRequest, session: SessionContext): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function readSessionToken(req: FastifyRequest): string | null {
+export function readSessionToken(req: FastifyRequest): string | null {
   return req.cookies[SESSION_COOKIE_SECURE] ?? req.cookies[SESSION_COOKIE_PLAIN] ?? null;
 }
 

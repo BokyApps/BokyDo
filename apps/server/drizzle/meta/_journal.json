@@ -15,6 +15,13 @@
       "when": 1791111053546,
       "tag": "0001_sessions_and_settings_versioning",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791112472568,
+      "tag": "0002_tasks_domain_and_sync",
+      "breakpoints": true
     }
   ]
 }

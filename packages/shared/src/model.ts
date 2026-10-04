@@ -1,0 +1,347 @@
+import { z } from 'zod';
+import { isValidOrderKey } from './ordering.js';
+
+// ---------------------------------------------------------------------------------------------
+// Primitives
+// ---------------------------------------------------------------------------------------------
+
+export const idSchema = z.uuid();
+export const orderKeySchema = z.string().max(64).refine(isValidOrderKey, 'Invalid order key');
+
+export const COLORS = [
+  'berry_red',
+  'red',
+  'orange',
+  'yellow',
+  'olive_green',
+  'lime_green',
+  'green',
+  'mint_green',
+  'teal',
+  'sky_blue',
+  'light_blue',
+  'blue',
+  'grape',
+  'violet',
+  'lavender',
+  'magenta',
+  'salmon',
+  'charcoal',
+  'grey',
+  'taupe',
+] as const;
+export const colorSchema = z.enum(COLORS);
+export type Color = z.infer<typeof colorSchema>;
+
+export const viewStyleSchema = z.enum(['list', 'board', 'calendar']);
+export const roleSchema = z.enum(['owner', 'admin', 'editor', 'commenter', 'viewer']);
+export type Role = z.infer<typeof roleSchema>;
+
+/** p1 (most urgent) … p4 (default), as written in quick add. */
+export const prioritySchema = z.number().int().min(1).max(4);
+
+const dateString = z.iso.date();
+const timeString = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Expected HH:MM');
+
+// Deliberately matching control characters: user text must not smuggle them into logs, emails or
+// notifications. Single-line text allows none; multi-line text allows tab, LF and CR.
+// eslint-disable-next-line no-control-regex
+const SINGLE_LINE = /^[^\u0000-\u001f\u007f]*$/;
+// eslint-disable-next-line no-control-regex
+const MULTI_LINE = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]*$/;
+
+const line = (max: number) =>
+  z.string().trim().min(1).max(max).regex(SINGLE_LINE, 'Must be a single line of text');
+
+const text = (max: number) => z.string().max(max).regex(MULTI_LINE, 'Invalid characters');
+
+export const labelNameSchema = line(60).refine(
+  (v) => !/[\s@#]/.test(v),
+  'Label names cannot contain spaces, @ or #',
+);
+
+/**
+ * A due date. Date-only, or date + time that is either floating (shown in each viewer's time zone)
+ * or fixed to an IANA time zone. Recurrence rules are interpreted by the NLP engine (W3).
+ */
+export const dueSchema = z
+  .object({
+    date: dateString,
+    time: timeString.nullable(),
+    timezone: z
+      .string()
+      .max(64)
+      .regex(/^[A-Za-z0-9_+/-]+$/)
+      .nullable(),
+    string: line(200),
+    recurrence: z
+      .object({
+        rrule: z
+          .string()
+          .max(500)
+          .regex(/^[A-Z0-9=;,:+-]+$/, 'Invalid RRULE'),
+        anchor: z.enum(['scheduled', 'completion']),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type Due = z.infer<typeof dueSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Entities as clients see them
+// ---------------------------------------------------------------------------------------------
+
+export interface Project {
+  id: string;
+  name: string;
+  color: Color;
+  parentId: string | null;
+  childOrder: string;
+  viewStyle: z.infer<typeof viewStyleSchema>;
+  isInbox: boolean;
+  isArchived: boolean;
+  /** Per user. */
+  isFavorite: boolean;
+  /** The current user's role in this project. */
+  role: Role;
+  updatedAt: string;
+}
+
+export interface Section {
+  id: string;
+  projectId: string;
+  name: string;
+  sectionOrder: string;
+  isArchived: boolean;
+  updatedAt: string;
+}
+
+export interface Task {
+  id: string;
+  projectId: string;
+  sectionId: string | null;
+  parentId: string | null;
+  content: string;
+  description: string;
+  priority: number;
+  due: Due | null;
+  deadline: string | null;
+  durationMinutes: number | null;
+  labels: string[];
+  assigneeId: string | null;
+  assignedById: string | null;
+  childOrder: string;
+  isCompleted: boolean;
+  completedAt: string | null;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Label {
+  id: string;
+  name: string;
+  color: Color;
+  itemOrder: string;
+  isFavorite: boolean;
+}
+
+export interface Filter {
+  id: string;
+  name: string;
+  query: string;
+  color: Color;
+  itemOrder: string;
+  isFavorite: boolean;
+}
+
+export interface SyncUser {
+  id: string;
+  username: string;
+  isAdmin: boolean;
+  inboxProjectId: string;
+}
+
+export const ENTITY_TYPES = ['projects', 'sections', 'tasks', 'labels', 'filters'] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
+// ---------------------------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------------------------
+
+const projectFields = {
+  name: line(120),
+  color: colorSchema,
+  viewStyle: viewStyleSchema,
+  isFavorite: z.boolean(),
+};
+
+const taskFields = {
+  content: line(1000),
+  description: text(16_000),
+  priority: prioritySchema,
+  due: dueSchema.nullable(),
+  deadline: dateString.nullable(),
+  durationMinutes: z
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 60)
+    .nullable(),
+  labels: z.array(labelNameSchema).max(50),
+  assigneeId: idSchema.nullable(),
+};
+
+const labelFields = {
+  name: labelNameSchema,
+  color: colorSchema,
+  itemOrder: orderKeySchema,
+  isFavorite: z.boolean(),
+};
+const filterFields = {
+  name: line(120),
+  query: line(1024),
+  color: colorSchema,
+  itemOrder: orderKeySchema,
+  isFavorite: z.boolean(),
+};
+
+const byId = z.object({ id: idSchema }).strict();
+
+/** Every command clients may send. Args are strict: unknown fields are rejected, never ignored. */
+export const commandArgs = {
+  project_add: z
+    .object({
+      id: idSchema,
+      ...partial(projectFields),
+      name: projectFields.name,
+      parentId: idSchema.nullable().optional(),
+      childOrder: orderKeySchema.optional(),
+    })
+    .strict(),
+  project_update: z.object({ id: idSchema, ...partial(projectFields) }).strict(),
+  project_move: z
+    .object({ id: idSchema, parentId: idSchema.nullable(), childOrder: orderKeySchema.optional() })
+    .strict(),
+  project_archive: byId,
+  project_unarchive: byId,
+  project_delete: byId,
+
+  section_add: z
+    .object({
+      id: idSchema,
+      projectId: idSchema,
+      name: line(120),
+      sectionOrder: orderKeySchema.optional(),
+    })
+    .strict(),
+  section_update: z.object({ id: idSchema, name: line(120) }).strict(),
+  section_move: z
+    .object({
+      id: idSchema,
+      projectId: idSchema.optional(),
+      sectionOrder: orderKeySchema.optional(),
+    })
+    .strict(),
+  section_archive: byId,
+  section_unarchive: byId,
+  section_delete: byId,
+
+  task_add: z
+    .object({
+      id: idSchema,
+      projectId: idSchema.optional(),
+      sectionId: idSchema.nullable().optional(),
+      parentId: idSchema.nullable().optional(),
+      childOrder: orderKeySchema.optional(),
+      ...partial(taskFields),
+      content: taskFields.content,
+    })
+    .strict(),
+  task_update: z.object({ id: idSchema, ...partial(taskFields) }).strict(),
+  task_move: z
+    .object({
+      id: idSchema,
+      projectId: idSchema.optional(),
+      sectionId: idSchema.nullable().optional(),
+      parentId: idSchema.nullable().optional(),
+      childOrder: orderKeySchema.optional(),
+    })
+    .strict(),
+  task_complete: byId,
+  task_uncomplete: byId,
+  task_delete: byId,
+
+  label_add: z.object({ id: idSchema, ...partial(labelFields), name: labelFields.name }).strict(),
+  label_update: z.object({ id: idSchema, ...partial(labelFields) }).strict(),
+  label_delete: byId,
+
+  filter_add: z
+    .object({
+      id: idSchema,
+      ...partial(filterFields),
+      name: filterFields.name,
+      query: filterFields.query,
+    })
+    .strict(),
+  filter_update: z.object({ id: idSchema, ...partial(filterFields) }).strict(),
+  filter_delete: byId,
+} as const;
+
+export type CommandType = keyof typeof commandArgs;
+export type CommandArgs<T extends CommandType> = z.infer<(typeof commandArgs)[T]>;
+export const COMMAND_TYPES = Object.keys(commandArgs) as CommandType[];
+
+export type Command = {
+  [T in CommandType]: { type: T; uuid: string; args: CommandArgs<T> };
+}[CommandType];
+
+/** Envelope check only; args are validated per type so errors name the failing command. */
+export const commandEnvelopeSchema = z
+  .object({
+    type: z.enum(COMMAND_TYPES as [CommandType, ...CommandType[]]),
+    uuid: idSchema,
+    args: z.unknown(),
+  })
+  .strict();
+
+export const MAX_COMMANDS_PER_SYNC = 100;
+
+export const syncRequestSchema = z
+  .object({
+    cursor: z
+      .string()
+      .regex(/^\d{1,19}$/)
+      .nullable()
+      .optional(),
+    commands: z.array(commandEnvelopeSchema).max(MAX_COMMANDS_PER_SYNC).optional(),
+  })
+  .strict();
+export type SyncRequest = z.input<typeof syncRequestSchema>;
+
+export type CommandError = 'invalid' | 'not_found' | 'forbidden' | 'conflict' | 'limit_exceeded';
+export type CommandResult = { ok: true } | { ok: false; error: CommandError; message?: string };
+
+export interface SyncResponse {
+  cursor: string;
+  /** True when the client must replace its local state instead of merging. */
+  fullSync: boolean;
+  user: SyncUser;
+  projects: Project[];
+  sections: Section[];
+  tasks: Task[];
+  labels: Label[];
+  filters: Filter[];
+  /** IDs the client must drop (deleted, or no longer visible to this user). */
+  removed: Record<EntityType, string[]>;
+  results: Record<string, CommandResult>;
+}
+
+function partial<T extends Record<string, z.ZodType>>(
+  shape: T,
+): { [K in keyof T]: z.ZodOptional<T[K]> } {
+  return Object.fromEntries(Object.entries(shape).map(([k, v]) => [k, v.optional()])) as {
+    [K in keyof T]: z.ZodOptional<T[K]>;
+  };
+}

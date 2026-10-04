@@ -68,6 +68,7 @@ export class Client {
       headers.cookie = [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ');
     if (this.csrfToken && opts.csrf !== false) headers['x-csrf-token'] ??= this.csrfToken;
     const res = await this.app.inject({ ...opts, headers });
+    if ((opts as { payloadAsStream?: boolean }).payloadAsStream) return res;
     for (const c of res.cookies) {
       if (c.value === '' || (c.expires && c.expires.getTime() < Date.now()))
         this.cookies.delete(c.name);

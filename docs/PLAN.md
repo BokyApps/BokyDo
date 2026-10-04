@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ (2026-10-04)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ (2026-10-04)
 Owner: Sarel
 
 ---
@@ -312,6 +312,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Command API with idempotency + temp IDs, change log, cursor sync, WebSocket pokes, **central policy layer**.
 - `packages/sync-client` with optimistic updates + rollback.
 - **Security gate:** authz matrix framework in place; cross-tenant read via sync cursor impossible; tombstones on access loss; command replay is idempotent; mass-assignment tests (unknown/forbidden fields rejected by Zod).
+- *Done 2026-10-04 (see ADR 0003). Deviations: client-generated UUIDs instead of temp-ID mapping; SSE instead of WebSocket for pokes. Comments, reminders, attachments, activity log and notifications are added by the deliverables that use them (W5/W6).*
 
 ### Web features
 

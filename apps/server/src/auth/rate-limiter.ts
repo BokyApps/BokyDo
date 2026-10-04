@@ -35,8 +35,8 @@ export class RateLimiter {
     this.now = opts.now ?? Date.now;
   }
 
-  /** Count an attempt; returns whether it may proceed. */
-  attempt(key: string): LimitResult {
+  /** Count an attempt (of the given cost); returns whether it may proceed. */
+  attempt(key: string, cost = 1): LimitResult {
     const now = this.now();
     const bucket = this.bucket(key, now);
     if (bucket.blockedUntil > now) {
@@ -46,7 +46,7 @@ export class RateLimiter {
       bucket.windowStart = now;
       bucket.count = 0;
     }
-    bucket.count++;
+    bucket.count += cost;
     if (bucket.count > this.opts.maxPerWindow) {
       const retry = bucket.windowStart + this.opts.windowMs - now;
       return { allowed: false, retryAfterSeconds: Math.ceil(retry / 1000) };

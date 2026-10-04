@@ -9,6 +9,7 @@ import { clearSessionCookies, setSessionCookie, requireSession } from '../http/a
 import { clientMeta, parseBody } from '../http/validation.js';
 import { hashPassword, verifyPassword } from '../security/password.js';
 import type { SettingsService } from '../settings/settings-service.js';
+import type { EventBus } from '../sync/events.js';
 import { checkPassword } from './password-policy.js';
 import { RateLimiter } from './rate-limiter.js';
 import type { SessionContext, SessionStore } from './sessions.js';
@@ -17,12 +18,13 @@ export interface AuthDeps {
   db: Database;
   settings: SettingsService;
   sessions: SessionStore;
+  events: EventBus;
 }
 
 const sessionInfo = (s: SessionContext): SessionInfo => ({ user: s.user, csrfToken: s.csrfToken });
 
 export async function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): Promise<void> {
-  const { db, settings, sessions } = deps;
+  const { db, settings, sessions, events } = deps;
   // Verifying against a real hash when the user doesn't exist keeps response timing uniform.
   const dummyHash = await hashPassword(randomBytes(32).toString('base64url'));
   const perIp = new RateLimiter({
@@ -97,6 +99,7 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
     async (req, reply) => {
       const session = requireSession(req);
       await sessions.revoke(session.id);
+      events.closeSession(session.id);
       await audit(db, {
         action: 'auth.logout',
         actorType: 'user',
@@ -150,6 +153,7 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
         .where(eq(users.id, user.id));
       // Every existing session (including this one) is replaced by a fresh one.
       await sessions.revokeAllForUser(user.id);
+      events.closeUser(user.id);
       const { token, session } = await sessions.create(
         { id: user.id, username: user.username, isAdmin: user.isAdmin, mustChangePassword: false },
         clientMeta(req),

@@ -24,7 +24,12 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/admin/settings': 'admin/always',
   'PATCH /api/v1/admin/settings': 'admin/always',
   'POST /api/v1/admin/email/test': 'admin/always',
+  'POST /api/v1/sync': 'user/after',
+  'GET /api/v1/sync/events': 'user/after',
 };
+
+/** Streaming routes never finish on success; only their status line is checked. */
+const STREAMING = new Set(['GET /api/v1/sync/events']);
 
 type Principal = 'anonymous' | 'restricted' | 'user' | 'admin';
 const PRINCIPALS: Principal[] = ['anonymous', 'restricted', 'user', 'admin'];
@@ -51,6 +56,18 @@ const DENIALS = new Set([
 ]);
 
 async function outcome(client: Client, route: ApiRoute): Promise<string> {
+  if (STREAMING.has(`${route.method} ${route.url}`)) {
+    const res = await client.request({
+      method: route.method as 'GET',
+      url: route.url,
+      payloadAsStream: true,
+    });
+    if (res.statusCode === 200) {
+      res.stream().destroy();
+      return 'allowed';
+    }
+    return (JSON.parse(await streamToString(res.stream())) as { error: string }).error;
+  }
   const res = await client.request({ method: route.method as 'GET', url: route.url, payload: {} });
   let error: string | undefined;
   try {
@@ -59,6 +76,12 @@ async function outcome(client: Client, route: ApiRoute): Promise<string> {
     // Empty (204) or non-JSON body: not a denial.
   }
   return error && DENIALS.has(error) ? error : 'allowed';
+}
+
+async function streamToString(stream: NodeJS.ReadableStream): Promise<string> {
+  let out = '';
+  for await (const chunk of stream) out += String(chunk);
+  return out;
 }
 
 describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', () => {

@@ -8,10 +8,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
+COPY packages/sync-client/package.json packages/sync-client/
 RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
+COPY packages/sync-client packages/sync-client
 COPY apps/server apps/server
 COPY apps/web apps/web
 COPY docker/bokydo /cli/bokydo
