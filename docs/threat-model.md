@@ -1,6 +1,6 @@
 # Threat model
 
-Living document, STRIDE per component. Every deliverable updates it. **v0.1 — F1/F2 (2026-10-04).**
+Living document, STRIDE per component. Every deliverable updates it. **v0.2 — F1–F3 (2026-10-04).**
 
 ## Assets
 
@@ -46,6 +46,8 @@ Living document, STRIDE per component. Every deliverable updates it. **v0.1 — 
 | T19 | E      | Concurrent first boots create several admins                                           | Postgres advisory lock (tested with 5 concurrent starts)                                                                                                        | ✅ F2                 |
 
 ## Open questions
+
+- Login rate limits are in memory (single replica) and reset on restart. Move to Postgres when multi-replica support lands.
 
 - Backups must include `master.key`, or restored encrypted secrets are unrecoverable. The UX for this lands in W11.
 - Losing the `pg-secret` volume while keeping `pg-data` recovers automatically. Losing both DB-password copies needs a documented manual procedure (W13).

@@ -1,6 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // Isomorphic package: only APIs present in both browsers and Node (e.g. URL) may be used.
+    "lib": ["ES2023", "DOM"],
     "customConditions": ["bokydo-source"]
   },
   "include": ["src"]

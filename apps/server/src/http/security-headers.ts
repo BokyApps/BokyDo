@@ -1,13 +1,16 @@
 import helmet from '@fastify/helmet';
 import type { FastifyInstance } from 'fastify';
+import type { SettingsService } from '../settings/settings-service.js';
 
 /**
  * Strict defaults. The web app is built with no inline scripts or styles, so CSP needs no
- * 'unsafe-inline'. HSTS and upgrade-insecure-requests stay off until the admin confirms an HTTPS
- * public URL (F3): many self-hosters start on plain HTTP on a LAN, and sending them would break
- * the instance or pin HSTS onto unrelated subdomains.
+ * 'unsafe-inline'. HSTS is sent only once the admin confirms an HTTPS public URL: many
+ * self-hosters start on plain HTTP on a LAN, where HSTS would break the instance.
  */
-export async function registerSecurityHeaders(app: FastifyInstance): Promise<void> {
+export async function registerSecurityHeaders(
+  app: FastifyInstance,
+  settings: SettingsService,
+): Promise<void> {
   await app.register(helmet, {
     contentSecurityPolicy: {
       useDefaults: false,
@@ -38,5 +41,10 @@ export async function registerSecurityHeaders(app: FastifyInstance): Promise<voi
     );
     // API responses carry user data: never let browsers or proxies store them.
     if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+    // HSTS only once the admin has confirmed an HTTPS public URL. No includeSubDomains: the
+    // instance may share a parent domain with sites we know nothing about.
+    if (settings.get('instance.publicUrl')?.startsWith('https:')) {
+      reply.header('Strict-Transport-Security', 'max-age=31536000');
+    }
   });
 }

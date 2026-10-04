@@ -7,6 +7,7 @@ describe('instanceStatusSchema', () => {
       name: 'BokyDo',
       version: '0.0.0',
       setupComplete: false,
+      passwordMinLength: 12,
       adminPassphrase: 'nope',
     });
     expect(result.success).toBe(false);

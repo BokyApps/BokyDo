@@ -1,7 +1,8 @@
 import { count, sql } from 'drizzle-orm';
+import { audit } from '../audit.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { auditLog, instanceSettings, users } from '../db/schema.js';
+import { instanceSettings, users } from '../db/schema.js';
 import { generatePassphrase } from '../security/passphrase.js';
 import { hashPassword } from '../security/password.js';
 import { SETUP_COMPLETE_KEY } from './instance-settings.js';
@@ -33,8 +34,7 @@ export async function ensureInitialAdmin(db: Database): Promise<string | null> {
       .insert(instanceSettings)
       .values({ key: SETUP_COMPLETE_KEY, value: false })
       .onConflictDoNothing();
-    await tx.insert(auditLog).values({
-      id: newId(),
+    await audit(tx, {
       actorType: 'system',
       action: 'user.initial_admin_created',
       targetType: 'user',

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -37,9 +38,34 @@ export const users = pgTable(
 /** Instance-wide settings managed in Admin → Settings. Keys are namespaced, e.g. `setup.complete`. */
 export const instanceSettings = pgTable('instance_settings', {
   key: text('key').primaryKey(),
+  /** Plain JSON, or an EncryptedValue envelope for secret settings. */
   value: jsonb('value').notNull(),
+  version: integer('version').notNull().default(1),
+  updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Server-side sessions. `id` is HMAC-SHA256(session.key, token): the raw token only ever lives in
+ * the user's cookie, so a database leak alone cannot be replayed as sessions.
+ */
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    csrfToken: text('csrf_token').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    idleExpiresAt: timestamp('idle_expires_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+  },
+  (t) => [index('sessions_user_idx').on(t.userId), index('sessions_expires_idx').on(t.expiresAt)],
+);
 
 /** Append-only security audit trail. */
 export const auditLog = pgTable(

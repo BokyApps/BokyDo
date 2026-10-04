@@ -8,17 +8,23 @@
   ],
   "minimumReleaseAge": "7 days",
   "internalChecksFilter": "strict",
-  "vulnerabilityAlerts": { "enabled": true, "minimumReleaseAge": null, "labels": ["security"] },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "minimumReleaseAge": null,
+    "labels": ["security"]
+  },
   "packageRules": [
     {
       "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest"],
       "groupName": "non-major dependencies",
-      "schedule": ["before 6am on monday"]
+      "schedule": ["before 6am on monday"],
+      "minimumReleaseAge": "7 days"
     },
     {
       "description": "Trivy: stay on manually verified releases after the March 2026 compromise.",
       "matchPackageNames": ["aquasec/trivy"],
-      "enabled": false
+      "enabled": false,
+      "minimumReleaseAge": "7 days"
     }
   ]
 }

@@ -19,6 +19,7 @@ instance status.)_ There is nothing to configure beforehand: everything else (pu
 providers, registration policy, MFA policy) is set in **Admin → Settings**.
 
 Lost the passphrase? `docker compose exec app bokydo admin reset-password admin`
+Set a wrong public URL and can't save anything? `docker compose exec app bokydo admin clear-public-url`
 
 For anything beyond `localhost`, put BokyDo behind an HTTPS reverse proxy. Passkeys and push
 notifications only work over HTTPS.

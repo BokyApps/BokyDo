@@ -12,7 +12,7 @@ import { VERSION } from './version.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  await ensureAppSecrets(config.secretsDir);
+  const secrets = await ensureAppSecrets(config.secretsDir);
 
   const dbHandle = connectDb({
     ...config.db,
@@ -23,6 +23,7 @@ async function main(): Promise<void> {
 
   const app = await buildApp({
     db: dbHandle,
+    secrets,
     webRoot: config.webRoot,
     logger: {
       level: config.logLevel,
@@ -42,6 +43,15 @@ async function main(): Promise<void> {
       }) + '\n',
     );
   }
+
+  const purge = setInterval(
+    () =>
+      void app.services.sessions
+        .purgeExpired()
+        .catch((err: unknown) => app.log.warn({ err }, 'session purge failed')),
+    60 * 60 * 1000,
+  );
+  purge.unref();
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down');

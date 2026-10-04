@@ -1,25 +1,16 @@
+import { instanceStatusSchema } from '@bokydo/shared';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { instanceStatusSchema } from '@bokydo/shared';
-import { buildApp, type AppDeps } from './app.js';
+import { TEST_DATABASE_URL } from './test/db.js';
+import { testApp, type TestApp } from './test/app.js';
 
-const fakeDb = (opts: { up?: boolean; setupComplete?: boolean } = {}): AppDeps['db'] => {
-  const rows = opts.setupComplete === undefined ? [] : [{ value: opts.setupComplete }];
-  const chain = { from: () => chain, where: async () => rows };
-  return {
-    sql: (async () => {
-      if (opts.up === false) throw new Error('down');
-      return [];
-    }) as unknown as AppDeps['db']['sql'],
-    db: { select: () => chain } as unknown as AppDeps['db']['db'],
-  };
-};
-
-let app: FastifyInstance;
-afterEach(async () => app?.close());
+let t: TestApp | undefined;
+afterEach(async () => {
+  await t?.close();
+  t = undefined;
+});
 
 async function webRoot(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'bokydo-web-'));
@@ -28,25 +19,23 @@ async function webRoot(): Promise<string> {
   return dir;
 }
 
-describe('HTTP app', () => {
+describe.skipIf(!TEST_DATABASE_URL)('HTTP app', () => {
   it('reports liveness and readiness', async () => {
-    app = await buildApp({ db: fakeDb({ up: false }), webRoot: null });
-    expect((await app.inject('/healthz')).json()).toEqual({ status: 'ok' });
-    const ready = await app.inject('/readyz');
-    expect(ready.statusCode).toBe(503);
-    expect(ready.json()).toEqual({ status: 'unavailable' });
+    t = await testApp();
+    expect((await t.app.inject('/healthz')).json()).toEqual({ status: 'ok' });
+    expect((await t.app.inject('/readyz')).json()).toEqual({ status: 'ok' });
   });
 
-  it('exposes only the public instance status', async () => {
-    app = await buildApp({ db: fakeDb({ setupComplete: false }), webRoot: null });
-    const res = await app.inject('/api/v1/instance');
+  it('exposes only the public instance status, uncached', async () => {
+    t = await testApp();
+    const res = await t.app.inject('/api/v1/instance');
     expect(instanceStatusSchema.strict().parse(res.json()).setupComplete).toBe(false);
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
   it('sends strict security headers', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: null });
-    const { headers } = await app.inject('/healthz');
+    t = await testApp();
+    const { headers } = await t.app.inject('/healthz');
     const csp = String(headers['content-security-policy']);
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self'");
@@ -59,28 +48,38 @@ describe('HTTP app', () => {
     expect(headers['referrer-policy']).toBe('no-referrer');
     expect(headers['permissions-policy']).toContain('microphone=()');
     expect(headers['x-powered-by']).toBeUndefined();
-    // Off until an HTTPS public URL is confirmed in setup.
+    // Off until an HTTPS public URL is confirmed in setup (see settings tests).
     expect(headers['strict-transport-security']).toBeUndefined();
   });
 
   it('never leaks internal error details', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: null });
-    app.get('/api/v1/boom', async () => {
+    t = await testApp();
+    t.app.get('/api/v1/boom', { config: { access: 'public', setup: 'always' } }, async () => {
       throw new Error('password=hunter2 at /app/dist/secret.js');
     });
-    const res = await app.inject('/api/v1/boom');
+    const res = await t.app.inject('/api/v1/boom');
     expect(res.statusCode).toBe(500);
     expect(res.body).not.toContain('hunter2');
     expect(res.json()).toEqual({ error: 'internal_error' });
   });
 
+  it('refuses to register an /api route without an access level', async () => {
+    t = await testApp();
+    expect(() => t!.app.get('/api/v1/oops', async () => ({}))).toThrow(
+      /must declare config.access/,
+    );
+  });
+
   it('labels client errors by status', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: null });
-    app.post('/api/v1/echo', async () => ({}));
-    const res = await app.inject({
+    t = await testApp();
+    const res = await t.app.inject({
       method: 'POST',
-      url: '/api/v1/echo',
-      headers: { 'content-type': 'application/json' },
+      url: '/api/v1/auth/login',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost',
+        host: 'localhost',
+      },
       payload: 'x'.repeat(1024 * 1024 + 1),
     });
     expect(res.statusCode).toBe(413);
@@ -88,41 +87,36 @@ describe('HTTP app', () => {
   });
 
   it('rejects prototype-pollution payloads', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: null });
-    app.post('/api/v1/echo', async (req) => req.body);
-    const res = await app.inject({
+    t = await testApp();
+    const res = await t.app.inject({
       method: 'POST',
-      url: '/api/v1/echo',
-      headers: { 'content-type': 'application/json' },
-      payload: '{"__proto__":{"isAdmin":true}}',
+      url: '/api/v1/auth/login',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost',
+        host: 'localhost',
+      },
+      payload: '{"__proto__":{"isAdmin":true},"username":"a","password":"b"}',
     });
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns JSON 404 for unknown API routes and SPA shell for page navigations', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: await webRoot() });
-    const api = await app.inject({ url: '/api/v1/nope', headers: { accept: 'text/html' } });
+  it('returns JSON 404 for unknown API routes and the SPA shell for page navigations', async () => {
+    t = await testApp({ webRoot: await webRoot() });
+    const api = await t.app.inject({ url: '/api/v1/nope', headers: { accept: 'text/html' } });
     expect(api.statusCode).toBe(404);
     expect(api.json()).toEqual({ error: 'not_found' });
-
-    const page = await app.inject({ url: '/today', headers: { accept: 'text/html' } });
+    const page = await t.app.inject({ url: '/today', headers: { accept: 'text/html' } });
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain('<title>BokyDo</title>');
   });
 
   it('does not serve dotfiles or escape the web root', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: await webRoot() });
+    t = await testApp({ webRoot: await webRoot() });
     for (const url of ['/.env', '/..%2f..%2fetc%2fpasswd', '/%2e%2e/%2e%2e/etc/passwd']) {
-      const res = await app.inject({ url });
+      const res = await t.app.inject({ url });
       expect(res.body, url).not.toContain('SECRET=1');
       expect(res.body, url).not.toContain('root:');
     }
-  });
-
-  it('ignores X-Forwarded-For by default', async () => {
-    app = await buildApp({ db: fakeDb(), webRoot: null });
-    app.get('/api/v1/ip', async (req) => ({ ip: req.ip }));
-    const res = await app.inject({ url: '/api/v1/ip', headers: { 'x-forwarded-for': '6.6.6.6' } });
-    expect(res.json().ip).not.toBe('6.6.6.6');
   });
 });

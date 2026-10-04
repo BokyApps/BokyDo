@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ (2026-10-04)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ (2026-10-04)
 Owner: Sarel
 
 ---
@@ -305,6 +305,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 #### F3 — Setup wizard & Admin Settings framework · M
 - Setup flow (§3.4), settings store (typed, versioned, audited), encrypted secret fields, SMTP test-send, public-URL validation.
 - **Security gate:** setup routes unreachable after setup; settings endpoints admin-only (authz matrix); secret fields write-only; changing public URL invalidates WebAuthn/OAuth assumptions safely.
+- *Done 2026-10-04. Pulled forward from W1 because setup needs a signed-in admin: password login, server-side sessions, CSRF protection, forced first-login password change, login throttling. W1 keeps TOTP, passkeys, recovery codes, session list UI, email password reset, user management and invites.*
 
 #### F4 — Core data model & sync engine · L
 - Schema (users, workspaces, projects, sections, tasks, labels, filters, comments, attachments, reminders, activity, changes, notifications, tokens…), UUIDv7, fractional indexing.

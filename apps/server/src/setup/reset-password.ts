@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { newId } from '../db/ids.js';
-import { auditLog, users } from '../db/schema.js';
+import { audit } from '../audit.js';
+import { sessions, users } from '../db/schema.js';
 import { generatePassphrase } from '../security/passphrase.js';
 import { hashPassword } from '../security/password.js';
 
@@ -21,9 +21,9 @@ export async function resetPasswordFromCli(db: Database, username: string): Prom
       .returning({ id: users.id });
     const user = updated[0];
     if (!user) return null;
-    // Sessions arrive with W1; they must be revoked here once they exist.
-    await tx.insert(auditLog).values({
-      id: newId(),
+    // Whoever might be holding the old credentials loses their sessions too.
+    await tx.delete(sessions).where(eq(sessions.userId, user.id));
+    await audit(tx, {
       actorType: 'cli',
       action: 'user.password_reset_cli',
       targetType: 'user',

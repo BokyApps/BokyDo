@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DbHandle } from '../db/client.js';
-import { auditLog, users } from '../db/schema.js';
+import { auditLog, sessions, users } from '../db/schema.js';
 import { verifyPassword } from '../security/password.js';
 import { freshDb, TEST_DATABASE_URL } from '../test/db.js';
 import { ensureInitialAdmin } from './initial-admin.js';
@@ -49,6 +49,19 @@ describe.skipIf(!TEST_DATABASE_URL)('initial admin (Postgres)', () => {
       .where(eq(auditLog.action, 'user.password_reset_cli'));
     expect(audits).toHaveLength(1);
     expect(JSON.stringify(audits)).not.toContain(passphrase!);
+  });
+
+  it('CLI reset revokes existing sessions', async () => {
+    const [admin] = await h.db.select().from(users);
+    await h.db.insert(sessions).values({
+      id: 'stolen',
+      userId: admin!.id,
+      csrfToken: 'x',
+      idleExpiresAt: new Date(Date.now() + 60_000),
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await resetPasswordFromCli(h.db, 'admin');
+    expect(await h.db.select().from(sessions)).toHaveLength(0);
   });
 
   it('CLI reset reports unknown users', async () => {
