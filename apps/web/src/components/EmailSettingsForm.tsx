@@ -137,7 +137,7 @@ export function EmailSettingsForm({
           e.preventDefault();
           test.mutate();
         }}
-        className="space-y-3 border-t border-neutral-200 pt-4 dark:border-neutral-800"
+        className="space-y-3 border-t border-line pt-4"
       >
         <TextField
           label="Send a test email to"

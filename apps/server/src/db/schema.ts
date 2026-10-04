@@ -38,6 +38,8 @@ export const users = pgTable(
     totpEnabledAt: timestamp('totp_enabled_at', { withTimezone: true }),
     /** Last accepted TOTP time step: a code can never be used twice. */
     totpLastStep: integer('totp_last_step'),
+    /** User preferences (validated by @bokydo/shared preferencesSchema; merged over defaults on read). */
+    preferences: jsonb('preferences').notNull().default({}),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),
     ...timestamps,
   },
@@ -213,6 +215,12 @@ export const tasks = pgTable(
     index('tasks_section_idx').on(t.sectionId),
     index('tasks_due_idx').on(t.dueDate),
     index('tasks_assignee_idx').on(t.assigneeId),
+    index('tasks_completed_idx').on(t.projectId, t.completedAt),
+    // Full-text search over title + description ('simple': no language-specific stemming).
+    index('tasks_search_idx').using(
+      'gin',
+      sql`to_tsvector('simple', ${t.content} || ' ' || ${t.description})`,
+    ),
   ],
 );
 
@@ -264,7 +272,7 @@ export const changes = pgTable(
   {
     seq: bigserial('seq', { mode: 'number' }).primaryKey(),
     entityType: text('entity_type', {
-      enum: ['projects', 'sections', 'tasks', 'labels', 'filters', 'project_access'],
+      enum: ['projects', 'sections', 'tasks', 'labels', 'filters', 'project_access', 'user'],
     }).notNull(),
     entityId: uuid('entity_id').notNull(),
     /** Project scope: visible to the project's members. */

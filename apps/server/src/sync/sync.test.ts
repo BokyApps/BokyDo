@@ -482,3 +482,42 @@ describe.skipIf(!TEST_DATABASE_URL)('consistency under concurrency', () => {
     expect([...observer.tasks.values()].filter((x) => x.projectId === shared)).toHaveLength(60);
   });
 });
+
+describe.skipIf(!TEST_DATABASE_URL)('preferences', () => {
+  it('merges patches, validates values, and syncs to the user only', async () => {
+    expect(alice.last.user.preferences).toMatchObject({
+      timezone: null,
+      startPage: 'today',
+      appearance: { mode: 'system' },
+    });
+    await alice.ok(
+      cmd('user_update_preferences', {
+        timezone: 'Asia/Phnom_Penh',
+        appearance: { darkTheme: 'catppuccin-mocha', font: 'jetbrains-mono' },
+      }),
+    );
+    expect(alice.last.user.preferences).toMatchObject({
+      timezone: 'Asia/Phnom_Penh',
+      appearance: {
+        mode: 'system',
+        darkTheme: 'catppuccin-mocha',
+        lightTheme: 'bokydo-light',
+        font: 'jetbrains-mono',
+      },
+    });
+    for (const bad of [
+      { timezone: 'Mars/Olympus_Mons' },
+      { appearance: { darkTheme: 'evil-theme' } },
+      { appearance: { font: 'Comic Sans' } },
+      { isAdmin: true },
+      { appearance: { mode: 'system', injected: 1 } },
+    ]) {
+      expect(
+        await alice.result(cmd('user_update_preferences', bad)),
+        JSON.stringify(bad),
+      ).toMatchObject({ ok: false, error: 'invalid' });
+    }
+    await bob.run();
+    expect(bob.last.user.preferences.timezone).toBeNull();
+  });
+});

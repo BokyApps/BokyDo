@@ -13,7 +13,12 @@ import { AccountSecurityPage } from './pages/AccountSecurityPage.js';
 import { AdminSettingsPage } from './pages/AdminSettingsPage.js';
 import { AdminUsersPage } from './pages/AdminUsersPage.js';
 import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
-import { HomePage } from './pages/HomePage.js';
+import { ArchivedPage, FilterPage, FiltersLabelsPage, LabelPage } from './pages/LabelsPages.js';
+import { InboxPage, ProjectView } from './pages/ProjectPage.js';
+import { HomeRedirect, TaskLinkPage } from './pages/RoutePages.js';
+import { SettingsPage } from './pages/SettingsPage.js';
+import { TodayPage } from './pages/TodayPage.js';
+import { UpcomingPage } from './pages/UpcomingPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import {
   ForgotPasswordPage,
@@ -72,6 +77,43 @@ const appPage = (path: string, component: () => React.ReactNode, opts?: { adminO
     component,
   });
 
+const projectRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/project/$projectId',
+  beforeLoad: () => guard('/project'),
+  component: function Project() {
+    const { projectId } = projectRoute.useParams();
+    return <ProjectView key={projectId} projectId={projectId} />;
+  },
+});
+const labelRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/label/$name',
+  beforeLoad: () => guard('/label'),
+  component: function Label() {
+    const { name } = labelRoute.useParams();
+    return <LabelPage key={name} name={name} />;
+  },
+});
+const filterRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/filter/$filterId',
+  beforeLoad: () => guard('/filter'),
+  component: function Filter() {
+    const { filterId } = filterRoute.useParams();
+    return <FilterPage id={filterId} />;
+  },
+});
+const taskRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/task/$taskId',
+  beforeLoad: () => guard('/task'),
+  component: function TaskLink() {
+    const { taskId } = taskRoute.useParams();
+    return <TaskLinkPage taskId={taskId} />;
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   page('/login', LoginPage),
   page('/forgot-password', ForgotPasswordPage),
@@ -89,7 +131,17 @@ const routeTree = rootRoute.addChildren([
   page('/setup-pending', SetupPendingPage),
   page('/account/password', ChangePasswordPage),
   appRoute.addChildren([
-    appPage('/', HomePage),
+    appPage('/', HomeRedirect),
+    appPage('/inbox', InboxPage),
+    appPage('/today', TodayPage),
+    appPage('/upcoming', UpcomingPage),
+    appPage('/filters-labels', FiltersLabelsPage),
+    appPage('/archived', ArchivedPage),
+    appPage('/settings', SettingsPage),
+    projectRoute,
+    labelRoute,
+    filterRoute,
+    taskRoute,
     appPage('/account/security', AccountSecurityPage),
     appPage('/admin/settings', AdminSettingsPage, { adminOnly: true }),
     appPage('/admin/users', AdminUsersPage, { adminOnly: true }),

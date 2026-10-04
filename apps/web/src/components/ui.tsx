@@ -7,21 +7,20 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
 } from 'react';
 
 export function Logo({ className = '' }: { className?: string }) {
   return (
     <span className={`text-xl font-semibold tracking-tight ${className}`}>
-      <span className="text-brand">Boky</span>Do
+      <span className="text-accent">Boky</span>Do
     </span>
   );
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div
-      className={`rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 ${className}`}
-    >
+    <div className={`rounded-2xl border border-line bg-surface p-6 shadow-sm ${className}`}>
       {children}
     </div>
   );
@@ -42,7 +41,7 @@ export function AuthLayout({ children, wide = false }: { children: ReactNode; wi
 }
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: 'primary' | 'secondary' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   busy?: boolean;
 };
 
@@ -52,17 +51,19 @@ export function Button({
   className = '',
   children,
   disabled,
+  type = 'button',
   ...rest
 }: ButtonProps) {
   const styles = {
-    primary: 'bg-brand text-white hover:bg-brand-dark disabled:bg-brand/50',
-    secondary:
-      'border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800',
-    ghost: 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800',
+    primary: 'bg-accent text-on-accent hover:opacity-90 disabled:opacity-50',
+    secondary: 'border border-line bg-surface text-fg hover:bg-surface-alt',
+    ghost: 'text-muted hover:bg-surface-alt hover:text-fg',
+    danger: 'border border-danger/40 text-danger hover:bg-danger/10',
   }[variant];
   return (
     <button
-      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed ${styles} ${className}`}
+      type={type}
+      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed ${styles} ${className}`}
       disabled={disabled || busy}
       aria-busy={busy}
       {...rest}
@@ -78,29 +79,46 @@ export function Button({
   );
 }
 
-const inputClass =
-  'w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100';
+export function IconButton({
+  label,
+  children,
+  className = '',
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className={`inline-flex size-8 items-center justify-center rounded-md text-muted hover:bg-surface-alt hover:text-fg focus-visible:outline-2 focus-visible:outline-accent ${className}`}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
+}
+
+export const inputClass =
+  'w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm text-fg placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
 interface FieldProps {
   label: string;
   hint?: ReactNode;
+  hideLabel?: boolean;
   children: (id: string, describedBy: string | undefined) => ReactNode;
 }
 
-export function Field({ label, hint, children }: FieldProps) {
+export function Field({ label, hint, hideLabel, children }: FieldProps) {
   const id = useId();
   const hintId = hint ? `${id}-hint` : undefined;
   return (
     <div className="space-y-1.5">
-      <label
-        htmlFor={id}
-        className="block text-sm font-medium text-neutral-800 dark:text-neutral-200"
-      >
+      <label htmlFor={id} className={hideLabel ? 'sr-only' : 'block text-sm font-medium text-fg'}>
         {label}
       </label>
       {children(id, hintId)}
       {hint && (
-        <p id={hintId} className="text-xs text-neutral-500 dark:text-neutral-400">
+        <p id={hintId} className="text-xs text-muted">
           {hint}
         </p>
       )}
@@ -111,12 +129,36 @@ export function Field({ label, hint, children }: FieldProps) {
 export function TextField({
   label,
   hint,
+  hideLabel,
   ...rest
-}: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: ReactNode }) {
+}: InputHTMLAttributes<HTMLInputElement> & {
+  label: string;
+  hint?: ReactNode;
+  hideLabel?: boolean;
+}) {
+  return (
+    <Field label={label} hint={hint} hideLabel={hideLabel ?? false}>
+      {(id, describedBy) => (
+        <input id={id} aria-describedby={describedBy} className={inputClass} {...rest} />
+      )}
+    </Field>
+  );
+}
+
+export function TextArea({
+  label,
+  hint,
+  ...rest
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string; hint?: ReactNode }) {
   return (
     <Field label={label} hint={hint}>
       {(id, describedBy) => (
-        <input id={id} aria-describedby={describedBy} className={inputClass} {...rest} />
+        <textarea
+          id={id}
+          aria-describedby={describedBy}
+          className={`${inputClass} min-h-24`}
+          {...rest}
+        />
       )}
     </Field>
   );
@@ -147,6 +189,25 @@ export function SelectField({
   );
 }
 
+export function Checkbox({
+  label,
+  hint,
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: ReactNode }) {
+  const id = useId();
+  return (
+    <div className="flex items-start gap-2">
+      <input id={id} type="checkbox" className="mt-0.5 size-4 accent-accent" {...rest} />
+      <div>
+        <label htmlFor={id} className="text-sm font-medium text-fg">
+          {label}
+        </label>
+        {hint && <p className="text-xs text-muted">{hint}</p>}
+      </div>
+    </div>
+  );
+}
+
 export function Alert({
   tone = 'error',
   children,
@@ -155,13 +216,10 @@ export function Alert({
   children: ReactNode;
 }) {
   const styles = {
-    error:
-      'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200',
-    warning:
-      'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200',
-    success:
-      'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/50 dark:text-green-200',
-    info: 'border-neutral-200 bg-neutral-50 text-neutral-700 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300',
+    error: 'border-danger/40 bg-danger/10 text-danger',
+    warning: 'border-warning/50 bg-warning/10 text-fg',
+    success: 'border-success/50 bg-success/10 text-fg',
+    info: 'border-line bg-surface-alt text-fg',
   }[tone];
   return (
     <div
@@ -176,26 +234,7 @@ export function Alert({
 export function Spinner() {
   return (
     <div className="flex min-h-svh items-center justify-center" role="status" aria-label="Loading">
-      <span className="size-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-    </div>
-  );
-}
-
-export function Checkbox({
-  label,
-  hint,
-  ...rest
-}: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: ReactNode }) {
-  const id = useId();
-  return (
-    <div className="flex items-start gap-2">
-      <input id={id} type="checkbox" className="mt-0.5 size-4 accent-brand" {...rest} />
-      <div>
-        <label htmlFor={id} className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
-          {label}
-        </label>
-        {hint && <p className="text-xs text-neutral-500 dark:text-neutral-400">{hint}</p>}
-      </div>
+      <span className="size-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
     </div>
   );
 }
@@ -206,13 +245,16 @@ export function Dialog({
   onClose,
   title,
   children,
+  wide = false,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  wide?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -223,13 +265,18 @@ export function Dialog({
     <dialog
       ref={ref}
       onClose={onClose}
-      aria-labelledby={`${title}-title`}
-      className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/40 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
+      onClick={(e) => {
+        if (e.target === ref.current) onClose(); // click on the backdrop
+      }}
+      aria-labelledby={titleId}
+      className={`m-auto w-[calc(100%-2rem)] ${wide ? 'max-w-3xl' : 'max-w-md'} rounded-2xl border border-line bg-surface p-0 text-fg shadow-xl backdrop:bg-black/40`}
     >
-      <h2 id={`${title}-title`} className="mb-4 text-base font-semibold">
-        {title}
-      </h2>
-      {children}
+      <div className="p-6">
+        <h2 id={titleId} className={wide ? 'sr-only' : 'mb-4 text-base font-semibold'}>
+          {title}
+        </h2>
+        {open && children}
+      </div>
     </dialog>
   );
 }
@@ -249,7 +296,7 @@ export function SecretList({ items, filename }: { items: string[]; filename: str
   return (
     <div className="space-y-3">
       <ul
-        className={`grid gap-2 rounded-lg bg-neutral-100 p-3 font-mono text-sm break-all dark:bg-neutral-950 ${
+        className={`grid gap-2 rounded-lg bg-surface-alt p-3 font-mono text-sm break-all ${
           items.length > 1 && items.every((i) => i.length <= 16) ? 'grid-cols-2' : 'grid-cols-1'
         }`}
       >
@@ -259,16 +306,107 @@ export function SecretList({ items, filename }: { items: string[]; filename: str
       </ul>
       <div className="flex gap-2">
         <Button
-          type="button"
           variant="secondary"
           onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}
         >
           {copied ? 'Copied' : 'Copy'}
         </Button>
-        <Button type="button" variant="secondary" onClick={download}>
+        <Button variant="secondary" onClick={download}>
           Download
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Anchored popover: the panel opens below its trigger and closes on outside click or Escape.
+ * (Positioned in-flow so it works everywhere without the still-patchy CSS anchor API.)
+ */
+export function Popover({
+  trigger,
+  children,
+  align = 'left',
+  open: controlled,
+  onOpenChange,
+  panelClassName = '',
+}: {
+  trigger: (props: {
+    onClick: () => void;
+    'aria-expanded': boolean;
+    'aria-haspopup': 'dialog';
+  }) => ReactNode;
+  children: ReactNode | ((close: () => void) => ReactNode);
+  align?: 'left' | 'right';
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  panelClassName?: string;
+}) {
+  const [uncontrolled, setUncontrolled] = useState(false);
+  const open = controlled ?? uncontrolled;
+  const setOpen = (v: boolean) => (onOpenChange ? onOpenChange(v) : setUncontrolled(v));
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  });
+  const close = () => setOpen(false);
+  return (
+    <div ref={ref} className="relative inline-block">
+      {trigger({ onClick: () => setOpen(!open), 'aria-expanded': open, 'aria-haspopup': 'dialog' })}
+      {open && (
+        <div
+          role="dialog"
+          className={`absolute z-40 mt-1 min-w-48 rounded-xl border border-line bg-surface p-1 text-sm shadow-lg ${align === 'right' ? 'right-0' : 'left-0'} ${panelClassName}`}
+        >
+          {typeof children === 'function' ? children(close) : children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function MenuItem({
+  children,
+  onClick,
+  danger = false,
+  icon,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  danger?: boolean;
+  icon?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left hover:bg-surface-alt ${danger ? 'text-danger' : 'text-fg'}`}
+    >
+      {icon && <span className="text-muted">{icon}</span>}
+      {children}
+    </button>
+  );
+}
+
+export function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="rounded border border-line bg-surface-alt px-1.5 py-0.5 font-mono text-xs text-muted">
+      {children}
+    </kbd>
   );
 }

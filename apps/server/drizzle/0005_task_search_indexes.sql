@@ -1,0 +1,2 @@
+CREATE INDEX "tasks_completed_idx" ON "tasks" USING btree ("project_id","completed_at");--> statement-breakpoint
+CREATE INDEX "tasks_search_idx" ON "tasks" USING gin (to_tsvector('simple', "content" || ' ' || "description"));

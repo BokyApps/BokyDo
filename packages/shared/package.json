@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@bokydo/themes": "workspace:*",
     "zod": "^4.6.5"
   }
 }

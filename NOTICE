@@ -6,3 +6,14 @@ This product includes the EFF Large Wordlist for Passphrases
 (https://www.eff.org/dice), by the Electronic Frontier Foundation,
 licensed under the Creative Commons Attribution 3.0 United States License
 (https://creativecommons.org/licenses/by/3.0/us/).
+
+Time-zone data: IANA tz database zone.tab (public domain), https://www.iana.org/time-zones
+
+Theme palettes (colour values) derived from, with thanks:
+  Catppuccin (MIT), Gruvbox (MIT), Dracula (MIT), Nord (MIT), Tokyo Night (MIT),
+  Solarized (MIT), Atom One Dark/Light (MIT), Rosé Pine (MIT), Everforest (MIT),
+  Kanagawa (MIT). Theme names are used descriptively; no affiliation is implied.
+
+Fonts, self-hosted via Fontsource, all under the SIL Open Font License 1.1:
+  Inter, IBM Plex Sans, Atkinson Hyperlegible, Lexend, OpenDyslexic,
+  JetBrains Mono, Fira Code.

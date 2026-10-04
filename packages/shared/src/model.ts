@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isValidOrderKey } from './ordering.js';
+import { preferencesPatchSchema, type Preferences } from './preferences.js';
 
 // ---------------------------------------------------------------------------------------------
 // Primitives
@@ -161,6 +162,7 @@ export interface SyncUser {
   username: string;
   isAdmin: boolean;
   inboxProjectId: string;
+  preferences: Preferences;
 }
 
 export const ENTITY_TYPES = ['projects', 'sections', 'tasks', 'labels', 'filters'] as const;
@@ -287,6 +289,8 @@ export const commandArgs = {
     .strict(),
   filter_update: z.object({ id: idSchema, ...partial(filterFields) }).strict(),
   filter_delete: byId,
+
+  user_update_preferences: preferencesPatchSchema,
 } as const;
 
 export type CommandType = keyof typeof commandArgs;

@@ -84,20 +84,20 @@ export function LoginPage() {
       )}
       <div className="mt-4 flex justify-between text-sm">
         {instance?.emailEnabled ? (
-          <Link to="/forgot-password" className="text-brand hover:underline">
+          <Link to="/forgot-password" className="text-accent hover:underline">
             Forgot password?
           </Link>
         ) : (
           <span />
         )}
         {instance?.registrationOpen && (
-          <Link to="/register" className="text-brand hover:underline">
+          <Link to="/register" className="text-accent hover:underline">
             Create account
           </Link>
         )}
       </div>
       {!instance?.setupComplete && (
-        <p className="mt-6 text-xs text-neutral-500 dark:text-neutral-400">
+        <p className="mt-6 text-xs text-muted">
           First time here? Sign in as <code className="font-mono">admin</code> with the one-time
           passphrase from <code className="font-mono">docker compose logs app</code>.
         </p>
@@ -194,7 +194,7 @@ function SecondFactor({
         {methods.includes('totp') && methods.includes('recovery') ? (
           <button
             type="button"
-            className="text-brand hover:underline"
+            className="text-accent hover:underline"
             onClick={() => {
               setMode(mode === 'totp' ? 'recovery' : 'totp');
               setCode('');
@@ -205,7 +205,7 @@ function SecondFactor({
         ) : (
           <span />
         )}
-        <button type="button" className="text-neutral-500 hover:underline" onClick={onRestart}>
+        <button type="button" className="text-muted hover:underline" onClick={onRestart}>
           Start over
         </button>
       </div>

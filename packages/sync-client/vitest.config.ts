@@ -3,6 +3,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   resolve: {
-    alias: { '@bokydo/shared': fileURLToPath(new URL('../shared/src/index.ts', import.meta.url)) },
+    alias: {
+      '@bokydo/shared': fileURLToPath(new URL('../shared/src/index.ts', import.meta.url)),
+      '@bokydo/themes': fileURLToPath(new URL('../themes/src/index.ts', import.meta.url)),
+    },
   },
 });

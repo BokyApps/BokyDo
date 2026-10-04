@@ -23,6 +23,7 @@ import { SettingsService } from './settings/settings-service.js';
 import { registerSetupRoutes } from './setup/routes.js';
 import { EventBus } from './sync/events.js';
 import { registerSyncRoutes } from './sync/routes.js';
+import { registerTaskRoutes } from './tasks/routes.js';
 import { SyncService } from './sync/sync-service.js';
 import { VERSION } from './version.js';
 
@@ -135,6 +136,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerSetupRoutes(app, settings);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
   registerSyncRoutes(app, { sync, events, sessions });
+  registerTaskRoutes(app, db);
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);
   app.setNotFoundHandler((req, reply) => {

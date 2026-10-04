@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { timeZoneSchema } from './preferences.js';
 
 /**
  * Normalise an instance public URL to its origin. Sub-path hosting is not supported (cookies,
@@ -68,7 +69,7 @@ export const settingDefinitions = {
     default: 0,
     secret: false,
   },
-  'instance.defaultTimezone': { schema: z.string().min(1).max(64), default: 'UTC', secret: false },
+  'instance.defaultTimezone': { schema: timeZoneSchema, default: 'UTC', secret: false },
   'instance.weekStart': {
     schema: z.enum(['monday', 'sunday', 'saturday']),
     default: 'monday',

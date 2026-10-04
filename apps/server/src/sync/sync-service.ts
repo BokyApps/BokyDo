@@ -1,5 +1,6 @@
 import {
   commandArgs,
+  resolvePreferences,
   ENTITY_TYPES,
   type CommandResult,
   type CommandType,
@@ -67,6 +68,7 @@ const HANDLERS: Record<CommandType, Handler> = {
   filter_add: h.filterAdd,
   filter_update: h.filterUpdate,
   filter_delete: h.filterDelete,
+  user_update_preferences: h.userUpdatePreferences,
 };
 
 export interface Affected {
@@ -196,6 +198,7 @@ export class SyncService {
             username: user?.username ?? '',
             isAdmin: user?.isAdmin ?? false,
             inboxProjectId: inbox[0]?.id ?? '',
+            preferences: resolvePreferences(user?.preferences),
           },
         };
 
@@ -279,7 +282,7 @@ export class SyncService {
     const granted: string[] = [];
     for (const m of marked) {
       if (m.type === 'project_access') granted.push(m.id);
-      else ids[m.type].add(m.id);
+      else if (m.type !== 'user') ids[m.type].add(m.id); // the user row is in every response
     }
 
     const isVisible = (projectId: string) => visible.has(projectId);

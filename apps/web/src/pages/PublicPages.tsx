@@ -20,7 +20,7 @@ function useFragmentToken(): string {
 }
 
 const BackToSignIn = () => (
-  <Link to="/login" className="text-sm text-brand hover:underline">
+  <Link to="/login" className="text-sm text-accent hover:underline">
     Back to sign in
   </Link>
 );
@@ -161,12 +161,12 @@ export function VerifyEmailPage() {
     <AuthLayout>
       <h1 className="text-lg font-semibold">Confirm email</h1>
       <div className="mt-4 space-y-4">
-        {verify.isPending && <p className="text-sm text-neutral-500">Confirming…</p>}
+        {verify.isPending && <p className="text-sm text-muted">Confirming…</p>}
         {verify.isSuccess && <Alert tone="success">Your email address is confirmed.</Alert>}
         {(verify.isError || !token) && (
           <Alert>{token ? errorMessage(verify.error) : 'This link is incomplete.'}</Alert>
         )}
-        <Link to="/" className="text-sm text-brand hover:underline">
+        <Link to="/" className="text-sm text-accent hover:underline">
           Continue to BokyDo
         </Link>
       </div>

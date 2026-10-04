@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ (2026-10-04)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04)
 Owner: Sarel
 
 ---
@@ -393,6 +393,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Today (with overdue + "reschedule all"), Upcoming (day strip, week view, drag to reschedule).
 - Drag & drop everywhere, multi-select + bulk edit, undo toasts, global search (Postgres FTS), keyboard shortcuts (Todoist-like: `q`, `/`, `g t`, `e`, `t`…), view options (group/sort/filter per view), **theme engine with the ten terminal-theme families from §4a** (system/light/dark modes, synced per user, WCAG AA contrast test per variant), **font, text size and density choices (§4a)**, user preferences (start page, **time zone with detection + smart search (§4b)**, week start, time format, date format, smart date recognition). Admin → default time zone switches to the same smart picker.
 - **Security gate:** XSS in every text field (title, description, comment, project/label names) incl. markdown edge cases; IDOR via move/duplicate across projects; bulk endpoints check every item.
+- *Done 2026-10-04. Includes the appearance engine (§4a: 11 theme families / 28 variants, 8 fonts, text size, density) and the smart time-zone picker (§4b). Quick add is plain text until W3 adds natural-language parsing; the board and calendar layouts and running filter queries come with W4. A global “completed” view is replaced for now by per-project completed lists plus search across completed tasks.*
 
 #### W3 — Natural-language engine · L
 - `packages/nlp` per §4, recurrence engine (RRULE + Todoist semantics incl. `every!`), deadlines, durations, reminders syntax, quick-add with live highlighting and autocomplete, date picker that also accepts NL.

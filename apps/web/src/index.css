@@ -1,13 +1,68 @@
 @import 'tailwindcss';
 
-@custom-variant dark (@media (prefers-color-scheme: dark));
-
+/*
+ * Every colour comes from the active theme (packages/themes → CSS variables on :root, set at
+ * runtime). Components use semantic names only: bg-surface, text-muted, bg-accent, …
+ */
 @theme {
-  --color-brand: #dc4c3e;
-  --color-brand-dark: #b83c30;
-  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --color-bg: var(--bk-bg);
+  --color-surface: var(--bk-surface);
+  --color-surface-alt: var(--bk-surface-alt);
+  --color-line: var(--bk-border);
+  --color-fg: var(--bk-fg);
+  --color-muted: var(--bk-muted);
+  --color-accent: var(--bk-accent);
+  --color-on-accent: var(--bk-accent-fg);
+  --color-danger: var(--bk-danger);
+  --color-warning: var(--bk-warning);
+  --color-success: var(--bk-success);
+  --color-p1: var(--bk-p1);
+  --color-p2: var(--bk-p2);
+  --color-p3: var(--bk-p3);
+  --color-p4: var(--bk-p4);
+  --font-sans: var(
+    --bk-font,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Noto Sans',
+    sans-serif
+  );
+}
+
+/* Fallback (BokyDo light) until the theme script runs. */
+:root {
+  --bk-bg: #fafafa;
+  --bk-surface: #ffffff;
+  --bk-surface-alt: #f2f2f2;
+  --bk-border: #e5e5e5;
+  --bk-fg: #1f1f1f;
+  --bk-muted: #666666;
+  --bk-accent: #c3392b;
+  --bk-accent-fg: #ffffff;
+  --bk-danger: #d1453b;
+  --bk-warning: #b36a00;
+  --bk-success: #058527;
+  --bk-p1: #d1453b;
+  --bk-p2: #b36a00;
+  --bk-p3: #246fe0;
+  --bk-p4: #666666;
+  --bk-row-py: 0.5rem;
+}
+
+:root[data-density='compact'] {
+  --bk-row-py: 0.25rem;
+}
+
+html {
+  font-size: var(--bk-text-size, 16px);
 }
 
 body {
-  @apply bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+  @apply bg-bg text-fg antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--bk-accent) 30%, transparent);
 }

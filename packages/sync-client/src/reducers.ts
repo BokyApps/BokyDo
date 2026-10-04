@@ -220,6 +220,24 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
     case 'filter_delete':
       d.filters.delete(command.args.id);
       return;
+
+    case 'user_update_preferences': {
+      if (!d.user) return;
+      const { appearance, ...rest } = command.args;
+      const defined = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+      const appearanceDefined = Object.fromEntries(
+        Object.entries(appearance ?? {}).filter(([, v]) => v !== undefined),
+      );
+      d.user = {
+        ...d.user,
+        preferences: {
+          ...d.user.preferences,
+          ...defined,
+          appearance: { ...d.user.preferences.appearance, ...appearanceDefined },
+        },
+      };
+      return;
+    }
   }
 }
 

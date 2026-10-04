@@ -66,6 +66,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   // Sync
   'POST /api/v1/sync': 'user/after',
   'GET /api/v1/sync/events': 'user/after',
+  // Task reads outside sync
+  'GET /api/v1/tasks/completed': 'user/after',
+  'GET /api/v1/search': 'user/after',
 };
 
 /** Streaming routes never finish on success; only their status line is checked. */

@@ -22,7 +22,8 @@ export const fail = (code: CommandError, message?: string): never => {
   throw new CommandFailure(code, message);
 };
 
-type ChangeType = 'projects' | 'sections' | 'tasks' | 'labels' | 'filters' | 'project_access';
+type ChangeType =
+  'projects' | 'sections' | 'tasks' | 'labels' | 'filters' | 'project_access' | 'user';
 interface ChangeRow {
   entityType: ChangeType;
   entityId: string;

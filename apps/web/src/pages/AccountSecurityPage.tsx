@@ -43,7 +43,7 @@ export function AccountSecurityPage() {
             <EmailSection security={security} />
           </Section>
           <Section title="Password">
-            <Link to="/account/password" className="text-sm text-brand hover:underline">
+            <Link to="/account/password" className="text-sm text-accent hover:underline">
               Change password
             </Link>
           </Section>
@@ -54,7 +54,7 @@ export function AccountSecurityPage() {
       )}
       <Dialog open={codes !== null} onClose={() => setCodes(null)} title="Save your recovery codes">
         <div className="space-y-4">
-          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          <p className="text-sm text-muted">
             If you lose your phone or passkeys, each of these codes signs you in once. Store them
             somewhere safe. They won't be shown again.
           </p>
@@ -121,7 +121,7 @@ function TotpSection({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h3 className="text-sm font-medium">Authenticator app</h3>
-          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          <p className="text-xs text-muted">
             6-digit codes from an app like Aegis, 2FAS or 1Password.
           </p>
         </div>
@@ -143,7 +143,7 @@ function TotpSection({
             e.preventDefault();
             confirm.mutate();
           }}
-          className="space-y-3 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800"
+          className="space-y-3 rounded-lg border border-line p-4"
         >
           <p className="text-sm">
             Scan this with your authenticator app, then enter the code it shows.
@@ -151,9 +151,9 @@ function TotpSection({
           <img
             src={setup.qrCode}
             alt="QR code for your authenticator app"
-            className="mx-auto size-48 rounded bg-white p-2"
+            className="mx-auto size-48 rounded bg-surface p-2"
           />
-          <details className="text-xs text-neutral-500">
+          <details className="text-xs text-muted">
             <summary className="cursor-pointer">Can't scan? Enter this key instead</summary>
             <code className="mt-1 block break-all font-mono text-sm">
               {setup.secret.replace(/(.{4})/g, '$1 ').trim()}
@@ -209,24 +209,24 @@ function PasskeySection({
     <div className="space-y-3">
       <div>
         <h3 className="text-sm font-medium">Passkeys and security keys</h3>
-        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        <p className="text-xs text-muted">
           Sign in with your fingerprint, face, device PIN or a hardware key. Phishing-proof.
         </p>
       </div>
       {security.passkeys.length > 0 && (
-        <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+        <ul className="divide-y divide-line rounded-lg border border-line">
           {security.passkeys.map((p) => (
             <li key={p.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
               <div>
                 <div className="font-medium">
                   {p.name}{' '}
                   {p.backedUp && (
-                    <span className="ml-1 rounded bg-neutral-100 px-1.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                    <span className="ml-1 rounded bg-surface-alt px-1.5 text-xs text-muted">
                       synced
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-neutral-500">
+                <div className="text-xs text-muted">
                   Added {new Date(p.createdAt).toLocaleDateString()}
                   {p.lastUsedAt && ` · last used ${new Date(p.lastUsedAt).toLocaleDateString()}`}
                 </div>
@@ -264,7 +264,7 @@ function PasskeySection({
           </Button>
         </form>
       ) : (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-muted">
           Passkeys need BokyDo to be served over HTTPS at its public URL.
         </p>
       )}
@@ -289,7 +289,7 @@ function RecoverySection({
     <div className="flex items-center justify-between gap-4">
       <div>
         <h3 className="text-sm font-medium">Recovery codes</h3>
-        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        <p className="text-xs text-muted">
           {security.recoveryCodesRemaining} of 10 left.{' '}
           {security.recoveryCodesRemaining <= 3 && 'Generate new ones soon.'}
         </p>
@@ -314,13 +314,7 @@ function EmailSection({ security }: { security: AccountSecurity }) {
         {security.email ? (
           <>
             {security.email}{' '}
-            <span
-              className={
-                security.emailVerified
-                  ? 'text-green-700 dark:text-green-400'
-                  : 'text-amber-700 dark:text-amber-400'
-              }
-            >
+            <span className={security.emailVerified ? 'text-success' : 'text-warning'}>
               ({security.emailVerified ? 'confirmed' : 'not confirmed'})
             </span>
           </>
@@ -403,19 +397,19 @@ function SessionsSection() {
   if (!list) return null;
   return (
     <div className="space-y-3">
-      <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+      <ul className="divide-y divide-line rounded-lg border border-line">
         {list.map((s) => (
           <li key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
             <div>
               <div className="font-medium">
                 {describeDevice(s.userAgent)}{' '}
                 {s.current && (
-                  <span className="ml-1 rounded bg-green-100 px-1.5 text-xs text-green-800 dark:bg-green-950 dark:text-green-300">
+                  <span className="ml-1 rounded bg-success/15 px-1.5 text-xs text-success">
                     this device
                   </span>
                 )}
               </div>
-              <div className="text-xs text-neutral-500">
+              <div className="text-xs text-muted">
                 {s.ip ?? 'unknown IP'} · active {new Date(s.lastSeenAt).toLocaleString()} ·{' '}
                 {s.authMethod.replace('+', ' + ')}
               </div>

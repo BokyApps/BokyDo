@@ -1,6 +1,6 @@
 # Threat model
 
-Living document, STRIDE per component. Every deliverable updates it. **v0.4 — F1–F4, W1 (2026-10-04).**
+Living document, STRIDE per component. Every deliverable updates it. **v0.5 — F1–F4, W1, W2 (2026-10-04).**
 
 ## Assets
 

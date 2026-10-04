@@ -37,7 +37,7 @@ export function ChangePasswordPage() {
         {forced ? 'Choose your password' : 'Change password'}
       </h1>
       {forced && (
-        <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+        <p className="mt-1 text-sm text-muted">
           The one-time passphrase has done its job. Pick a password only you know.
         </p>
       )}

@@ -1,8 +1,21 @@
-import type { Command, CommandResult, SyncRequest, SyncResponse, Task } from '@bokydo/shared';
+import {
+  DEFAULT_PREFERENCES,
+  type Command,
+  type CommandResult,
+  type SyncRequest,
+  type SyncResponse,
+  type Task,
+} from '@bokydo/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { SyncStore } from './store.js';
 
-const USER = { id: 'u1', username: 'alice', isAdmin: false, inboxProjectId: 'inbox' };
+const USER = {
+  id: 'u1',
+  username: 'alice',
+  isAdmin: false,
+  inboxProjectId: 'inbox',
+  preferences: DEFAULT_PREFERENCES,
+};
 const INBOX = {
   id: 'inbox',
   name: 'Inbox',

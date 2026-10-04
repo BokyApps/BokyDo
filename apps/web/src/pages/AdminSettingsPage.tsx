@@ -2,6 +2,7 @@ import { normalizePublicUrl, type PublicSettings, type SettingsPatch } from '@bo
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
+import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Alert, Button, Card, Checkbox, SelectField, TextField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
@@ -108,13 +109,8 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
           label: v === '0' ? 'None (direct connection)' : `${v} proxy${v === '1' ? '' : 'ies'}`,
         }))}
       />
+      <TimeZonePicker label="Default time zone" value={timezone} onChange={setTimezone} />
       <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          label="Default time zone"
-          value={timezone}
-          onChange={(e) => setTimezone(e.target.value)}
-          hint="IANA name, e.g. Asia/Phnom_Penh"
-        />
         <SelectField
           label="Week starts on"
           value={weekStart}

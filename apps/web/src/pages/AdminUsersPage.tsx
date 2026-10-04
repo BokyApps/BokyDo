@@ -65,14 +65,14 @@ export function AdminUsersPage() {
       ))}
       <Card className="overflow-x-auto p-0">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-neutral-200 text-xs text-neutral-500 dark:border-neutral-800">
+          <thead className="border-b border-line text-xs text-muted">
             <tr>
               <th className="px-4 py-2 font-medium">User</th>
               <th className="px-4 py-2 font-medium">Security</th>
               <th className="px-4 py-2 font-medium sr-only">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
+          <tbody className="divide-y divide-line">
             {users?.map((u) => (
               <tr key={u.id} className={u.disabled ? 'opacity-60' : ''}>
                 <td className="px-4 py-3">
@@ -81,11 +81,11 @@ export function AdminUsersPage() {
                     {u.isAdmin && <Badge>admin</Badge>}
                     {u.disabled && <Badge>disabled</Badge>}
                   </div>
-                  <div className="text-xs text-neutral-500">
+                  <div className="text-xs text-muted">
                     {u.email ? `${u.email}${u.emailVerified ? '' : ' (unconfirmed)'}` : 'no email'}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-xs text-neutral-600 dark:text-neutral-400">
+                <td className="px-4 py-3 text-xs text-muted">
                   {u.totpEnabled || u.passkeys
                     ? [
                         u.totpEnabled && 'authenticator app',
@@ -132,7 +132,7 @@ export function AdminUsersPage() {
       <Dialog open={shown !== null} onClose={() => setShown(null)} title={shown?.title ?? ''}>
         {shown && (
           <div className="space-y-4">
-            <p className="text-sm text-neutral-600 dark:text-neutral-400">{shown.intro}</p>
+            <p className="text-sm text-muted">{shown.intro}</p>
             <SecretList items={shown.items} filename={shown.filename} />
             <div className="flex justify-end">
               <Button onClick={() => setShown(null)}>Done</Button>
@@ -146,7 +146,7 @@ export function AdminUsersPage() {
 
 function Badge({ children }: { children: string }) {
   return (
-    <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-xs font-normal text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+    <span className="ml-2 rounded bg-surface-alt px-1.5 py-0.5 text-xs font-normal text-muted">
       {children}
     </span>
   );
@@ -265,13 +265,13 @@ function Invites({ onCreated }: { onCreated: (s: Shown) => void }) {
         </Button>
       </form>
       {invites && invites.length > 0 && (
-        <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 text-sm dark:divide-neutral-800 dark:border-neutral-800">
+        <ul className="divide-y divide-line rounded-lg border border-line text-sm">
           {invites.map((i) => (
             <li key={i.id} className="flex items-center justify-between px-3 py-2">
               <div>
                 {i.email ?? 'Link invitation'}
                 {i.isAdmin && <Badge>admin</Badge>}
-                <div className="text-xs text-neutral-500">
+                <div className="text-xs text-muted">
                   expires {new Date(i.expiresAt).toLocaleDateString()}
                 </div>
               </div>

@@ -67,9 +67,7 @@ export function ReauthProvider({ children }: { children: ReactNode }) {
       {children}
       <Dialog open={open} onClose={() => finish(false)} title="Confirm it's you">
         <form onSubmit={submit} className="space-y-4">
-          <p className="text-sm text-neutral-600 dark:text-neutral-400">
-            This change needs your password again.
-          </p>
+          <p className="text-sm text-muted">This change needs your password again.</p>
           <TextField
             label="Password"
             type="password"

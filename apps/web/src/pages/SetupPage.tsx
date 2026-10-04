@@ -48,11 +48,11 @@ function StepLabel({
 }) {
   return (
     <li
-      className={`flex items-center gap-2 ${active ? 'font-medium' : 'text-neutral-500 dark:text-neutral-400'}`}
+      className={`flex items-center gap-2 ${active ? 'font-medium' : 'text-muted'}`}
       aria-current={active ? 'step' : undefined}
     >
       <span
-        className={`flex size-5 items-center justify-center rounded-full text-xs ${done ? 'bg-green-600 text-white' : active ? 'bg-brand text-white' : 'border border-neutral-300 dark:border-neutral-700'}`}
+        className={`flex size-5 items-center justify-center rounded-full text-xs ${done ? 'bg-success text-white' : active ? 'bg-accent text-white' : 'border border-line'}`}
       >
         {done ? '✓' : ''}
       </span>
@@ -140,12 +140,12 @@ function EmailStep({ onDone }: { onDone: () => void }) {
   if (!settings) return null;
   return (
     <div className="space-y-4">
-      <p className="text-sm text-neutral-600 dark:text-neutral-400">
+      <p className="text-sm text-muted">
         BokyDo uses email for invitations, password resets, reminders and security alerts. You can
         skip this and set it up later in Admin → Settings.
       </p>
       <EmailSettingsForm settings={settings} />
-      <div className="flex justify-end border-t border-neutral-200 pt-4 dark:border-neutral-800">
+      <div className="flex justify-end border-t border-line pt-4">
         <Button variant="secondary" onClick={onDone}>
           Continue
         </Button>
@@ -166,7 +166,7 @@ function FinishStep({ onBack }: { onBack: () => void }) {
   });
   return (
     <div className="space-y-4">
-      <p className="text-sm text-neutral-600 dark:text-neutral-400">
+      <p className="text-sm text-muted">
         That's everything needed to start. Registration is invite-only by default; you can change
         that and more in Admin → Settings.
       </p>
