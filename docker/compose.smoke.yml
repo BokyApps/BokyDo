@@ -1,0 +1,5 @@
+# Overrides for docker/smoke-test.sh: different host port, loopback only.
+services:
+  app:
+    ports: !override
+      - '127.0.0.1:${PORT:-18080}:8080'

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    ":semanticCommitsDisabled"
+  ],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": { "enabled": true, "minimumReleaseAge": null, "labels": ["security"] },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest"],
+      "groupName": "non-major dependencies",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Trivy: stay on manually verified releases after the March 2026 compromise.",
+      "matchPackageNames": ["aquasec/trivy"],
+      "enabled": false
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "customConditions": ["bokydo-source"]
+  },
+  "include": ["src"]
+}

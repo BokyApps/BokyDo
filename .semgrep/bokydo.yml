@@ -1,0 +1,62 @@
+rules:
+  - id: bokydo-no-dynamic-raw-sql
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Raw SQL built from a non-literal. Use Drizzle's query builder or the sql`` tagged template
+      (which parameterises interpolations) instead.
+    patterns:
+      - pattern-either:
+          - pattern: sql.raw($X)
+          - pattern: $SQL.unsafe($X, ...)
+      - pattern-not: sql.raw("...")
+      - pattern-not: $SQL.unsafe("...", ...)
+
+  - id: bokydo-no-dangerously-set-inner-html
+    languages: [typescript]
+    severity: ERROR
+    message: Render untrusted content through the sanitised Markdown renderer, not raw HTML.
+    pattern: <$EL dangerouslySetInnerHTML={...} />
+
+  - id: bokydo-no-math-random-on-server
+    languages: [typescript]
+    severity: ERROR
+    message: Use node:crypto (randomInt / randomBytes) for anything the server generates.
+    paths:
+      include: ['/apps/server/src/']
+    pattern: Math.random()
+
+  - id: bokydo-no-shell-exec
+    languages: [typescript]
+    severity: ERROR
+    message: Don't spawn shells. If a subprocess is unavoidable, use execFile with a fixed argv.
+    pattern-either:
+      - pattern: |
+          import { exec } from 'node:child_process';
+          ...
+          exec(...);
+      - pattern: |
+          import { exec } from 'child_process';
+          ...
+          exec(...);
+      - pattern: |
+          import { execSync } from 'node:child_process';
+          ...
+          execSync(...);
+      - pattern: require('child_process').exec(...)
+
+  - id: bokydo-no-blanket-trust-proxy
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      trustProxy must come from the admin-configured hop count, never `true` (lets any client
+      spoof X-Forwarded-For and bypass rate limits / audit IPs).
+    pattern: 'Fastify({..., trustProxy: true, ...})'
+
+  - id: bokydo-no-error-details-in-response
+    languages: [typescript]
+    severity: WARNING
+    message: Don't send stack traces or raw error objects to clients.
+    pattern-either:
+      - pattern: $REPLY.send($ERR.stack)
+      - pattern: '$REPLY.send({..., stack: $ERR.stack, ...})'

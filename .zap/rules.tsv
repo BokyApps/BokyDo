@@ -1,0 +1,6 @@
+# ZAP baseline rule overrides: <rule id>	<IGNORE|WARN|FAIL>	<reason>
+# Strict CSP, nosniff and clickjacking protections are required; fail if they regress.
+10020	FAIL	Anti-clickjacking header missing
+10021	FAIL	X-Content-Type-Options missing
+10038	FAIL	Content Security Policy header not set
+10055	FAIL	CSP weaknesses

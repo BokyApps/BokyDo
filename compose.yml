@@ -1,0 +1,75 @@
+# BokyDo — zero-config stack.  Start with:  docker compose up -d
+# Then read the one-time admin passphrase:  docker compose logs app
+# Nothing here needs editing; all configuration happens in the web UI.
+name: bokydo
+
+x-hardening: &hardening
+  security_opt: ['no-new-privileges:true']
+  cap_drop: [ALL]
+
+services:
+  # One-shot: generates the database password (and nothing else) before Postgres first starts.
+  bootstrap:
+    <<: *hardening
+    image: bokydo:local
+    build: { context: ., dockerfile: docker/Dockerfile }
+    user: '0:0'
+    # Needs to chown/chmod secret files for the app (uid 65532) and Postgres (uid 999).
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    command: ['/app/dist/cli.js', 'bootstrap']
+    network_mode: none
+    read_only: true
+    volumes:
+      - app-data:/data
+      - pg-secret:/run/bokydo-pg
+    restart: 'no'
+
+  db:
+    <<: *hardening
+    image: postgres:17-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
+    # The entrypoint starts as root and drops to the postgres user.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    environment:
+      POSTGRES_USER: bokydo
+      POSTGRES_DB: bokydo
+      POSTGRES_PASSWORD_FILE: /run/bokydo-pg/password
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - pg-secret:/run/bokydo-pg:ro
+    networks: [internal]
+    shm_size: 128mb
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bokydo -d bokydo']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  app:
+    <<: *hardening
+    image: bokydo:local
+    build: { context: ., dockerfile: docker/Dockerfile }
+    read_only: true
+    tmpfs: ['/tmp:size=64m,mode=1777']
+    volumes:
+      - app-data:/data
+    ports:
+      - '8080:8080'
+    # `internal` reaches the database; `egress` allows outbound calls (SMTP, AI providers).
+    networks: [internal, egress]
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+      db: { condition: service_healthy }
+    restart: unless-stopped
+
+networks:
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  app-data:
+  pg-data:
+  pg-secret:

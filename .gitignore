@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.data/
+.env
+.env.*
+*.log
+.DS_Store
+/playwright-report/
+/test-results/
+.zap/*
+!.zap/rules.tsv

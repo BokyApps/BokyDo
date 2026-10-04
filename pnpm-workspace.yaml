@@ -1,0 +1,22 @@
+packages:
+  - apps/*
+  - packages/*
+
+# --- Supply-chain hardening ---------------------------------------------------------------------
+# Only these packages may run install scripts.
+allowBuilds:
+  esbuild: true
+# Don't install versions published less than 7 days ago (time for hijacked releases to be caught).
+minimumReleaseAge: 10080
+# Transitive deps may only come from the registry (no git/tarball URLs).
+blockExoticSubdeps: true
+# Refuse updates whose publish provenance is weaker than earlier versions.
+trustPolicy: no-downgrade
+# Downgrade checks target fresh hijacks; long-lived releases (often pre-provenance) are exempt.
+trustPolicyIgnoreAfter: 43200
+
+strictPeerDependencies: true
+
+overrides:
+  # drizzle-kit → @esbuild-kit pins esbuild 0.18 (GHSA-67mh-4wv8-2f99). Dev-only, but keep audits clean.
+  '@esbuild-kit/core-utils>esbuild': ^0.25.0

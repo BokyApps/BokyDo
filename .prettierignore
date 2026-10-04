@@ -1,0 +1,8 @@
+pnpm-lock.yaml
+LICENSE
+dist/
+coverage/
+apps/server/src/security/eff-wordlist.ts
+apps/server/drizzle/
+docs/PLAN.md
+.zap/

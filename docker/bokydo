@@ -1,0 +1,3 @@
+#!/nodejs/bin/node
+// `bokydo` CLI inside the distroless image (no shell, so this is a Node script).
+import('/app/dist/cli.js');

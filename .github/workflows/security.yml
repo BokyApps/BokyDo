@@ -1,0 +1,88 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 3 * * *' # nightly: picks up newly published advisories
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: >
+          docker run --rm -v "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --redact --no-banner
+
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: >
+          docker run --rm -v "$PWD:/src" -w /src
+          semgrep/semgrep:1.178.0@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b
+          semgrep scan --metrics=off --error
+          --config .semgrep --config p/default --config p/typescript --config p/nodejs
+          --exclude=apps/server/src/security/eff-wordlist.ts
+
+  dependencies:
+    name: Dependency audit (osv-scanner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: >
+          docker run --rm -v "$PWD:/src:ro"
+          ghcr.io/google/osv-scanner:v2.6.0@sha256:afd838850ac1a0fcc15ff4a041dc9ba11123c3f0d2666217a5f0fcf9222b55fa
+          scan source --lockfile /src/pnpm-lock.yaml
+
+  image:
+    name: Container scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -f docker/Dockerfile -t bokydo:scan .
+      # Scan a saved tarball instead of mounting the Docker socket into the scanner.
+      # Trivy is pinned to a version verified clean after the March 2026 supply-chain incident.
+      - run: docker save bokydo:scan -o "$RUNNER_TEMP/image.tar"
+      - run: >
+          docker run --rm -v "$RUNNER_TEMP:/scan:ro" -v "$PWD:/src:ro"
+          aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c
+          image --input /scan/image.tar --scanners vuln,secret
+          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+      - run: >
+          docker run --rm -v "$PWD:/src:ro"
+          aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c
+          config /src --severity HIGH,CRITICAL --exit-code 1
+
+  dast:
+    name: DAST (OWASP ZAP baseline)
+    if: github.event_name == 'schedule' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: KEEP=1 docker/smoke-test.sh
+      - run: >
+          docker run --rm --network host -v "$PWD/.zap:/zap/wrk:rw"
+          ghcr.io/zaproxy/zaproxy:stable
+          zap-baseline.py -t http://127.0.0.1:18080 -c rules.tsv -I -r zap-report.html
+      - if: always()
+        run: docker compose -p bokydo-smoke -f compose.yml -f docker/compose.smoke.yml down -v
