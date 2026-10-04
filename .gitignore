@@ -11,3 +11,9 @@ coverage/
 /test-results/
 .zap/*
 !.zap/rules.tsv
+
+# Local AI-assistant and editor state: never commit
+.claude/
+CLAUDE.local.md
+.vscode/
+.idea/
