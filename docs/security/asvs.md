@@ -3,19 +3,21 @@
 Status per chapter. Detailed requirement-by-requirement review happens in W13. This file records
 which deliverable owns each area and what's already in place.
 
-| Chapter                                | Owner | Status | Notes                                                      |
-| -------------------------------------- | ----- | ------ | ---------------------------------------------------------- |
-| V1 Architecture & threat modelling     | F1    | 🟡     | Threat model v0.1, ADRs, CI security gates                 |
-| V2 Authentication                      | W1    | ⏳     | Argon2id hashing ready (F2); TOTP, passkeys, lockout in W1 |
-| V3 Session management                  | W1    | ⏳     | `session.key` provisioned (F2)                             |
-| V4 Access control                      | F4    | ⏳     | Central policy layer + authz matrix                        |
-| V5 Validation, sanitisation & encoding | F4/W2 | 🟡     | Zod schemas; strict CSP; no inline script                  |
-| V6 Stored cryptography                 | F3    | 🟡     | KEK provisioned (F2); envelope encryption in F3            |
-| V7 Error handling & logging            | F2    | 🟡     | Generic 5xx; log redaction; audit log table                |
-| V8 Data protection                     | W11   | ⏳     | Export, deletion, backups                                  |
-| V9 Communications                      | F3    | ⏳     | HTTPS detection, HSTS once public URL is HTTPS             |
-| V10 Malicious code                     | F1    | 🟡     | Supply-chain controls, pinned actions/images               |
-| V11 Business logic                     | W2+   | ⏳     |                                                            |
-| V12 Files & resources                  | W5    | ⏳     | Attachments; SSRF-safe client in W7                        |
-| V13 API & web service                  | W10   | ⏳     |                                                            |
-| V14 Configuration                      | F2    | 🟡     | Hardened container, headers, no default credentials        |
+✅ in place for current scope · 🟡 partly in place · ⏳ not started
+
+| Chapter                                | Owner  | Status | Notes                                                                                                                                                                                                                                                     |
+| -------------------------------------- | ------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| V1 Architecture & threat modelling     | F1     | 🟡     | Threat model (T1–T54), ADRs 0001–0004, per-deliverable security gates in CI                                                                                                                                                                               |
+| V2 Authentication                      | F3/W1  | ✅     | Argon2id; per-IP and per-account throttling with capped backoff; forced first-login change; length-based policy; opt-in breached-password check; TOTP, passkeys, recovery codes; MFA policy; verified-only reset email; security notifications (ADR 0004) |
+| V3 Session management                  | F3/W1  | ✅     | Server-side HMAC'd tokens; HttpOnly, SameSite, `__Host-` Secure cookies; rotation on login and credential change; idle + absolute expiry; sessions list and sign-out-everywhere; re-auth window for sensitive actions                                     |
+| V4 Access control                      | F3/F4  | ✅     | Fail-closed route access declarations + authz matrix (50 routes × 5 principals); central resource policy and role ranks; `not_found` for invisible resources; per-command IDOR tests. Sharing UI (W5) must keep using `requireProject`                    |
+| V5 Validation, sanitisation & encoding | F4/W2  | ✅     | Strict Zod schemas everywhere; Markdown → AST → React (no HTML path); safe link schemes; parameterised full-text search; strict CSP                                                                                                                       |
+| V6 Stored cryptography                 | F3     | ✅     | Envelope encryption (AES-256-GCM, per-secret DEK, AAD-bound) for settings and TOTP secrets; keyed hashes for tokens and recovery codes                                                                                                                    |
+| V7 Error handling & logging            | F2/W1  | 🟡     | Generic 5xx; log redaction; append-only audit log for auth, admin and settings events. Log export/retention in W13                                                                                                                                        |
+| V8 Data protection                     | W11    | ⏳     | Export, deletion, backups                                                                                                                                                                                                                                 |
+| V9 Communications                      | F3     | 🟡     | HSTS once the public URL is HTTPS; plain-HTTP warning in setup; SMTP TLS ≥ 1.2                                                                                                                                                                            |
+| V10 Malicious code                     | F1     | 🟡     | 7-day release age, allow-listed install scripts, trust-downgrade check, pinned actions/images, Renovate                                                                                                                                                   |
+| V11 Business logic                     | F4/W2  | 🟡     | Idempotent commands, per-user/project limits, per-user sync rate limits, depth/cycle checks                                                                                                                                                               |
+| V12 Files & resources                  | W5     | ⏳     | Attachments; SSRF-safe outbound client in W7                                                                                                                                                                                                              |
+| V13 API & web service                  | F3/W10 | 🟡     | CSRF (Origin + synchronizer token), strict schemas, `no-store` on API responses; tokens/OAuth in W10                                                                                                                                                      |
+| V14 Configuration                      | F2     | 🟡     | Hardened container, security headers, no default credentials, zero-config secrets                                                                                                                                                                         |
