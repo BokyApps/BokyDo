@@ -1,3 +1,4 @@
+import { NotificationBell } from './Notifications.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
@@ -102,6 +103,7 @@ function Layout() {
           <IconButton label="Quick add (q)" onClick={() => ui.openQuickAdd()}>
             <PlusIcon />
           </IconButton>
+          <NotificationBell />
           <UserMenu onShortcuts={() => setHelpOpen(true)} />
         </div>
       </header>

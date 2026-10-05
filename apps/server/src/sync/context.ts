@@ -31,7 +31,8 @@ type ChangeType =
   | 'project_access'
   | 'user'
   | 'invitations'
-  | 'comments';
+  | 'comments'
+  | 'notifications';
 interface ChangeRow {
   entityType: ChangeType;
   entityId: string;

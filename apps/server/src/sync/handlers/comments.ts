@@ -1,6 +1,8 @@
 import type { CommandArgs } from '@bokydo/shared';
 import { and, count, eq, inArray, isNull } from 'drizzle-orm';
+import { MAX_MENTIONS_PER_COMMENT } from '@bokydo/shared';
 import { logActivity } from '../../activity/log.js';
+import { mentionedMembers, notify } from '../../notifications/notify.js';
 import { attachments, commentReactions, comments, tasks } from '../../db/schema.js';
 import { fail, LIMITS, type CommandContext } from '../context.js';
 import { can, projectAccess, requireProject } from '../policy.js';
@@ -65,6 +67,55 @@ export async function commentAdd(
     if (claimed.length !== new Set(args.attachmentIds).size) fail('invalid', 'unknown attachment');
   }
   ctx.changes.inProject('comments', args.id, project.id);
+
+  // @mentions (members only, capped) and people following the task: its creator, its assignee
+  // and earlier commenters (if they can still see it: notifications filter on access).
+  const data = {
+    title: task?.content ?? null,
+    projectName: project.name,
+    excerpt: args.content.slice(0, 140),
+  };
+  const mentioned = await mentionedMembers(
+    ctx.tx,
+    project.id,
+    args.content,
+    MAX_MENTIONS_PER_COMMENT,
+  );
+  for (const userId of mentioned)
+    await notify(ctx.tx, ctx.changes, ctx.userId, {
+      userId,
+      type: 'mentioned',
+      projectId: project.id,
+      taskId: task?.id ?? null,
+      commentId: args.id,
+      data,
+    });
+  if (task) {
+    const followers = new Set<string>();
+    const [row] = await ctx.tx
+      .select({ assigneeId: tasks.assigneeId, createdById: tasks.createdById })
+      .from(tasks)
+      .where(eq(tasks.id, task.id));
+    if (row?.assigneeId) followers.add(row.assigneeId);
+    if (row?.createdById) followers.add(row.createdById);
+    const earlier = await ctx.tx
+      .selectDistinct({ userId: comments.userId })
+      .from(comments)
+      .where(and(eq(comments.taskId, task.id), isNull(comments.deletedAt)))
+      .limit(20);
+    for (const e of earlier) if (e.userId) followers.add(e.userId);
+    for (const userId of followers)
+      if (!mentioned.includes(userId))
+        await notify(ctx.tx, ctx.changes, ctx.userId, {
+          userId,
+          type: 'commented',
+          projectId: project.id,
+          taskId: task.id,
+          commentId: args.id,
+          data,
+        });
+  }
+
   await logActivity(ctx.tx, ctx.userId, {
     projectId: project.id,
     taskId: task?.id ?? null,

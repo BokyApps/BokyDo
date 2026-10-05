@@ -2,6 +2,7 @@ import { localNow, nextOccurrence } from '@bokydo/nlp';
 import { resolvePreferences, type CommandArgs, type Due } from '@bokydo/shared';
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { logActivity } from '../../activity/log.js';
+import { notify } from '../../notifications/notify.js';
 import { tasks, users } from '../../db/schema.js';
 import { fail, LIMITS, type CommandContext, type Tx } from '../context.js';
 import { isProjectMember, requireProject } from '../policy.js';
@@ -144,6 +145,14 @@ export async function taskAdd(ctx: CommandContext, args: CommandArgs<'task_add'>
     .returning({ id: tasks.id });
   if (inserted.length === 0) fail('conflict', 'id already in use');
   ctx.changes.inProject('tasks', args.id, project.id);
+  if (args.assigneeId)
+    await notify(ctx.tx, ctx.changes, ctx.userId, {
+      userId: args.assigneeId,
+      type: 'assigned',
+      projectId: project.id,
+      taskId: args.id,
+      data: { title: args.content, projectName: project.name },
+    });
   await logActivity(ctx.tx, ctx.userId, {
     projectId: project.id,
     taskId: args.id,
@@ -174,6 +183,14 @@ export async function taskUpdate(
     })
     .where(eq(tasks.id, id));
   ctx.changes.inProject('tasks', id, task.projectId);
+  if (assigneeId && assigneeId !== task.assigneeId)
+    await notify(ctx.tx, ctx.changes, ctx.userId, {
+      userId: assigneeId,
+      type: 'assigned',
+      projectId: task.projectId,
+      taskId: id,
+      data: { title: args.content ?? task.content },
+    });
   const changed = Object.keys(args).filter(
     (k) =>
       k !== 'id' &&

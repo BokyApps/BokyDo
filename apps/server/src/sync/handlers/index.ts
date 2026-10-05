@@ -5,3 +5,4 @@ export * from './tasks.js';
 export * from './preferences.js';
 export * from './members.js';
 export * from './comments.js';
+export * from './notifications.js';

@@ -1,4 +1,5 @@
 import type {
+  AppNotification,
   Collaborator,
   Comment,
   Filter,
@@ -18,6 +19,8 @@ export interface SyncState {
   collaborators: ReadonlyMap<string, Collaborator>;
   members: readonly ProjectMember[];
   invitations: readonly PendingInvite[];
+  notifications: readonly AppNotification[];
+  unreadNotifications: number;
   projects: ReadonlyMap<string, Project>;
   sections: ReadonlyMap<string, Section>;
   tasks: ReadonlyMap<string, Task>;
@@ -32,6 +35,8 @@ export interface Draft {
   collaborators: ReadonlyMap<string, Collaborator>;
   members: ProjectMember[];
   invitations: readonly PendingInvite[];
+  notifications: readonly AppNotification[];
+  unreadNotifications: number;
   projects: Map<string, Project>;
   sections: Map<string, Section>;
   tasks: Map<string, Task>;
@@ -45,6 +50,8 @@ export const emptyState = (): SyncState => ({
   collaborators: new Map(),
   members: [],
   invitations: [],
+  notifications: [],
+  unreadNotifications: 0,
   projects: new Map(),
   sections: new Map(),
   tasks: new Map(),
@@ -59,6 +66,8 @@ export function draftOf(state: SyncState): Draft {
     collaborators: state.collaborators,
     members: [...state.members],
     invitations: state.invitations,
+    notifications: state.notifications,
+    unreadNotifications: state.unreadNotifications,
     projects: new Map(state.projects),
     sections: new Map(state.sections),
     tasks: new Map(state.tasks),
@@ -75,6 +84,8 @@ export function applyServerResponse(state: SyncState, res: SyncResponse): SyncSt
   d.collaborators = new Map(res.collaborators.map((c) => [c.id, c]));
   d.members = res.members;
   d.invitations = res.invitations;
+  d.notifications = res.notifications;
+  d.unreadNotifications = res.unreadNotifications;
   for (const p of res.projects) d.projects.set(p.id, p);
   for (const s of res.sections) d.sections.set(s.id, s);
   for (const t of res.tasks) d.tasks.set(t.id, t);

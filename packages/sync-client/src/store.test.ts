@@ -52,6 +52,8 @@ function response(partial: Partial<SyncResponse> = {}): SyncResponse {
     collaborators: [],
     members: [],
     invitations: [],
+    notifications: [],
+    unreadNotifications: 0,
     results: {},
     ...partial,
   };

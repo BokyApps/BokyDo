@@ -390,6 +390,12 @@ export const commandArgs = {
   comment_delete: byId,
   reaction_toggle: z.object({ commentId: idSchema, emoji: reactionSchema }).strict(),
 
+  /** Mark notifications read: the given ones, or all of them. */
+  notifications_mark_read: z
+    .object({ ids: z.array(idSchema).max(200).optional(), all: z.literal(true).optional() })
+    .strict()
+    .refine((v) => Boolean(v.ids) !== Boolean(v.all), 'Give ids or all'),
+
   /** Change a member's role (admins and owners; only owners touch admins). */
   project_member_update: z
     .object({ projectId: idSchema, userId: idSchema, role: grantableRoleSchema })
@@ -454,6 +460,9 @@ export interface SyncResponse {
   members: ProjectMember[];
   /** Direct project invitations waiting for this user. */
   invitations: PendingInvite[];
+  /** The latest notifications (always complete, newest first) and how many are unread. */
+  notifications: AppNotification[];
+  unreadNotifications: number;
   results: Record<string, CommandResult>;
 }
 
@@ -512,3 +521,21 @@ export interface ActivityEntry {
   data: Record<string, unknown>;
   at: string;
 }
+
+export type NotificationType =
+  'assigned' | 'mentioned' | 'commented' | 'role_changed' | 'removed_from_project' | 'became_owner';
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  actorId: string | null;
+  projectId: string | null;
+  taskId: string | null;
+  commentId: string | null;
+  /** Snapshot for display (task title, project name, role…). */
+  data: Record<string, unknown>;
+  createdAt: string;
+  read: boolean;
+}
+
+export const MAX_MENTIONS_PER_COMMENT = 10;

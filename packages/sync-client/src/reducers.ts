@@ -236,6 +236,17 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
       d.filters.delete(command.args.id);
       return;
 
+    case 'notifications_mark_read': {
+      const ids = command.args.ids ? new Set(command.args.ids) : null;
+      let marked = 0;
+      d.notifications = d.notifications.map((n) => {
+        if (n.read || (ids && !ids.has(n.id))) return n;
+        marked++;
+        return { ...n, read: true };
+      });
+      d.unreadNotifications = ids ? Math.max(0, d.unreadNotifications - marked) : 0;
+      return;
+    }
     case 'comment_add': {
       const a = command.args;
       const projectId = a.projectId ?? (a.taskId ? d.tasks.get(a.taskId)?.projectId : undefined);

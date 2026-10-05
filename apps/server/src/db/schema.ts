@@ -282,6 +282,7 @@ export const changes = pgTable(
         'user',
         'invitations',
         'comments',
+        'notifications',
       ],
     }).notNull(),
     entityId: uuid('entity_id').notNull(),
@@ -505,5 +506,28 @@ export const attachments = pgTable(
   (t) => [
     index('attachments_project_idx').on(t.projectId),
     index('attachments_comment_idx').on(t.commentId),
+  ],
+);
+
+/** In-app notifications (W6 adds email and push delivery of the same events). */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id'),
+    commentId: uuid('comment_id'),
+    data: jsonb('data').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('notifications_user_idx').on(t.userId, t.createdAt),
+    index('notifications_actor_idx').on(t.actorId, t.createdAt),
   ],
 );

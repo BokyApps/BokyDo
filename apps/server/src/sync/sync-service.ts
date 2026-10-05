@@ -34,6 +34,7 @@ import {
 } from './context.js';
 import { pgCode } from './handlers/common.js';
 import { pendingInvites } from '../projects/invites.js';
+import { latestNotifications } from '../notifications/notify.js';
 import * as h from './handlers/index.js';
 import { visibleProjects, type VisibleProjects } from './policy.js';
 import {
@@ -82,6 +83,7 @@ const HANDLERS: Record<CommandType, Handler> = {
   comment_update: h.commentUpdate,
   comment_delete: h.commentDelete,
   reaction_toggle: h.reactionToggle,
+  notifications_mark_read: h.notificationsMarkRead,
 };
 
 export interface Affected {
@@ -256,7 +258,8 @@ export class SyncService {
   /** Memberships of every visible project, and the people behind them (always complete). */
   private async team(tx: Tx, userId: string, projectIds: string[]) {
     const invitations = await pendingInvites(tx, userId);
-    if (projectIds.length === 0) return { collaborators: [], members: [], invitations };
+    const inbox = await latestNotifications(tx, userId);
+    if (projectIds.length === 0) return { collaborators: [], members: [], invitations, ...inbox };
     const rows = await tx
       .select({
         projectId: projectMembers.projectId,
@@ -272,6 +275,7 @@ export class SyncService {
       collaborators: [...people.values()],
       members: rows.map(({ projectId, userId, role }) => ({ projectId, userId, role })),
       invitations,
+      ...inbox,
     };
   }
 
@@ -352,8 +356,9 @@ export class SyncService {
     const granted: string[] = [];
     for (const m of marked) {
       if (m.type === 'project_access') granted.push(m.id);
-      // The user row, memberships and invitations are in every response.
-      else if (m.type !== 'user' && m.type !== 'invitations') ids[m.type].add(m.id);
+      // The user row, memberships, invitations and notifications are in every response.
+      else if (m.type !== 'user' && m.type !== 'invitations' && m.type !== 'notifications')
+        ids[m.type].add(m.id);
     }
 
     const isVisible = (projectId: string) => visible.has(projectId);

@@ -1,6 +1,7 @@
 import type { CommandArgs, GrantableRole, Role } from '@bokydo/shared';
 import { and, count, eq } from 'drizzle-orm';
 import { logActivity } from '../../activity/log.js';
+import { notify } from '../../notifications/notify.js';
 import { projectMembers, projects, tasks } from '../../db/schema.js';
 import { fail, LIMITS, type ChangeRecorder, type CommandContext, type Tx } from '../context.js';
 import { projectAccess, requireProject } from '../policy.js';
@@ -75,6 +76,12 @@ export async function projectMemberUpdate(
     .set({ role: args.role })
     .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, args.userId)));
   announce(ctx.changes, project.id, args.userId);
+  await notify(ctx.tx, ctx.changes, ctx.userId, {
+    userId: args.userId,
+    type: 'role_changed',
+    projectId: project.id,
+    data: { projectName: project.name, role: args.role },
+  });
   await logActivity(ctx.tx, ctx.userId, {
     projectId: project.id,
     type: 'member_role_changed',
@@ -114,6 +121,13 @@ export async function projectMemberRemove(
     .returning({ id: tasks.id });
   for (const t of unassigned) ctx.changes.inProject('tasks', t.id, args.projectId);
   announce(ctx.changes, args.projectId, args.userId);
+  if (!leaving)
+    // No project link: they can't open it any more, only see that they were removed.
+    await notify(ctx.tx, ctx.changes, ctx.userId, {
+      userId: args.userId,
+      type: 'removed_from_project',
+      data: { projectName: access.project.name },
+    });
   await logActivity(ctx.tx, ctx.userId, {
     projectId: args.projectId,
     type: leaving ? 'member_left' : 'member_removed',
@@ -144,6 +158,12 @@ export async function projectTransfer(
     .where(eq(projects.id, project.id));
   announce(ctx.changes, project.id, args.userId);
   announce(ctx.changes, project.id, ctx.userId);
+  await notify(ctx.tx, ctx.changes, ctx.userId, {
+    userId: args.userId,
+    type: 'became_owner',
+    projectId: project.id,
+    data: { projectName: project.name },
+  });
   await logActivity(ctx.tx, ctx.userId, {
     projectId: project.id,
     type: 'owner_transferred',
