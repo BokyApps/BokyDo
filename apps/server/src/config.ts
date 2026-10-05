@@ -18,7 +18,10 @@ export interface Config {
     port: number;
     database: string;
     user: string;
-    passwordFile: string;
+    /** Set only for an externally managed database; otherwise the app generates the password. */
+    passwordFile: string | null;
+    /** Volume shared with the Postgres container, holding nothing but its password. */
+    sharedSecretDir: string;
   };
 }
 
@@ -37,9 +40,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       port: parsePort(env.BOKYDO_DB_PORT ?? '5432'),
       database: env.BOKYDO_DB_NAME ?? 'bokydo',
       user: env.BOKYDO_DB_USER ?? 'bokydo',
-      passwordFile: env.BOKYDO_DB_PASSWORD_FILE ?? path.join(secretsDir, 'db_password'),
+      passwordFile: env.BOKYDO_DB_PASSWORD_FILE ? path.resolve(env.BOKYDO_DB_PASSWORD_FILE) : null,
+      sharedSecretDir: path.resolve(env.BOKYDO_DB_SECRET_DIR ?? '/run/bokydo-db'),
     },
   };
+}
+
+/** Where the database password lives: an override, or the copy the app generated. */
+export function dbPasswordFile(config: Config): string {
+  return config.db.passwordFile ?? path.join(config.secretsDir, 'db_password');
 }
 
 function parsePort(value: string): number {

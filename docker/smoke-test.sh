@@ -45,6 +45,8 @@ for _ in $(seq 60); do
 done
 
 echo "== first boot"
+check "the stack is just app + postgres (no init container)" \
+  test "$(docker compose -f compose.yml config --services | sort | tr '\n' ' ')" = "app db "
 check "app is healthy"                 test "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1")" = healthy
 check "readyz reports DB reachable"    test "$(http_code "$BASE/readyz")" = 200
 check "instance status: setup pending" bash -c "curl -s $BASE/api/v1/instance | grep -q '\"setupComplete\":false'"
@@ -68,9 +70,15 @@ check "app secrets dir is 0700 uid 65532" \
 for f in db_password master.key session.key; do
   check "app $f is 0400 uid 65532" test "$(volume app-data stat -c '%a %u' "/v/secrets/$f")" = "400 65532"
 done
-check "postgres password is 0400 uid 999" test "$(volume pg-secret stat -c '%a %u' /v/password)" = "400 999"
+check "shared DB password is 0400 uid 65532" test "$(volume db-secret stat -c '%a %u' /v/password)" = "400 65532"
+check "shared volume holds only the DB password" test "$(volume db-secret ls -A /v)" = password
+check "postgres keeps its copy in memory, 0400 uid 999" \
+  test "$(docker exec "${PROJECT}-db-1" stat -c '%a %u %m' /run/bokydo-pg/password)" = "400 999 /run/bokydo-pg"
 check "postgres cannot see app master key" \
-  docker exec "${PROJECT}-db-1" bash -c '[[ ! -e /data && ! -e /run/bokydo-pg/master.key && $(ls /run/bokydo-pg) == password ]]'
+  docker exec "${PROJECT}-db-1" bash -c '[[ ! -e /data && ! -e /run/bokydo-db/master.key && $(ls /run/bokydo-db) == password ]]'
+check "app and postgres copies match" \
+  test "$(volume db-secret sha256sum /v/password | cut -d' ' -f1)" = "$(volume app-data sha256sum /v/secrets/db_password | cut -d' ' -f1)"
+DB_PW_HASH=$(volume db-secret sha256sum /v/password | cut -d' ' -f1)
 
 echo "== HTTP surface"
 check "CSP has no unsafe-inline" \
@@ -194,7 +202,14 @@ echo "== restarts & recovery"
 sleep 5
 check "restart creates no second admin" \
   test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc 'select count(*) from users')" = 1
-check "bootstrap re-run keeps secrets" bash -c "${C[*]} run --rm bootstrap"
+"${C[@]}" restart >/dev/null 2>&1
+for _ in $(seq 60); do
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
+  sleep 2
+done
+check "whole stack restarts cleanly" test "$(curl -s "$BASE/api/v1/instance" | jq -r .setupComplete)" = true
+check "restarts keep the database password" \
+  test "$(volume db-secret sha256sum /v/password | cut -d' ' -f1)" = "$DB_PW_HASH"
 check "CLI reset-password works" bash -c "${C[*]} exec -T app bokydo admin reset-password admin | grep -q 'Passphrase: [a-z]'"
 check "CLI reset-password rejects unknown user" bash -c "! ${C[*]} exec -T app bokydo admin reset-password nobody"
 check "CLI reset-mfa works" bash -c "${C[*]} exec -T app bokydo admin reset-mfa admin | grep -q removed"

@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import { loadConfig } from './config.js';
+import { dbPasswordFile, loadConfig } from './config.js';
 
 const USAGE = `Usage:
   bokydo admin reset-password <username>   Issue a new one-time passphrase (forces change at login)
   bokydo admin reset-mfa <username>        Remove a user's two-factor methods (lost phone and codes)
   bokydo admin clear-public-url            Unset the public URL if a wrong value locks browsers out
-  bokydo bootstrap                         Generate first-boot secrets (run by the compose init service)
   bokydo healthcheck                       Exit 0 if the local server is healthy`;
 
 async function run(args: string[]): Promise<number> {
@@ -23,19 +22,6 @@ async function run(args: string[]): Promise<number> {
     }
   }
 
-  if (cmd === 'bootstrap') {
-    const { bootstrap } = await import('./bootstrap.js');
-    const config = loadConfig();
-    await bootstrap({
-      dataDir: config.dataDir,
-      pgSecretDir: process.env.BOKYDO_PG_SECRET_DIR ?? '/run/bokydo-pg',
-      appUid: Number(process.env.BOKYDO_APP_UID ?? 65532),
-      pgUid: Number(process.env.BOKYDO_PG_UID ?? 999),
-    });
-    console.log('bootstrap: secrets ready');
-    return 0;
-  }
-
   if (cmd === 'admin' && sub === 'reset-mfa' && arg) {
     const { connectDb } = await import('./db/client.js');
     const { readSecretFile } = await import('./security/secret-files.js');
@@ -43,7 +29,7 @@ async function run(args: string[]): Promise<number> {
     const config = loadConfig();
     const handle = connectDb({
       ...config.db,
-      password: await readSecretFile(config.db.passwordFile),
+      password: await readSecretFile(dbPasswordFile(config)),
     });
     try {
       if (!(await resetMfaFromCli(handle.db, arg))) {
@@ -66,7 +52,7 @@ async function run(args: string[]): Promise<number> {
     const config = loadConfig();
     const handle = connectDb({
       ...config.db,
-      password: await readSecretFile(config.db.passwordFile),
+      password: await readSecretFile(dbPasswordFile(config)),
     });
     try {
       await clearPublicUrl(handle.db);
@@ -85,7 +71,7 @@ async function run(args: string[]): Promise<number> {
     const config = loadConfig();
     const handle = connectDb({
       ...config.db,
-      password: await readSecretFile(config.db.passwordFile),
+      password: await readSecretFile(dbPasswordFile(config)),
     });
     try {
       const passphrase = await resetPasswordFromCli(handle.db, arg);

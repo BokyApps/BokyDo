@@ -2,6 +2,7 @@ import { loadConfig } from './config.js';
 import { connectDb, runMigrations, waitForDb } from './db/client.js';
 import { buildApp } from './app.js';
 import { ensureAppSecrets } from './security/app-secrets.js';
+import { ensureDbPassword } from './security/db-password.js';
 import { readSecretFile } from './security/secret-files.js';
 import {
   credentialBanner,
@@ -14,11 +15,12 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const secrets = await ensureAppSecrets(config.secretsDir);
 
-  const dbHandle = connectDb({
-    ...config.db,
-    password: await readSecretFile(config.db.passwordFile),
-  });
-  await waitForDb(dbHandle.sql);
+  const password = config.db.passwordFile
+    ? await readSecretFile(config.db.passwordFile)
+    : await ensureDbPassword(config.secretsDir, config.db.sharedSecretDir);
+  const dbHandle = connectDb({ ...config.db, password });
+  // On first boot Postgres starts only once the password above exists, then initialises.
+  await waitForDb(dbHandle.sql, 120);
   await runMigrations(dbHandle.db);
 
   const app = await buildApp({

@@ -91,7 +91,7 @@ bokydo/
     filter-query/    Filter language: lexer, parser, AST → SQL builder & in-memory evaluator
     ai/              Provider adapters, capability model, prompt templates, eval fixtures
     sync-client/     Optimistic command queue + cursor sync used by the web app
-  docker/            Dockerfile, compose.yml, bootstrap script
+  docker/            Dockerfile, compose.yml, smoke test
   docs/              PLAN.md, threat-model.md, security/findings.md, api/, adr/
 ```
 
@@ -110,7 +110,7 @@ bokydo/
 - Heavy DST/timezone test suite (Europe, US, southern hemisphere, half-hour zones, Asia/Phnom_Penh, Africa/Johannesburg).
 
 ### 3.4 Zero-config bootstrap
-1. A tiny `bootstrap` init container generates `/data/secrets/*` on first run: DB password, master encryption key (KEK), session signing key, VAPID keypair. Postgres reads its password via `POSTGRES_PASSWORD_FILE`; nothing is hard-coded in the compose file.
+1. The app generates `/data/secrets/*` on first run: DB password, master encryption key (KEK), session signing key, VAPID keypair. It shares only the DB password with Postgres (through a small `db-secret` volume that Postgres waits for), and Postgres reads it via `POSTGRES_PASSWORD_FILE`. Nothing is hard-coded in the compose file, and the stack is just two containers: app and Postgres (ADR 0002).
 2. Server runs migrations automatically, creates `admin` with a random one-time **passphrase** (6 EFF-wordlist words, e.g. `crumpet-velvet-anchor-…`), prints it **once** to stdout with a clear banner.
 3. Until the admin completes **setup** (new password → optional MFA → public URL confirmation), every other route returns the setup screen; API/MCP are disabled.
 4. Lost admin access recovery: `docker compose exec app bokydo admin reset-password <user>` (host shell access = already trusted).
@@ -360,7 +360,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - **Done when:** CI green on a hello-world server + web; all scanners run and report.
 
 #### F2 — Packaging & zero-config bootstrap · M
-- Multi-stage Dockerfile (distroless, non-root, read-only FS), `compose.yml` (app, postgres, bootstrap), optional Caddy profile.
+- Multi-stage Dockerfile (distroless, non-root, read-only FS), `compose.yml` (app, postgres; originally plus a one-shot bootstrap container, folded into the app on 2026-10-05), optional Caddy profile.
 - Secret generation, auto-migrations, health/readiness endpoints, structured logs.
 - One-time admin passphrase banner (EFF wordlist, CSPRNG); CLI `bokydo admin reset-password`.
 - **Security gate:** no default creds anywhere; DB not exposed outside the compose network; secrets files `0600`; container runs as non-root; Trivy clean (no High/Critical).

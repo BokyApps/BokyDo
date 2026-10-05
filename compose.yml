@@ -8,34 +8,29 @@ x-hardening: &hardening
   cap_drop: [ALL]
 
 services:
-  # One-shot: generates the database password (and nothing else) before Postgres first starts.
-  bootstrap:
-    <<: *hardening
-    image: bokydo:local
-    build: { context: ., dockerfile: docker/Dockerfile }
-    user: '0:0'
-    # Needs to chown/chmod secret files for the app (uid 65532) and Postgres (uid 999).
-    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
-    command: ['/app/dist/cli.js', 'bootstrap']
-    network_mode: none
-    read_only: true
-    volumes:
-      - app-data:/data
-      - pg-secret:/run/bokydo-pg
-    restart: 'no'
-
   db:
     <<: *hardening
     image: postgres:17-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
     # The entrypoint starts as root and drops to the postgres user.
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    # On first boot the app generates the database password into the shared `db-secret` volume.
+    # Postgres waits for it, keeps a private in-memory copy for its own initialisation, and never
+    # sees the app's other secrets.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until [ -s /run/bokydo-db/password ]; do echo 'waiting for the app to create the database password'; sleep 1; done
+        install -m 0400 -o postgres -g postgres /run/bokydo-db/password /run/bokydo-pg/password
+        exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_USER: bokydo
       POSTGRES_DB: bokydo
       POSTGRES_PASSWORD_FILE: /run/bokydo-pg/password
+    tmpfs: ['/run/bokydo-pg:size=64k,mode=0700,uid=999,gid=999']
     volumes:
       - pg-data:/var/lib/postgresql/data
-      - pg-secret:/run/bokydo-pg:ro
+      - db-secret:/run/bokydo-db:ro
     networks: [internal]
     shm_size: 128mb
     healthcheck:
@@ -43,8 +38,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    # The app starts first: it creates the password Postgres waits for, then waits for Postgres.
     depends_on:
-      bootstrap: { condition: service_completed_successfully }
+      app: { condition: service_started }
     restart: unless-stopped
 
   app:
@@ -55,13 +51,11 @@ services:
     tmpfs: ['/tmp:size=64m,mode=1777']
     volumes:
       - app-data:/data
+      - db-secret:/run/bokydo-db
     ports:
       - '8080:8080'
     # `internal` reaches the database; `egress` allows outbound calls (SMTP, AI providers).
     networks: [internal, egress]
-    depends_on:
-      bootstrap: { condition: service_completed_successfully }
-      db: { condition: service_healthy }
     restart: unless-stopped
 
 networks:
@@ -72,4 +66,5 @@ networks:
 volumes:
   app-data:
   pg-data:
-  pg-secret:
+  # Holds only the database password, shared by the app (writer) and Postgres (read-only).
+  db-secret:

@@ -23,7 +23,8 @@ COPY apps/web apps/web
 COPY docker/bokydo /cli/bokydo
 RUN pnpm -r build \
  && pnpm --filter @bokydo/server deploy --prod /out \
- && chmod 0755 /cli/bokydo
+ && chmod 0755 /cli/bokydo \
+ && mkdir -m 0700 /skel-data /skel-db-secret
 
 # ---- runtime -------------------------------------------------------------------------------------
 # Distroless: no shell, no package manager, runs as uid 65532.
@@ -36,6 +37,10 @@ COPY --from=build /src/apps/server/dist ./dist
 COPY --from=build /src/apps/server/drizzle ./drizzle
 COPY --from=build /src/apps/web/dist ./public
 COPY --from=build /cli/bokydo /usr/local/bin/bokydo
+# Volume mount points owned by the app user, so fresh volumes start out writable by the app
+# (Docker copies a mount point's owner and mode into a new named volume): no root init step.
+COPY --from=build --chown=65532:65532 /skel-data /data
+COPY --from=build --chown=65532:65532 /skel-db-secret /run/bokydo-db
 USER nonroot
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
