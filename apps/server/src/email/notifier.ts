@@ -121,6 +121,24 @@ export class Notifier {
     })().catch((err: unknown) => this.log.warn({ err }, 'login alert failed'));
   }
 
+  /** Tell an invited user (by verified email, if mail is set up) that an invite is waiting. */
+  projectInvite(inviteeId: string, inviter: string, projectName: string): void {
+    void (async () => {
+      if (!this.canEmail) return;
+      const [user] = await this.db
+        .select({ email: users.email, verifiedAt: users.emailVerifiedAt })
+        .from(users)
+        .where(eq(users.id, inviteeId));
+      if (!user?.email || !user.verifiedAt) return;
+      const name = this.settings.get('instance.name');
+      await this.mailer.send({
+        to: user.email,
+        subject: `${name}: ${inviter} invited you to “${projectName}”`,
+        text: `${inviter} invited you to the project “${projectName}” on ${name}.\n\nAccept or decline it here:\n${this.link('/invitations')}\n`,
+      });
+    })().catch((err: unknown) => this.log.warn({ err }, 'project invite email failed'));
+  }
+
   async sendLink(
     to: string,
     kind: 'password_reset' | 'email_verify' | 'invite',

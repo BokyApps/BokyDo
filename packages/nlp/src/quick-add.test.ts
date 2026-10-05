@@ -139,6 +139,18 @@ describe('quick add tokens', () => {
       expect(parse('Review +Alex')).toMatchObject({ assigneeId: null, content: 'Review +Alex' });
       expect(parse('1 +1 = 2').content).toBe('1 +1 = 2');
     });
+    it('only matches members of the task’s project when members are per project', () => {
+      const members = [
+        { id: 'u-sam', name: 'Sam', projectId: 'work' },
+        { id: 'u-kim', name: 'Kim', projectId: 'home' },
+      ];
+      expect(parse('x #Work +Sam', { members }).assigneeId).toBe('u-sam');
+      expect(parse('x #Work +Kim', { members })).toMatchObject({
+        assigneeId: null,
+        content: 'x +Kim',
+      });
+      expect(parse('x +Kim', { members, defaultProjectId: 'home' }).assigneeId).toBe('u-kim');
+    });
   });
 
   describe('for <duration>', () => {

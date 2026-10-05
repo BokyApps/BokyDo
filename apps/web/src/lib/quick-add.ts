@@ -6,7 +6,9 @@ import { allLabelNames, flattenTree, projectTree } from './views.js';
 
 const WRITABLE: ReadonlySet<Project['role']> = new Set(['owner', 'admin', 'editor']);
 
-export type Candidates = Required<Pick<QuickAddOptions, 'projects' | 'sections' | 'labels'>>;
+export type Candidates = Required<
+  Pick<QuickAddOptions, 'projects' | 'sections' | 'labels' | 'members'>
+>;
 
 /**
  * What `#project` and `/section` may resolve to: only live projects the user can add tasks to.
@@ -30,7 +32,14 @@ export function quickAddCandidates(state: SyncState): Candidates {
   const sections = [...state.sections.values()]
     .filter((s) => !s.isArchived && ids.has(s.projectId))
     .map((s) => ({ id: s.id, name: s.name, projectId: s.projectId }));
-  return { projects, sections, labels: allLabelNames(state) };
+  // `+name`: members of each writable project (only shared projects have anyone to assign).
+  const members = state.members
+    .filter((m) => ids.has(m.projectId))
+    .flatMap((m) => {
+      const person = state.collaborators.get(m.userId);
+      return person ? [{ id: person.id, name: person.username, projectId: m.projectId }] : [];
+    });
+  return { projects, sections, labels: allLabelNames(state), members };
 }
 
 /** Recurring dues keep the phrase as typed; one-off dates get the same form as the date picker. */

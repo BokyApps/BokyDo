@@ -236,6 +236,42 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
       d.filters.delete(command.args.id);
       return;
 
+    case 'project_member_update': {
+      const a = command.args;
+      d.members = d.members.map((m) =>
+        m.projectId === a.projectId && m.userId === a.userId ? { ...m, role: a.role } : m,
+      );
+      if (a.userId === d.user?.id) patch(d.projects, a.projectId, { role: a.role });
+      return;
+    }
+    case 'project_member_remove': {
+      const a = command.args;
+      d.members = d.members.filter((m) => !(m.projectId === a.projectId && m.userId === a.userId));
+      if (a.userId === d.user?.id) {
+        d.projects.delete(a.projectId);
+        dropOrphans(d);
+        return;
+      }
+      for (const t of d.tasks.values())
+        if (t.projectId === a.projectId && t.assigneeId === a.userId)
+          patch(d.tasks, t.id, { assigneeId: null, assignedById: null });
+      return;
+    }
+    case 'project_transfer': {
+      const a = command.args;
+      const me = d.user?.id;
+      d.members = d.members.map((m) =>
+        m.projectId !== a.projectId
+          ? m
+          : m.userId === a.userId
+            ? { ...m, role: 'owner' }
+            : m.userId === me
+              ? { ...m, role: 'admin' }
+              : m,
+      );
+      patch(d.projects, a.projectId, { role: 'admin' });
+      return;
+    }
     case 'user_update_preferences': {
       if (!d.user) return;
       const { appearance, ...rest } = command.args;

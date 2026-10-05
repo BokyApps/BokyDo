@@ -14,6 +14,7 @@ import {
 import { Board, orderBetween } from '../components/Board.js';
 import { CalendarView } from '../components/Calendar.js';
 import { ProjectDialog } from '../components/ProjectDialog.js';
+import { Avatar, ShareDialog, useMembers } from '../components/Sharing.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { PlainTaskList, SortableTaskList, TaskDnd } from '../components/TaskTree.js';
 import { Alert, Button, inputClass, MenuItem, Popover } from '../components/ui.js';
@@ -42,6 +43,8 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const { setViewDefaults } = ui;
   const [options, setOptions] = useViewOptions(`project.${projectId}`);
   const [editing, setEditing] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const members = useMembers(projectId);
   useEffect(() => setViewDefaults({ projectId }), [projectId, setViewDefaults]);
 
   if (!state.user) return null;
@@ -75,7 +78,29 @@ export function ProjectView({ projectId }: { projectId: string }) {
         allow={{ completed: layout === 'list' }}
         layout={{ value: layout, onChange: setLayout }}
         actions={
-          !project.isInbox && <ProjectMenu project={project} onEdit={() => setEditing(true)} />
+          !project.isInbox && (
+            <>
+              <button
+                type="button"
+                onClick={() => setSharing(true)}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt"
+                aria-label={
+                  members.length > 1 ? `Shared with ${members.length - 1} others` : 'Share'
+                }
+              >
+                {members.length > 1 ? (
+                  <span className="flex -space-x-1">
+                    {members.slice(0, 4).map((m) => (
+                      <Avatar key={m.userId} name={m.username} />
+                    ))}
+                  </span>
+                ) : (
+                  'Share'
+                )}
+              </button>
+              <ProjectMenu project={project} onEdit={() => setEditing(true)} />
+            </>
+          )
         }
       />
       {project.isArchived && (
@@ -148,6 +173,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
       {empty && !canEdit && <EmptyState title="Nothing here yet" />}
       {layout === 'list' && options.showCompleted && <CompletedList projectId={projectId} />}
       <ProjectDialog open={editing} onClose={() => setEditing(false)} project={project} />
+      <ShareDialog project={project} open={sharing} onClose={() => setSharing(false)} />
     </Page>
   );
 }

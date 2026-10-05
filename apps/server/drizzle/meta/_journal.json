@@ -43,6 +43,13 @@
       "when": 1791123912732,
       "tag": "0005_task_search_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791183941947,
+      "tag": "0006_project_invitations",
+      "breakpoints": true
     }
   ]
 }

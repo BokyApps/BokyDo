@@ -1,3 +1,4 @@
+import { Avatar } from './Sharing.js';
 import type { Task } from '@bokydo/shared';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
@@ -92,6 +93,7 @@ export function TaskItem({
   const selected = ui.selected.has(task.id);
   const readOnly = project ? !['owner', 'admin', 'editor'].includes(project.role) : true;
   const firstLine = task.description.split('\n').find((l) => l.trim()) ?? '';
+  const assignee = task.assigneeId ? state.collaborators.get(task.assigneeId) : undefined;
 
   const onClick = (e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey) ui.select(task.id, 'toggle', orderedIds);
@@ -228,6 +230,14 @@ export function TaskItem({
                 @{l}
               </span>
             ))}
+            {assignee && (
+              <span
+                className="inline-flex items-center gap-1"
+                title={`Assigned to ${assignee.username}`}
+              >
+                <Avatar name={assignee.username} /> {assignee.username}
+              </span>
+            )}
             {showProject && project && (
               <span className="ml-auto inline-flex items-center gap-1">
                 {project.isInbox ? 'Inbox' : project.name}

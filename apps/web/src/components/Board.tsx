@@ -1,3 +1,4 @@
+import { Avatar } from './Sharing.js';
 import { generateKeyBetween, type Task } from '@bokydo/shared';
 import {
   closestCorners,
@@ -328,6 +329,9 @@ export function TaskCard({
             @{l}
           </span>
         ))}
+        {task.assigneeId && state.collaborators.get(task.assigneeId) && (
+          <Avatar name={state.collaborators.get(task.assigneeId)?.username ?? ''} />
+        )}
         {showProject && project && (
           <span className="ml-auto inline-flex items-center gap-1">
             {project.isInbox ? 'Inbox' : project.name}

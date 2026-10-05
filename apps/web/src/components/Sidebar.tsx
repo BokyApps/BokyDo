@@ -83,6 +83,12 @@ export function Sidebar({
           </span>{' '}
           Upcoming
         </Link>
+        {state.invitations.length > 0 && (
+          <Link to="/invitations" className={item} activeProps={active}>
+            <span className="text-accent">✉</span> Invitations{' '}
+            <Count n={state.invitations.length} danger />
+          </Link>
+        )}
         <Link to="/filters-labels" className={item} activeProps={active}>
           <span className="text-p1">
             <TagIcon />

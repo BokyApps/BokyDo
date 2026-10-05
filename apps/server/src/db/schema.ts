@@ -272,7 +272,16 @@ export const changes = pgTable(
   {
     seq: bigserial('seq', { mode: 'number' }).primaryKey(),
     entityType: text('entity_type', {
-      enum: ['projects', 'sections', 'tasks', 'labels', 'filters', 'project_access', 'user'],
+      enum: [
+        'projects',
+        'sections',
+        'tasks',
+        'labels',
+        'filters',
+        'project_access',
+        'user',
+        'invitations',
+      ],
     }).notNull(),
     entityId: uuid('entity_id').notNull(),
     /** Project scope: visible to the project's members. */
@@ -387,4 +396,32 @@ export const userTokens = pgTable(
     usedAt: timestamp('used_at', { withTimezone: true }),
   },
   (t) => [index('user_tokens_user_idx').on(t.userId, t.kind)],
+);
+
+/**
+ * Invitations to a project. Direct invites name an existing user, who accepts from their inbox;
+ * link invites carry a one-time token (stored only as an HMAC). The role is fixed here when the
+ * invite is created, so nothing the invitee sends can change it.
+ */
+export const projectInvitations = pgTable(
+  'project_invitations',
+  {
+    id: uuid('id').primaryKey(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['admin', 'editor', 'commenter', 'viewer'] }).notNull(),
+    inviteeId: uuid('invitee_id').references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').unique(),
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    acceptedById: uuid('accepted_by_id').references(() => users.id, { onDelete: 'set null' }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('project_invitations_project_idx').on(t.projectId),
+    index('project_invitations_invitee_idx').on(t.inviteeId),
+  ],
 );

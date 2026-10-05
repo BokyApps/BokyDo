@@ -10,7 +10,7 @@ import { localNow, type LocalNow } from '@bokydo/nlp';
 import { resolvePreferences, type Task } from '@bokydo/shared';
 import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { Tx } from '../sync/context.js';
-import { projects, sections, tasks, users } from '../db/schema.js';
+import { projectMembers, projects, sections, tasks, users } from '../db/schema.js';
 import { visibleProjects } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
 
@@ -75,6 +75,10 @@ function termSql(x: ResolvedTerm, ctx: SqlContext): SQL {
     case 'assignedBy':
       if (x.who === 'me') return sql`${tasks.assignedById} = ${ctx.userId}::uuid`;
       return sql`${tasks.assignedById} is not null and ${tasks.assignedById} <> ${ctx.userId}::uuid`;
+    case 'assigneeIds':
+      return x.ids.size ? sql`${inArray(tasks.assigneeId, [...x.ids])}` : sql`false`;
+    case 'assignerIds':
+      return x.ids.size ? sql`${inArray(tasks.assignedById, [...x.ids])}` : sql`false`;
     case 'search':
       return sql`strpos(lower(${tasks.content}), ${x.text.toLowerCase()}) > 0`;
     case 'subtask':
@@ -148,9 +152,33 @@ export async function runFilter(
           ),
         )
     : [];
+  const memberRows = projectRows.length
+    ? await tx
+        .select({
+          projectId: projectMembers.projectId,
+          userId: projectMembers.userId,
+          username: users.username,
+        })
+        .from(projectMembers)
+        .innerJoin(users, eq(users.id, projectMembers.userId))
+        .where(
+          inArray(
+            projectMembers.projectId,
+            projectRows.map((p) => p.id),
+          ),
+        )
+    : [];
+  const perProject = new Map<string, number>();
+  for (const m of memberRows) perProject.set(m.projectId, (perProject.get(m.projectId) ?? 0) + 1);
   const { queries, warnings } = resolveFilter(parsed.queries, {
     projects: projectRows,
     sections: sectionRows,
+    users: [
+      ...new Map(
+        memberRows.map((m) => [m.userId, { id: m.userId, username: m.username }]),
+      ).values(),
+    ],
+    sharedProjectIds: new Set([...perProject].filter(([, n]) => n > 1).map(([id]) => id)),
   });
 
   const lists = [];

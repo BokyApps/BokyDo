@@ -4,6 +4,7 @@ import { Spinner } from '../components/ui.js';
 import { usePreferences, useSyncState } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { ProjectView } from './ProjectPage.js';
+import { pendingJoinToken } from './SharingPages.js';
 
 /** "/" goes to the user's chosen home view once their preferences have synced. */
 export function HomeRedirect() {
@@ -11,7 +12,10 @@ export function HomeRedirect() {
   const prefs = usePreferences();
   const navigate = useNavigate();
   useEffect(() => {
-    if (state.user) void navigate({ to: `/${prefs.startPage}` as '/today', replace: true });
+    if (!state.user) return;
+    // Finish joining a project from an invite link opened before signing in.
+    if (pendingJoinToken()) void navigate({ to: '/join', replace: true });
+    else void navigate({ to: `/${prefs.startPage}` as '/today', replace: true });
   }, [state.user, prefs.startPage, navigate]);
   return <Spinner />;
 }

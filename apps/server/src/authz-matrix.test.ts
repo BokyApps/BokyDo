@@ -70,6 +70,15 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/tasks/completed': 'user/after',
   'GET /api/v1/search': 'user/after',
   'GET /api/v1/tasks/filter': 'user/after',
+  // Sharing
+  'POST /api/v1/projects/:id/invites': 'user/after',
+  'GET /api/v1/projects/:id/invites': 'user/after',
+  'DELETE /api/v1/projects/:id/invites/:inviteId': 'user/after',
+  'GET /api/v1/invites': 'user/after',
+  'POST /api/v1/invites/:id/accept': 'user/after',
+  'POST /api/v1/invites/:id/decline': 'user/after',
+  'POST /api/v1/invites/link/preview': 'user/after',
+  'POST /api/v1/invites/link/accept': 'user/after',
 };
 
 /** Streaming routes never finish on success; only their status line is checked. */

@@ -29,6 +29,7 @@ import {
   type Tx,
 } from './context.js';
 import { pgCode } from './handlers/common.js';
+import { pendingInvites } from '../projects/invites.js';
 import * as h from './handlers/index.js';
 import { visibleProjects, type VisibleProjects } from './policy.js';
 import {
@@ -69,6 +70,9 @@ const HANDLERS: Record<CommandType, Handler> = {
   filter_update: h.filterUpdate,
   filter_delete: h.filterDelete,
   user_update_preferences: h.userUpdatePreferences,
+  project_member_update: h.projectMemberUpdate,
+  project_member_remove: h.projectMemberRemove,
+  project_transfer: h.projectTransfer,
 };
 
 export interface Affected {
@@ -85,6 +89,23 @@ export class SyncService {
 
   private context(tx: Tx, userId: string, changes: ChangeRecorder): CommandContext {
     return { tx, userId, now: new Date(), changes, defaultTimeZone: this.defaultTimeZone() };
+  }
+
+  /**
+   * A write outside the command stream (e.g. accepting an invitation): same global write lock,
+   * same change log, and connected clients are poked afterwards.
+   */
+  async write<T>(fn: (tx: Tx, changes: ChangeRecorder) => Promise<T>): Promise<T> {
+    const recorder = new ChangeRecorder();
+    const result = await this.db.transaction(async (tx) => {
+      await tx.execute(WRITE_LOCK);
+      const value = await fn(tx, recorder);
+      await recorder.flush(tx);
+      return value;
+    });
+    if (!recorder.isEmpty)
+      this.onCommitted({ projectIds: recorder.projectScopes, userIds: recorder.userScopes });
+    return result;
   }
 
   async sync(userId: string, request: SyncRequest): Promise<SyncResponse> {
@@ -196,7 +217,9 @@ export class SyncService {
               isNull(projects.deletedAt),
             ),
           );
+        const team = await this.team(tx, userId, [...visible.keys()]);
         const base = {
+          ...team,
           cursor: String(headSeq),
           user: {
             id: userId,
@@ -219,6 +242,28 @@ export class SyncService {
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
+  }
+
+  /** Memberships of every visible project, and the people behind them (always complete). */
+  private async team(tx: Tx, userId: string, projectIds: string[]) {
+    const invitations = await pendingInvites(tx, userId);
+    if (projectIds.length === 0) return { collaborators: [], members: [], invitations };
+    const rows = await tx
+      .select({
+        projectId: projectMembers.projectId,
+        userId: projectMembers.userId,
+        role: projectMembers.role,
+        username: users.username,
+      })
+      .from(projectMembers)
+      .innerJoin(users, eq(users.id, projectMembers.userId))
+      .where(inArray(projectMembers.projectId, projectIds));
+    const people = new Map(rows.map((r) => [r.userId, { id: r.userId, username: r.username }]));
+    return {
+      collaborators: [...people.values()],
+      members: rows.map(({ projectId, userId, role }) => ({ projectId, userId, role })),
+      invitations,
+    };
   }
 
   private async snapshot(tx: Tx, userId: string, visible: VisibleProjects) {
@@ -287,7 +332,8 @@ export class SyncService {
     const granted: string[] = [];
     for (const m of marked) {
       if (m.type === 'project_access') granted.push(m.id);
-      else if (m.type !== 'user') ids[m.type].add(m.id); // the user row is in every response
+      // The user row, memberships and invitations are in every response.
+      else if (m.type !== 'user' && m.type !== 'invitations') ids[m.type].add(m.id);
     }
 
     const isVisible = (projectId: string) => visible.has(projectId);

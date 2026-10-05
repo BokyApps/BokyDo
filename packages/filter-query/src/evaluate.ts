@@ -8,7 +8,16 @@ import type { FilterNode, FilterQuery, Term } from './parse.js';
  * only ever mean projects already in the caller's visible set.
  */
 export type ResolvedTerm =
-  | Exclude<Term, { t: 'project' } | { t: 'section' }>
+  | Exclude<
+      Term,
+      | { t: 'project' }
+      | { t: 'section' }
+      | { t: 'shared' }
+      | { t: 'assignedToName' }
+      | { t: 'assignedByName' }
+    >
+  | { t: 'assigneeIds'; ids: ReadonlySet<string> }
+  | { t: 'assignerIds'; ids: ReadonlySet<string> }
   | { t: 'projectIds'; ids: ReadonlySet<string> }
   | { t: 'sectionIds'; ids: ReadonlySet<string> }
   | { t: 'anySection' };
@@ -26,6 +35,10 @@ export interface ResolvedQuery {
 export interface Catalog {
   projects: readonly { id: string; name: string; parentId: string | null }[];
   sections: readonly { id: string; name: string; projectId: string }[];
+  /** People the user shares projects with (for `assigned to: name`). */
+  users?: readonly { id: string; username: string }[];
+  /** Projects with more than one member (for `shared`). */
+  sharedProjectIds?: ReadonlySet<string>;
 }
 
 export interface Resolution {
@@ -72,6 +85,16 @@ export function resolveFilter(queries: readonly FilterQuery[], catalog: Catalog)
       if (ids.size === 0 && !hasWildcard(term.pattern))
         warnings.add(`No section named “${term.pattern}”`);
       return { t: 'sectionIds', ids };
+    }
+    if (term.t === 'shared')
+      return { t: 'projectIds', ids: new Set(catalog.sharedProjectIds ?? []) };
+    if (term.t === 'assignedToName' || term.t === 'assignedByName') {
+      const ids = new Set(
+        (catalog.users ?? []).filter((u) => globMatch(term.pattern, u.username)).map((u) => u.id),
+      );
+      if (ids.size === 0 && !hasWildcard(term.pattern))
+        warnings.add(`Nobody named “${term.pattern}” shares a project with you`);
+      return { t: term.t === 'assignedToName' ? 'assigneeIds' : 'assignerIds', ids };
     }
     return term;
   };
@@ -190,6 +213,10 @@ export function matcher(node: ResolvedNode, ctx: EvalContext): (task: FilterTask
       case 'assignedBy':
         if (x.who === 'me') return task.assignedById === ctx.userId;
         return task.assignedById !== null && task.assignedById !== ctx.userId;
+      case 'assigneeIds':
+        return task.assigneeId !== null && x.ids.has(task.assigneeId);
+      case 'assignerIds':
+        return task.assignedById !== null && x.ids.has(task.assignedById);
       case 'search':
         return task.content.toLowerCase().includes(x.text.toLowerCase());
       case 'subtask':

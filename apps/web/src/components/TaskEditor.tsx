@@ -67,7 +67,10 @@ export function TaskEditor({
     projects: isSubtask ? [] : candidates.projects,
     sections: isSubtask ? [] : candidates.sections,
     labels: candidates.labels,
-    defaultProjectId: where.projectId,
+    members: candidates.members,
+    defaultProjectId: isSubtask
+      ? (state.tasks.get(defaults.parentId ?? '')?.projectId ?? where.projectId)
+      : where.projectId,
     disabled,
   };
 
@@ -127,6 +130,12 @@ export function TaskEditor({
         .filter((s) => s.projectId === projectId && s.name.toLowerCase().includes(q))
         .map((s) => ({ value: s.name, label: <span>§ {s.name}</span> }));
     }
+    if (trigger.kind === 'assignee') {
+      const projectId = first?.projectId ?? options.defaultProjectId;
+      return candidates.members
+        .filter((m) => m.projectId === projectId && m.name.toLowerCase().includes(q))
+        .map((m) => ({ value: m.name, label: `+${m.name}` }));
+    }
     if (trigger.kind === 'label') {
       const matches: Suggestion[] = candidates.labels
         .filter((l) => l.toLowerCase().includes(q))
@@ -164,6 +173,7 @@ export function TaskEditor({
         labels: r.labels,
         ...(result.deadline ? { deadline: result.deadline } : {}),
         ...(result.durationMinutes ? { durationMinutes: result.durationMinutes } : {}),
+        ...(result.assigneeId ? { assigneeId: result.assigneeId } : {}),
       });
     }
     setContent('');
@@ -189,6 +199,8 @@ export function TaskEditor({
       if (t.kind === 'duration' && first.durationMinutes)
         label = formatDuration(first.durationMinutes);
       if (t.kind === 'priority') label = t.text.toUpperCase();
+      if (t.kind === 'assignee' && first.assigneeId)
+        label = `→ ${state.collaborators.get(first.assigneeId)?.username ?? t.text}`;
       chips.push({ key: `${t.kind}:${t.start}`, kind: t.kind, label, keys: [key] });
     }
   }

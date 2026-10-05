@@ -77,6 +77,9 @@ describe('terms', () => {
     ['assigned', { t: 'assignedTo', who: 'anyone' }],
     ['unassigned', { t: 'assignedTo', who: 'nobody' }],
     ['assigned by: me', { t: 'assignedBy', who: 'me' }],
+    ['assigned to: Sam', { t: 'assignedToName', pattern: 'Sam' }],
+    ['assigned by: s*', { t: 'assignedByName', pattern: 's*' }],
+    ['shared', { t: 'shared' }],
     ['search: Meeting notes', { t: 'search', text: 'Meeting notes' }],
     ['subtask', { t: 'subtask' }],
     ['all', { t: 'all' }],
@@ -95,8 +98,7 @@ describe('terms', () => {
     ['search:', /Add something to search for/],
     ['#', /Add a project name/],
     ['@', /Add a label name/],
-    ['assigned to: Sam', /W5/],
-    ['shared', /W5/],
+    ['assigned to:', /Add a name/],
     ['workspace: Team', /W5/],
     ['constructor', /Unknown filter term/],
     ['__proto__', /Unknown filter term/],
@@ -179,6 +181,11 @@ const CATALOG: Catalog = {
     { id: 'h-next', name: 'Next up', projectId: 'home' },
     { id: 'h-later', name: 'Later', projectId: 'home' },
   ],
+  users: [
+    { id: 'me', username: 'me' },
+    { id: 'sam', username: 'Sam' },
+  ],
+  sharedProjectIds: new Set(['home']),
 };
 
 const task = (id: string, extra: Partial<FilterTask> = {}): FilterTask & { id: string } => ({
@@ -273,6 +280,10 @@ describe('evaluation', () => {
     ['assigned', ['mine', 'theirs']],
     ['search: meeting', ['theirs']],
     ['subtask', ['sub']],
+    ['assigned to: sam', ['theirs']],
+    ['assigned to: S*', ['theirs']],
+    ['assigned by: Sam', ['mine']],
+    ['shared', ['deadline', 'sub']],
     ['created: today', ['new']],
     ['(today | overdue) & p1', ['today-late']],
   ])('%s', (query, expected) => {

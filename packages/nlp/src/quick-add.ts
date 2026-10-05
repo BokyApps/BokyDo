@@ -65,7 +65,8 @@ export interface QuickAddOptions {
    */
   projects?: readonly NamedRef[];
   sections?: readonly (NamedRef & { projectId: string })[];
-  members?: readonly NamedRef[];
+  /** With `projectId`, only members of the task's project match `+name`. */
+  members?: readonly (NamedRef & { projectId?: string })[];
   /** Existing label names, to reuse their capitalisation. */
   labels?: readonly string[];
   /** Project that `/section` resolves against when no `#project` is given. */
@@ -265,7 +266,11 @@ export function parseQuickAdd(input: string, options: QuickAddOptions): QuickAdd
   const sections = indexNames(
     (options.sections ?? []).filter((s) => s.projectId === sectionProject),
   );
-  const members = indexNames(options.members ?? []);
+  const members = indexNames(
+    (options.members ?? []).filter(
+      (m) => m.projectId === undefined || m.projectId === sectionProject,
+    ),
+  );
 
   for (let i = 0; i < w.length; i++) {
     const word = w[i];

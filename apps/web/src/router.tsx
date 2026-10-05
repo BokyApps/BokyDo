@@ -1,3 +1,4 @@
+import { InvitationsPage, JoinPage } from './pages/SharingPages.js';
 import type { InstanceStatus, SessionInfo } from '@bokydo/shared';
 import {
   createRootRoute,
@@ -138,6 +139,8 @@ const routeTree = rootRoute.addChildren([
     appPage('/filters-labels', FiltersLabelsPage),
     appPage('/archived', ArchivedPage),
     appPage('/settings', SettingsPage),
+    appPage('/invitations', InvitationsPage),
+    appPage('/join', JoinPage),
     projectRoute,
     labelRoute,
     filterRoute,

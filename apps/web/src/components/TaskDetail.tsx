@@ -1,3 +1,4 @@
+import { AssigneePicker } from './Sharing.js';
 import type { Task } from '@bokydo/shared';
 import { useEffect, useState } from 'react';
 import { useTaskActions } from '../lib/actions.js';
@@ -168,6 +169,9 @@ function TaskDetail({ task }: { task: Task }) {
               onChange={(to, p) => actions.move([task], to, p.isInbox ? 'Inbox' : p.name)}
             />
           )}
+        </Prop>
+        <Prop label="Assignee">
+          <AssigneePicker task={task} readOnly={readOnly} />
         </Prop>
         <Prop label="Date">
           <DatePicker value={task.due} onChange={(d) => actions.update(task.id, { due: d })} />

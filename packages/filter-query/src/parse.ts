@@ -41,6 +41,11 @@ export type Term =
   | { t: 'noLabels' }
   | { t: 'assignedTo'; who: 'me' | 'others' | 'anyone' | 'nobody' }
   | { t: 'assignedBy'; who: 'me' | 'others' }
+  /** By a collaborator's username (`*` allowed). */
+  | { t: 'assignedToName'; pattern: string }
+  | { t: 'assignedByName'; pattern: string }
+  /** In a project with more than one member. */
+  | { t: 'shared' }
   | { t: 'search'; text: string }
   | { t: 'subtask' };
 
@@ -271,8 +276,6 @@ const KEYWORDS: Readonly<Record<string, Term>> = Object.freeze(
   } satisfies Record<string, Term>),
 );
 
-const LATER = 'arrives with collaboration (W5)';
-
 /** One term's meaning, or an error message. */
 export function recognize(raw: string, ctx: FilterContext): Term | string {
   const text = raw.replace(/\s+/g, ' ');
@@ -297,15 +300,19 @@ export function recognize(raw: string, ctx: FilterContext): Term | string {
     const who = lower.slice('assigned to:'.length).trim();
     if (who === 'me' || who === 'others' || who === 'anyone') return { t: 'assignedTo', who };
     if (who === 'nobody' || who === 'no one') return { t: 'assignedTo', who: 'nobody' };
-    return `“assigned to: ${who}” — assigning by name ${LATER}; use me, others or anyone`;
+    const raw = text.slice('assigned to:'.length).trim();
+    if (!raw) return 'Add a name after “assigned to:”';
+    return { t: 'assignedToName', pattern: raw };
   }
   if (lower.startsWith('assigned by:')) {
     const who = lower.slice('assigned by:'.length).trim();
     if (who === 'me' || who === 'others') return { t: 'assignedBy', who };
-    return `“assigned by: ${who}” — use me or others (names ${LATER})`;
+    const raw = text.slice('assigned by:'.length).trim();
+    if (!raw) return 'Add a name after “assigned by:”';
+    return { t: 'assignedByName', pattern: raw };
   }
-  if (lower === 'shared') return `“shared” ${LATER}`;
-  if (lower.startsWith('workspace:')) return `Workspaces arrive with collaboration (W5)`;
+  if (lower === 'shared') return { t: 'shared' };
+  if (lower.startsWith('workspace:')) return `Workspaces arrive later in collaboration (W5)`;
 
   for (const [prefix, field, op] of FIELD_PREFIXES) {
     if (!lower.startsWith(prefix)) continue;

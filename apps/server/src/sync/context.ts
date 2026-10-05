@@ -23,7 +23,14 @@ export const fail = (code: CommandError, message?: string): never => {
 };
 
 type ChangeType =
-  'projects' | 'sections' | 'tasks' | 'labels' | 'filters' | 'project_access' | 'user';
+  | 'projects'
+  | 'sections'
+  | 'tasks'
+  | 'labels'
+  | 'filters'
+  | 'project_access'
+  | 'user'
+  | 'invitations';
 interface ChangeRow {
   entityType: ChangeType;
   entityId: string;
@@ -78,4 +85,6 @@ export const LIMITS = {
   subtaskDepth: 4,
   labelsPerUser: 1000,
   filtersPerUser: 500,
+  membersPerProject: 250,
+  pendingInvitesPerProject: 100,
 } as const;

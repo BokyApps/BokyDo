@@ -26,9 +26,14 @@ export function runFilterLocally(
     dateOrder: opts.prefs.dateFormat,
   });
   if (!parsed.ok) return parsed;
+  const perProject = new Map<string, number>();
+  for (const m of state.members)
+    perProject.set(m.projectId, (perProject.get(m.projectId) ?? 0) + 1);
   const { queries, warnings } = resolveFilter(parsed.queries, {
     projects: [...state.projects.values()],
     sections: [...state.sections.values()],
+    users: [...state.collaborators.values()],
+    sharedProjectIds: new Set([...perProject].filter(([, n]) => n > 1).map(([id]) => id)),
   });
   const open = liveTasks(state).filter(isOpen);
   const userId = state.user?.id ?? '';

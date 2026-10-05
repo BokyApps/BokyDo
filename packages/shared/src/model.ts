@@ -169,6 +169,22 @@ export interface SyncUser {
   preferences: Preferences;
 }
 
+/** Someone you share at least one project with (yourself included). */
+export interface Collaborator {
+  id: string;
+  username: string;
+}
+
+export interface ProjectMember {
+  projectId: string;
+  userId: string;
+  role: Role;
+}
+
+/** Roles that can be granted; ownership only moves by transfer. */
+export const grantableRoleSchema = z.enum(['admin', 'editor', 'commenter', 'viewer']);
+export type GrantableRole = z.infer<typeof grantableRoleSchema>;
+
 export const ENTITY_TYPES = ['projects', 'sections', 'tasks', 'labels', 'filters'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
@@ -300,6 +316,15 @@ export const commandArgs = {
   filter_update: z.object({ id: idSchema, ...partial(filterFields) }).strict(),
   filter_delete: byId,
 
+  /** Change a member's role (admins and owners; only owners touch admins). */
+  project_member_update: z
+    .object({ projectId: idSchema, userId: idSchema, role: grantableRoleSchema })
+    .strict(),
+  /** Remove a member; removing yourself leaves the project (owners must transfer first). */
+  project_member_remove: z.object({ projectId: idSchema, userId: idSchema }).strict(),
+  /** Hand ownership to another member; the previous owner becomes an admin. */
+  project_transfer: z.object({ projectId: idSchema, userId: idSchema }).strict(),
+
   user_update_preferences: preferencesPatchSchema,
 } as const;
 
@@ -349,6 +374,11 @@ export interface SyncResponse {
   filters: Filter[];
   /** IDs the client must drop (deleted, or no longer visible to this user). */
   removed: Record<EntityType, string[]>;
+  /** Always complete (not a delta): everyone you share a project with, and every membership. */
+  collaborators: Collaborator[];
+  members: ProjectMember[];
+  /** Direct project invitations waiting for this user. */
+  invitations: PendingInvite[];
   results: Record<string, CommandResult>;
 }
 
@@ -358,4 +388,40 @@ function partial<T extends Record<string, z.ZodType>>(
   return Object.fromEntries(Object.entries(shape).map(([k, v]) => [k, v.optional()])) as {
     [K in keyof T]: z.ZodOptional<T[K]>;
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Project invitations (REST: they carry one-time tokens, so they stay out of sync)
+// ---------------------------------------------------------------------------------------------
+
+export const createInviteSchema = z
+  .object({
+    /** A username or email for a direct invite; omit for a one-time link. */
+    identifier: z.string().trim().min(1).max(254).regex(SINGLE_LINE).optional(),
+    role: grantableRoleSchema,
+  })
+  .strict();
+export type CreateInvite = z.infer<typeof createInviteSchema>;
+
+/** A pending invite, as project admins see it (never with its token). */
+export interface ProjectInvite {
+  id: string;
+  projectId: string;
+  role: GrantableRole;
+  kind: 'user' | 'link';
+  /** For direct invites: who was invited. */
+  invitee: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** An invite waiting for the current user to accept or decline. */
+export interface PendingInvite {
+  id: string;
+  projectId: string;
+  projectName: string;
+  role: GrantableRole;
+  invitedBy: string | null;
+  expiresAt: string;
 }

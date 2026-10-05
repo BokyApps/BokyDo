@@ -1,7 +1,22 @@
-import type { Filter, Label, Project, Section, SyncResponse, SyncUser, Task } from '@bokydo/shared';
+import type {
+  Collaborator,
+  Filter,
+  Label,
+  PendingInvite,
+  Project,
+  ProjectMember,
+  Section,
+  SyncResponse,
+  SyncUser,
+  Task,
+} from '@bokydo/shared';
 
 export interface SyncState {
   user: SyncUser | null;
+  /** Server-authoritative and replaced whole on every sync. */
+  collaborators: ReadonlyMap<string, Collaborator>;
+  members: readonly ProjectMember[];
+  invitations: readonly PendingInvite[];
   projects: ReadonlyMap<string, Project>;
   sections: ReadonlyMap<string, Section>;
   tasks: ReadonlyMap<string, Task>;
@@ -12,6 +27,9 @@ export interface SyncState {
 /** Mutable working copy used while applying a server response or replaying commands. */
 export interface Draft {
   user: SyncUser | null;
+  collaborators: ReadonlyMap<string, Collaborator>;
+  members: ProjectMember[];
+  invitations: readonly PendingInvite[];
   projects: Map<string, Project>;
   sections: Map<string, Section>;
   tasks: Map<string, Task>;
@@ -21,6 +39,9 @@ export interface Draft {
 
 export const emptyState = (): SyncState => ({
   user: null,
+  collaborators: new Map(),
+  members: [],
+  invitations: [],
   projects: new Map(),
   sections: new Map(),
   tasks: new Map(),
@@ -31,6 +52,9 @@ export const emptyState = (): SyncState => ({
 export function draftOf(state: SyncState): Draft {
   return {
     user: state.user,
+    collaborators: state.collaborators,
+    members: [...state.members],
+    invitations: state.invitations,
     projects: new Map(state.projects),
     sections: new Map(state.sections),
     tasks: new Map(state.tasks),
@@ -43,6 +67,9 @@ export function draftOf(state: SyncState): Draft {
 export function applyServerResponse(state: SyncState, res: SyncResponse): SyncState {
   const d = res.fullSync ? draftOf(emptyState()) : draftOf(state);
   d.user = res.user;
+  d.collaborators = new Map(res.collaborators.map((c) => [c.id, c]));
+  d.members = res.members;
+  d.invitations = res.invitations;
   for (const p of res.projects) d.projects.set(p.id, p);
   for (const s of res.sections) d.sections.set(s.id, s);
   for (const t of res.tasks) d.tasks.set(t.id, t);

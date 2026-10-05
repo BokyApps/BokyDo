@@ -151,11 +151,16 @@ afterAll(async () => t?.close());
 
 /** The client's answer: the shared evaluator over the user's synced state. */
 function clientIds(query: string): string[][] {
+  const perProject = new Map<string, number>();
+  for (const m of alice.last.members)
+    perProject.set(m.projectId, (perProject.get(m.projectId) ?? 0) + 1);
   const parsed = parseFilter(query, { now: LOCAL, weekStart: 'monday', dateOrder: 'dmy' });
   if (!parsed.ok) throw new Error(parsed.error.message);
   const { queries } = resolveFilter(parsed.queries, {
     projects: [...alice.projects.values()],
     sections: [...alice.sections.values()],
+    users: alice.last.collaborators,
+    sharedProjectIds: new Set([...perProject].filter(([, n]) => n > 1).map(([pid]) => pid)),
   });
   const live = [...alice.tasks.values()].filter(
     (x) => !x.isCompleted && !alice.projects.get(x.projectId)?.isArchived,
@@ -232,6 +237,11 @@ const TERMS = [
   'assigned by: me',
   'assigned by: others',
   'all',
+  'shared',
+  'assigned to: bob',
+  'assigned to: a*',
+  'assigned by: bob',
+  'assigned to: nobody-here',
 ];
 
 const queryArb: fc.Arbitrary<string> = fc.letrec<{ expr: string }>((tie) => ({
@@ -267,7 +277,9 @@ describe.skipIf(!TEST_DATABASE_URL)('filters: SQL vs in-memory evaluator', () =>
     );
     const empty = TERMS.filter((_, i) => counts[i] === 0);
     // These match nothing by construction; everything else must exercise real rows.
-    expect(empty.sort()).toEqual(['#Old', '/Nope', 'assigned by: me'].sort());
+    expect(empty.sort()).toEqual(
+      ['#Old', '/Nope', 'assigned by: me', 'assigned to: nobody-here'].sort(),
+    );
   });
 });
 

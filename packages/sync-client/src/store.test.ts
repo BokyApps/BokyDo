@@ -48,6 +48,9 @@ function response(partial: Partial<SyncResponse> = {}): SyncResponse {
     labels: [],
     filters: [],
     removed: { projects: [], sections: [], tasks: [], labels: [], filters: [] },
+    collaborators: [],
+    members: [],
+    invitations: [],
     results: {},
     ...partial,
   };
