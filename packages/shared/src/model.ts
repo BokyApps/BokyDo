@@ -1,4 +1,5 @@
-import { parseRRule } from '@bokydo/nlp';
+import { parseFilter } from '@bokydo/filter-query';
+import { localNow, parseRRule } from '@bokydo/nlp';
 import { z } from 'zod';
 import { isValidOrderKey } from './ordering.js';
 import { preferencesPatchSchema, type Preferences } from './preferences.js';
@@ -204,9 +205,15 @@ const labelFields = {
   itemOrder: orderKeySchema,
   isFavorite: z.boolean(),
 };
+/** Saved filters must parse (names needn't exist yet: they may be created or shared later). */
+export const filterQuerySchema = line(1024).superRefine((v, ctx) => {
+  const parsed = parseFilter(v, { now: localNow('UTC') });
+  if (!parsed.ok) ctx.addIssue({ code: 'custom', message: parsed.error.message });
+});
+
 const filterFields = {
   name: line(120),
-  query: line(1024),
+  query: filterQuerySchema,
   color: colorSchema,
   itemOrder: orderKeySchema,
   isFavorite: z.boolean(),

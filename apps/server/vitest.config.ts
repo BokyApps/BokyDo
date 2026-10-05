@@ -11,6 +11,7 @@ export default defineConfig({
       '@bokydo/shared': pkg('shared'),
       '@bokydo/themes': pkg('themes'),
       '@bokydo/nlp': pkg('nlp'),
+      '@bokydo/filter-query': pkg('filter-query'),
     },
   },
   test: {

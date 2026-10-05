@@ -11,6 +11,7 @@ export default defineConfig({
       '@bokydo/themes': pkg('themes'),
       '@bokydo/sync-client': pkg('sync-client'),
       '@bokydo/nlp': pkg('nlp'),
+      '@bokydo/filter-query': pkg('filter-query'),
     },
   },
 });

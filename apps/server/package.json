@@ -15,6 +15,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@bokydo/filter-query": "workspace:*",
     "@bokydo/nlp": "workspace:*",
     "@bokydo/shared": "workspace:*",
     "@fastify/cookie": "^11.1.2",

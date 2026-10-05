@@ -3,8 +3,8 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
 import { EditIcon, PlusIcon, StarIcon, TagIcon, TrashIcon } from '../components/icons.js';
 import { ProjectDot } from '../components/pickers.js';
-import { InlineAdd } from '../components/TaskEditor.js';
-import { PlainTaskList } from '../components/TaskTree.js';
+import { Board } from '../components/Board.js';
+import { TaskCollection } from '../components/TaskViews.js';
 import {
   Alert,
   Button,
@@ -17,13 +17,11 @@ import {
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { useConfirm } from '../lib/confirm.js';
 import { newId, useSend, useSyncState } from '../lib/sync.js';
-import { todayIn } from '../lib/dates.js';
-import { useTimeZone } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { useViewOptions } from '../lib/view-options.js';
+import { useFilter } from '../lib/filters.js';
 import {
   allLabelNames,
-  groupTasks,
   labelTasks,
   projectOrderIndex,
   projectTree,
@@ -38,45 +36,113 @@ const colorOptions = COLORS.map((c) => ({
 
 export function LabelPage({ name }: { name: string }) {
   const state = useSyncState();
-  const today = todayIn(useTimeZone());
   const { setViewDefaults } = useTaskUI();
   const [options, setOptions] = useViewOptions(`label.${name.toLowerCase()}`, { sort: 'manual' });
   useEffect(() => setViewDefaults({ labels: [name] }), [name, setViewDefaults]);
-  const tasks = sortTasks(labelTasks(state, name), options.sort, projectOrderIndex(state));
+  const tasks = labelTasks(state, name);
   return (
-    <Page>
-      <ViewHeader title={`@${name}`} options={options} setOptions={setOptions} />
-      {groupTasks(tasks, options.group, state, today).map((g) => (
-        <section key={g.key}>
-          {g.title && <h2 className="mt-4 border-b border-line pb-1 font-semibold">{g.title}</h2>}
-          <PlainTaskList tasks={g.tasks} />
-        </section>
-      ))}
-      <InlineAdd defaults={{ labels: [name] }} />
-      {tasks.length === 0 && <EmptyState title={`No open tasks with @${name}`} />}
+    <Page wide={options.layout !== 'list'}>
+      <ViewHeader
+        title={`@${name}`}
+        options={options}
+        setOptions={setOptions}
+        layout={{ value: options.layout, onChange: (layout) => setOptions({ layout }) }}
+      />
+      <TaskCollection tasks={tasks} options={options} addDefaults={{ labels: [name] }} />
+      {tasks.length === 0 && options.layout === 'list' && (
+        <EmptyState title={`No open tasks with @${name}`} />
+      )}
     </Page>
   );
 }
 
 export function FilterPage({ id }: { id: string }) {
   const state = useSyncState();
+  const send = useSend();
   const filter = state.filters.get(id);
+  const [options, setOptions] = useViewOptions(`filter.${id}`, { sort: 'date' });
+  const [editing, setEditing] = useState(false);
+  const result = useFilter(filter?.query ?? 'all');
   if (!filter)
     return (
       <Page>
         <EmptyState title="Filter not found" />
       </Page>
     );
+  const lists = result.ok ? result.lists : [];
+  const multiple = lists.length > 1;
   return (
-    <Page>
+    <Page wide={options.layout !== 'list'}>
       <ViewHeader
         title={filter.name}
         subtitle={<code className="font-mono">{filter.query}</code>}
+        options={options}
+        setOptions={setOptions}
+        layout={{ value: options.layout, onChange: (layout) => setOptions({ layout }) }}
+        actions={
+          <>
+            <IconButton
+              label={filter.isFavorite ? 'Remove from favourites' : 'Add to favourites'}
+              onClick={() =>
+                send('filter_update', { id: filter.id, isFavorite: !filter.isFavorite })
+              }
+            >
+              <StarIcon filled={filter.isFavorite} />
+            </IconButton>
+            <IconButton label="Edit filter" onClick={() => setEditing(true)}>
+              <EditIcon />
+            </IconButton>
+          </>
+        }
       />
-      <Alert tone="info">
-        Running filter queries (like <code>today &amp; #Work</code>) arrives with the filter
-        language in deliverable W4. Your filter is saved.
-      </Alert>
+      {!result.ok && (
+        <Alert tone="error">
+          This filter doesn't work any more: {result.error.message}.{' '}
+          <button type="button" className="underline" onClick={() => setEditing(true)}>
+            Edit it
+          </button>
+        </Alert>
+      )}
+      {result.ok &&
+        result.warnings.map((w) => (
+          <p key={w} className="mb-2 text-sm text-muted">
+            {w}
+          </p>
+        ))}
+      {multiple && options.layout === 'board' ? (
+        <Board
+          columns={lists.map((l, i) => ({
+            id: `list-${i}`,
+            title: l.query,
+            tasks: sortTasks(l.tasks, options.sort, projectOrderIndex(state)),
+            droppable: false,
+          }))}
+          onDrop={() => undefined}
+          showProject
+        />
+      ) : multiple && options.layout === 'list' ? (
+        lists.map((l, i) => (
+          <section key={i} className="mb-6">
+            <h2 className="flex items-baseline justify-between border-b border-line pb-1 font-semibold">
+              <code className="font-mono text-sm">{l.query}</code>
+              <span className="text-xs font-normal text-muted">{l.tasks.length}</span>
+            </h2>
+            <TaskCollection tasks={l.tasks} options={options} showAdd={false} />
+            {l.tasks.length === 0 && <p className="py-2 text-sm text-muted">Nothing here.</p>}
+          </section>
+        ))
+      ) : (
+        <TaskCollection
+          tasks={[...new Map(lists.flatMap((l) => l.tasks).map((t) => [t.id, t])).values()]}
+          options={options}
+          showAdd={false}
+        />
+      )}
+      {result.ok &&
+        lists.every((l) => l.tasks.length === 0) &&
+        options.layout === 'list' &&
+        !multiple && <EmptyState title="No tasks match this filter" />}
+      <FilterDialog value={editing ? filter : null} onClose={() => setEditing(false)} />
     </Page>
   );
 }
@@ -298,9 +364,14 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
   const [name, setName] = useState(filter?.name ?? '');
   const [query, setQuery] = useState(filter?.query ?? '');
   const [color, setColor] = useState<Color>(filter?.color ?? 'charcoal');
+  const result = useFilter(query.trim() || 'all');
+  const valid = Boolean(query.trim()) && result.ok;
+  const matches = result.ok
+    ? new Set(result.lists.flatMap((l) => l.tasks.map((t) => t.id))).size
+    : 0;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !query.trim()) return;
+    if (!name.trim() || !valid) return;
     if (filter)
       send('filter_update', { id: filter.id, name: name.trim(), query: query.trim(), color });
     else send('filter_add', { id: newId(), name: name.trim(), query: query.trim(), color });
@@ -322,8 +393,35 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
         maxLength={1024}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        hint="e.g. today | overdue, #Work & p1, @errands. Queries run once W4 lands."
+        aria-invalid={Boolean(query.trim()) && !result.ok}
+        hint="e.g. today | overdue, #Work & p1, @errands & !no date"
       />
+      {query.trim() && (
+        <div className="-mt-2 text-sm" aria-live="polite">
+          {!result.ok ? (
+            <p className="text-danger">
+              {result.error.message}
+              {result.error.end > result.error.start &&
+                !result.error.message.includes(
+                  query.slice(result.error.start, result.error.end).trim(),
+                ) && <> (at “{query.slice(result.error.start, result.error.end)}”)</>}
+            </p>
+          ) : (
+            <>
+              <p className="text-muted">
+                Matches {matches} open task{matches === 1 ? '' : 's'}
+                {result.lists.length > 1 ? ` in ${result.lists.length} lists` : ''}
+              </p>
+              {result.warnings.map((w) => (
+                <p key={w} className="text-warning">
+                  {w}
+                </p>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+      <FilterHelp />
       <SelectField
         label="Colour"
         value={color}
@@ -334,9 +432,43 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit">{filter ? 'Save' : 'Add'}</Button>
+        <Button type="submit" disabled={!valid || !name.trim()}>
+          {filter ? 'Save' : 'Add'}
+        </Button>
       </div>
     </form>
+  );
+}
+
+const SYNTAX: [string, string][] = [
+  ['today, tomorrow, overdue', 'Due today, tomorrow, or before now'],
+  ['7 days, -7 days, next week', 'Due in the next 7 days, the past 7, next week'],
+  ['due before: fri, due after: jan 3', 'Before or after a date (also deadline:, created:)'],
+  ['no date, no time, recurring', 'Without a date, without a time, repeating'],
+  ['p1 … p4', 'Priority'],
+  ['#Work, ##Work, /Next up', 'Project, project with sub-projects, section'],
+  ['@errands, @home*, no labels', 'Label (with * as a wildcard), unlabelled'],
+  ['search: invoice', 'Task name contains the text'],
+  ['assigned to: me, subtask', 'Assigned to you, sub-tasks only'],
+  ['&  |  !  ( )', 'And, or, not, grouping'],
+  ['today, overdue', 'A comma shows separate lists'],
+];
+
+function FilterHelp() {
+  return (
+    <details className="rounded-lg border border-line px-3 py-2 text-sm">
+      <summary className="cursor-pointer text-muted">Filter syntax</summary>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {SYNTAX.map(([code, meaning]) => (
+          <div key={code} className="contents">
+            <dt>
+              <code className="font-mono text-xs">{code}</code>
+            </dt>
+            <dd className="text-muted">{meaning}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

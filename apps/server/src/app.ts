@@ -142,7 +142,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerSetupRoutes(app, settings);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
   registerSyncRoutes(app, { sync, events, sessions });
-  registerTaskRoutes(app, db);
+  registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);
   app.setNotFoundHandler((req, reply) => {

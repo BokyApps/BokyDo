@@ -157,9 +157,12 @@ export function groupTasks(
     if (mode === 'project') add(t.projectId, state.projects.get(t.projectId)?.name ?? 'Project', t);
     else if (mode === 'priority')
       add(`p${t.priority}`, t.priority === 4 ? 'No priority' : `Priority ${t.priority}`, t);
-    else if (mode === 'date')
-      add(t.due?.date ?? '~', t.due ? (t.due.date < today ? 'Overdue' : t.due.date) : 'No date', t);
-    else if (mode === 'label') {
+    else if (mode === 'date') {
+      // One "Overdue" group ('!' sorts before dates, '~' after).
+      if (!t.due) add('~', 'No date', t);
+      else if (t.due.date < today) add('!overdue', 'Overdue', t);
+      else add(t.due.date, t.due.date, t);
+    } else if (mode === 'label') {
       if (t.labels.length === 0) add('~', 'No label', t);
       for (const l of t.labels) add(l.toLowerCase(), `@${l}`, t);
     }

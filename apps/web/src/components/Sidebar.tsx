@@ -1,6 +1,8 @@
+import type { Filter } from '@bokydo/shared';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { todayIn } from '../lib/dates.js';
+import { useFilter } from '../lib/filters.js';
 import { useSyncState, useTimeZone } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { isOpen, liveTasks, projectTree, todayTasks, type ProjectNode } from '../lib/views.js';
@@ -41,6 +43,7 @@ export function Sidebar({
     (p) => p.isFavorite && !p.isArchived && !p.isInbox,
   );
   const favoriteLabels = [...state.labels.values()].filter((l) => l.isFavorite);
+  const favoriteFilters = [...state.filters.values()].filter((f) => f.isFavorite);
 
   return (
     <nav
@@ -88,7 +91,7 @@ export function Sidebar({
         </Link>
       </div>
 
-      {(favorites.length > 0 || favoriteLabels.length > 0) && (
+      {(favorites.length > 0 || favoriteLabels.length > 0 || favoriteFilters.length > 0) && (
         <div className="space-y-0.5">
           <h2 className="px-2 text-xs font-semibold text-muted">Favourites</h2>
           {favorites.map((p) => (
@@ -116,6 +119,9 @@ export function Sidebar({
               </span>{' '}
               {l.name}
             </Link>
+          ))}
+          {favoriteFilters.map((f) => (
+            <FavoriteFilter key={f.id} filter={f} className={item} />
           ))}
         </div>
       )}
@@ -212,4 +218,22 @@ function ProjectNodes({
 function Count({ n, danger = false }: { n: number; danger?: boolean }) {
   if (!n) return null;
   return <span className={`ml-auto text-xs ${danger ? 'text-danger' : 'text-muted'}`}>{n}</span>;
+}
+
+function FavoriteFilter({ filter, className }: { filter: Filter; className: string }) {
+  const result = useFilter(filter.query);
+  const n = result.ok ? new Set(result.lists.flatMap((l) => l.tasks.map((t) => t.id))).size : 0;
+  return (
+    <Link
+      to="/filter/$filterId"
+      params={{ filterId: filter.id }}
+      className={className}
+      activeProps={active}
+    >
+      <span style={{ color: `var(--bk-project-${filter.color.replace(/_/g, '-')})` }} aria-hidden>
+        ⚲
+      </span>{' '}
+      <span className="truncate">{filter.name}</span> <Count n={n} />
+    </Link>
+  );
 }

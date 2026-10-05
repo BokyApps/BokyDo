@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { ViewOptions } from '../lib/view-options.js';
+import type { Layout, ViewOptions } from '../lib/view-options.js';
 import type { GroupMode, SortMode } from '../lib/views.js';
 import { Popover } from './ui.js';
 
@@ -8,6 +8,11 @@ const SORTS: [SortMode, string][] = [
   ['date', 'Date'],
   ['priority', 'Priority'],
   ['name', 'Name'],
+];
+const LAYOUTS: [Layout, string][] = [
+  ['list', 'List'],
+  ['board', 'Board'],
+  ['calendar', 'Calendar'],
 ];
 const GROUPS: [GroupMode, string][] = [
   ['none', 'None'],
@@ -23,6 +28,7 @@ export function ViewHeader({
   options,
   setOptions,
   allow = { sort: true, group: true, completed: false },
+  layout,
   actions,
 }: {
   title: ReactNode;
@@ -30,6 +36,8 @@ export function ViewHeader({
   options?: ViewOptions;
   setOptions?: (p: Partial<ViewOptions>) => void;
   allow?: { sort?: boolean; group?: boolean; completed?: boolean };
+  /** Offer list / board / calendar. */
+  layout?: { value: Layout; onChange: (layout: Layout) => void };
   actions?: ReactNode;
 }) {
   return (
@@ -55,6 +63,21 @@ export function ViewHeader({
             panelClassName="w-56 p-3"
           >
             <div className="space-y-3">
+              {layout && (
+                <div role="group" aria-label="Layout" className="grid grid-cols-3 gap-1">
+                  {LAYOUTS.map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={layout.value === value}
+                      onClick={() => layout.onChange(value)}
+                      className={`rounded-md border px-1 py-1.5 text-xs ${layout.value === value ? 'border-accent bg-accent/10 font-medium text-accent' : 'border-line text-muted hover:bg-surface-alt'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {allow.sort && (
                 <Choice
                   label="Sort by"
@@ -119,8 +142,14 @@ function Choice<T extends string>({
   );
 }
 
-export function Page({ children }: { children: ReactNode }) {
-  return <div className="mx-auto w-full max-w-3xl px-4 py-6 pb-28 sm:px-10">{children}</div>;
+export function Page({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
+  return (
+    <div
+      className={`mx-auto w-full px-4 py-6 pb-28 ${wide ? 'max-w-7xl sm:px-6' : 'max-w-3xl sm:px-10'}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {

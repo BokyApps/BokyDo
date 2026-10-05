@@ -1,5 +1,5 @@
 {
-  "name": "@bokydo/shared",
+  "name": "@bokydo/filter-query",
   "version": "0.0.0",
   "private": true,
   "license": "AGPL-3.0-only",
@@ -17,9 +17,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@bokydo/filter-query": "workspace:*",
-    "@bokydo/nlp": "workspace:*",
-    "@bokydo/themes": "workspace:*",
-    "zod": "^4.6.5"
+    "@bokydo/nlp": "workspace:*"
   }
 }

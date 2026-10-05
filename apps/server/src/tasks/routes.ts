@@ -7,12 +7,20 @@ import { tasks } from '../db/schema.js';
 import { requireSession } from '../http/access.js';
 import { visibleProjects } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
+import { runFilter } from './filter-sql.js';
 
 const completedQuery = z
   .object({
     projectId: z.uuid().optional(),
     before: z.iso.datetime().optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict();
+
+const filterQuery = z
+  .object({
+    query: z.string().max(1024),
+    limit: z.coerce.number().int().min(1).max(500).default(200),
   })
   .strict();
 
@@ -34,8 +42,12 @@ export function toPrefixQuery(q: string): string | null {
   return words.length ? words.map((w) => `${w}:*`).join(' & ') : null;
 }
 
-/** Reads outside the sync stream: completed-task history and full-text search. */
-export function registerTaskRoutes(app: FastifyInstance, db: Database): void {
+/** Reads outside the sync stream: completed-task history, full-text search and filters. */
+export function registerTaskRoutes(
+  app: FastifyInstance,
+  db: Database,
+  defaultTimeZone: () => string,
+): void {
   const user = { config: { access: 'user' } } as const;
 
   app.get('/api/v1/tasks/completed', user, async (req, reply) => {
@@ -67,6 +79,21 @@ export function registerTaskRoutes(app: FastifyInstance, db: Database): void {
           rows.length === limit && last?.completedAt ? last.completedAt.toISOString() : null,
       };
     });
+  });
+
+  /** Run a filter query (`today | overdue`, `#Work & p1`…) over the caller's open tasks. */
+  app.get('/api/v1/tasks/filter', user, async (req, reply) => {
+    const parsed = filterQuery.safeParse(req.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'validation_failed' });
+    const userId = requireSession(req).user.id;
+    const result = await db.transaction((tx) =>
+      runFilter(tx, userId, parsed.data.query, {
+        limit: parsed.data.limit,
+        defaultTimeZone: defaultTimeZone(),
+      }),
+    );
+    if (!result.ok) return reply.status(400).send({ error: 'invalid_filter', ...result.error });
+    return { lists: result.lists, warnings: result.warnings };
   });
 
   app.get('/api/v1/search', user, async (req, reply) => {
