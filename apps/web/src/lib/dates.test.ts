@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   addDays,
+  dueLabel,
+  makeDue,
   describeDate,
   diffDays,
   formatTime,
@@ -61,5 +63,25 @@ describe('dates', () => {
     expect(formatTime('00:00', { timeFormat: '12h' })).toBe('12am');
     expect(formatTime('13:30', { timeFormat: '12h' })).toBe('1:30pm');
     expect(formatTime('12:00', { timeFormat: '12h' })).toBe('12pm');
+  });
+});
+
+describe('makeDue / dueLabel', () => {
+  const prefs = { timeFormat: '24h', dateFormat: 'dmy' } as const;
+  it('stores an absolute phrase but shows a relative one', () => {
+    const due = makeDue('2026-10-06', '17:00', '2026-10-05', prefs);
+    expect(due.string).toBe(
+      `6 ${new Date('2026-10-06T00:00:00Z').toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' })} 17:00`,
+    );
+    expect(dueLabel(due, '2026-10-05', prefs)).toBe('Tomorrow 17:00');
+    expect(dueLabel(due, '2026-10-06', prefs)).toBe('Today 17:00');
+  });
+  it('shows recurring phrases as typed', () => {
+    const due = {
+      ...makeDue('2026-10-12', null, '2026-10-05', prefs),
+      string: 'every mon',
+      recurrence: { rrule: 'FREQ=WEEKLY;BYDAY=MO', anchor: 'scheduled' as const },
+    };
+    expect(dueLabel(due, '2026-10-05', prefs)).toBe('every mon');
   });
 });

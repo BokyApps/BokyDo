@@ -1,6 +1,7 @@
-import type { CommandArgs, Due } from '@bokydo/shared';
+import { localNow, nextOccurrence } from '@bokydo/nlp';
+import { resolvePreferences, type CommandArgs, type Due } from '@bokydo/shared';
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { tasks } from '../../db/schema.js';
+import { tasks, users } from '../../db/schema.js';
 import { fail, LIMITS, type CommandContext, type Tx } from '../context.js';
 import { isProjectMember, requireProject } from '../policy.js';
 import { allOf, nextOrderKey } from './common.js';
@@ -244,13 +245,44 @@ export async function taskMove(ctx: CommandContext, args: CommandArgs<'task_move
   }
 }
 
-/** Completing a task completes its open sub-tasks. (Recurring roll-forward arrives with W3.) */
+/** The completing user's local time: "today" for recurrence is theirs, not the server's. */
+async function userNow(ctx: CommandContext) {
+  const [row] = await ctx.tx
+    .select({ preferences: users.preferences })
+    .from(users)
+    .where(eq(users.id, ctx.userId));
+  const timeZone = resolvePreferences(row?.preferences).timezone ?? ctx.defaultTimeZone;
+  return localNow(timeZone, ctx.now);
+}
+
+/**
+ * Completing a task completes its open sub-tasks. A recurring task instead moves to its next
+ * occurrence and stays open, and its completed sub-tasks reopen for the next round (as in
+ * Todoist). When the series has ended, it completes for good.
+ */
 export async function taskComplete(
   ctx: CommandContext,
   args: CommandArgs<'task_complete'>,
 ): Promise<void> {
   const task = await requireTask(ctx, args.id);
-  const ids = [task.id, ...(await descendantTasks(ctx.tx, task.id))];
+  const descendants = await descendantTasks(ctx.tx, task.id);
+  const next = task.due?.recurrence ? nextOccurrence(task.due, await userNow(ctx)) : null;
+  if (next && !task.isCompleted) {
+    await ctx.tx
+      .update(tasks)
+      .set({ due: next, dueDate: next.date, updatedAt: ctx.now })
+      .where(eq(tasks.id, task.id));
+    ctx.changes.inProject('tasks', task.id, task.projectId);
+    if (descendants.length === 0) return;
+    const reopened = await ctx.tx
+      .update(tasks)
+      .set({ isCompleted: false, completedAt: null, completedById: null, updatedAt: ctx.now })
+      .where(and(inArray(tasks.id, descendants), eq(tasks.isCompleted, true)))
+      .returning({ id: tasks.id });
+    for (const t of reopened) ctx.changes.inProject('tasks', t.id, task.projectId);
+    return;
+  }
+  const ids = [task.id, ...descendants];
   const done = await ctx.tx
     .update(tasks)
     .set({ isCompleted: true, completedAt: ctx.now, completedById: ctx.userId, updatedAt: ctx.now })

@@ -69,9 +69,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return503OnClosing: true,
     routerOptions: { maxParamLength: 200 },
   });
-  const sync = new SyncService(db, (affected) => {
-    events.publish(affected).catch((err: unknown) => app.log.warn({ err }, 'event publish failed'));
-  });
+  const sync = new SyncService(
+    db,
+    (affected) => {
+      events
+        .publish(affected)
+        .catch((err: unknown) => app.log.warn({ err }, 'event publish failed'));
+    },
+    () => settings.get('instance.defaultTimezone'),
+  );
   const flows = new FlowStore(db, deps.secrets.sessionKey);
   const tokens = new UserTokenStore(db, deps.secrets.sessionKey);
   const notifier = new Notifier(db, settings, mailer, app.log);

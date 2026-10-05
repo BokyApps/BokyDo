@@ -1,16 +1,19 @@
+import { localNow, parseDate } from '@bokydo/nlp';
 import type { Due, Project, Section } from '@bokydo/shared';
 import { useMemo, useState, type ReactNode } from 'react';
 import {
   addDays,
   diffDays,
+  dueLabel,
+  formatTime,
   makeDue,
   monthGrid,
   startOfWeek,
   weekday,
   weekdayNames,
 } from '../lib/dates.js';
+import { toTaskDue } from '../lib/quick-add.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
-import { todayIn } from '../lib/dates.js';
 import { allLabelNames, flattenTree, projectTree, sectionsOf } from '../lib/views.js';
 import { CalendarIcon, CheckIcon, FlagIcon, InboxIcon, TagIcon } from './icons.js';
 import { Button, inputClass, Popover } from './ui.js';
@@ -38,7 +41,10 @@ function Chip({
   );
 }
 
-/** Date + optional time, with Todoist-style shortcuts and a month calendar. */
+/**
+ * Date + optional time: type it ("next fri 5pm", "every mon"), pick a shortcut, or use the
+ * calendar. Picking a day for a recurring task moves this occurrence and keeps the pattern.
+ */
 export function DatePicker({
   value,
   onChange,
@@ -51,12 +57,27 @@ export function DatePicker({
   label?: string;
 }) {
   const prefs = usePreferences();
-  const today = todayIn(useTimeZone());
+  const now = localNow(useTimeZone());
+  const today = now.date;
   const [month, setMonth] = useState((value?.date ?? today).slice(0, 7) + '-01');
   const [time, setTime] = useState(value?.time ?? '');
+  const [text, setText] = useState('');
   const grid = useMemo(() => monthGrid(month, prefs.weekStart), [month, prefs.weekStart]);
+  const typed = text.trim()
+    ? parseDate(text, { now, weekStart: prefs.weekStart, dateOrder: prefs.dateFormat })
+    : null;
+  const at = (date: string, t: string | null): Due =>
+    value?.recurrence ? { ...value, date, time: t } : makeDue(date, t, today, prefs);
   const pick = (date: string | null, close: () => void) => {
-    onChange(date ? makeDue(date, time || null, today, prefs) : null);
+    onChange(date ? at(date, time || null) : null);
+    setText('');
+    close();
+  };
+  const applyTyped = (close: () => void) => {
+    if (!typed) return;
+    onChange(toTaskDue(typed, today, prefs));
+    setTime(typed.time ?? '');
+    setText('');
     close();
   };
   const daysToSaturday = (6 - weekday(today) + 7) % 7 || 7;
@@ -79,11 +100,11 @@ export function DatePicker({
       trigger={(p) =>
         chip ? (
           <Chip {...p} active={Boolean(value)}>
-            <CalendarIcon /> {value ? value.string : (label ?? 'Date')}
+            <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? 'Date')}
           </Chip>
         ) : (
           <Button variant="ghost" {...p}>
-            <CalendarIcon /> {value ? value.string : (label ?? 'Schedule')}
+            <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? 'Schedule')}
           </Button>
         )
       }
@@ -91,6 +112,52 @@ export function DatePicker({
     >
       {(close) => (
         <div className="space-y-2 p-1">
+          <div>
+            <input
+              className={`${inputClass} py-1`}
+              placeholder="Type a date: next fri 5pm, every mon…"
+              aria-label="Type a date"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  applyTyped(close);
+                }
+              }}
+              autoFocus
+            />
+            {text.trim() && (
+              <button
+                type="button"
+                disabled={!typed}
+                onClick={() => applyTyped(close)}
+                className="mt-1 flex w-full flex-col rounded-md px-2 py-1.5 text-left hover:bg-surface-alt disabled:cursor-default disabled:hover:bg-transparent"
+              >
+                {typed ? (
+                  <>
+                    <span className="font-medium">
+                      {typed.recurrence ? '↻ ' : ''}
+                      {dueLabel(toTaskDue(typed, today, prefs), today, prefs)}
+                    </span>
+                    <span className="text-xs text-muted">
+                      {typed.recurrence ? 'First: ' : ''}
+                      {new Date(`${typed.date}T00:00:00Z`).toLocaleDateString(undefined, {
+                        weekday: 'short',
+                        day: 'numeric',
+                        month: 'short',
+                        year: typed.date.slice(0, 4) === today.slice(0, 4) ? undefined : 'numeric',
+                        timeZone: 'UTC',
+                      })}
+                      {typed.time ? ` · ${formatTime(typed.time, prefs)}` : ''}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-muted">No date recognised</span>
+                )}
+              </button>
+            )}
+          </div>
           <ul>
             {shortcuts.map(([name, date]) => (
               <li key={name}>
@@ -173,10 +240,25 @@ export function DatePicker({
               value={time}
               onChange={(e) => {
                 setTime(e.target.value);
-                if (value) onChange(makeDue(value.date, e.target.value || null, today, prefs));
+                if (value) onChange(at(value.date, e.target.value || null));
               }}
             />
           </div>
+          {value?.recurrence && (
+            <div className="flex items-center justify-between border-t border-line pt-2 text-xs">
+              <span className="truncate text-muted">↻ {value.string}</span>
+              <button
+                type="button"
+                className="rounded px-2 py-1 text-accent hover:bg-surface-alt"
+                onClick={() => {
+                  onChange(makeDue(value.date, value.time, today, prefs));
+                  close();
+                }}
+              >
+                Stop repeating
+              </button>
+            </div>
+          )}
         </div>
       )}
     </Popover>

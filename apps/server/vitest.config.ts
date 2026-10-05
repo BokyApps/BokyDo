@@ -7,7 +7,11 @@ const pkg = (name: string) =>
 export default defineConfig({
   resolve: {
     // Test workspace packages from source; no build step needed.
-    alias: { '@bokydo/shared': pkg('shared'), '@bokydo/themes': pkg('themes') },
+    alias: {
+      '@bokydo/shared': pkg('shared'),
+      '@bokydo/themes': pkg('themes'),
+      '@bokydo/nlp': pkg('nlp'),
+    },
   },
   test: {
     // DB integration tests share one database; keep files sequential.

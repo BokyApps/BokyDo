@@ -114,3 +114,31 @@ describe('block markdown', () => {
     expect((blocks[5] as { c: Inline[][] }).c).toHaveLength(2);
   });
 });
+
+describe('markdown performance (F-025)', () => {
+  const clock = (globalThis as unknown as { performance: { now(): number } }).performance;
+  const time = (fn: () => void) => {
+    const t = clock.now();
+    fn();
+    return clock.now() - t;
+  };
+
+  // 64 KB, 4× the description limit: the old quadratic patterns took seconds here.
+  const LS = String.fromCharCode(0x2028);
+  it.each([
+    ['heading padding', `# ${' '.repeat(64_000)}${LS}`],
+    ['bullet padding', `- ${' '.repeat(64_000)}${LS}`],
+    ['numbered padding', `1. ${' '.repeat(64_000)}${LS}`],
+    ['url punctuation', `http://x${'.'.repeat(64_000)}y`],
+    ['many urls', 'http://a.b/... '.repeat(4_000)],
+  ])('parses %s in linear time', (_, src) => {
+    parseMarkdown(src);
+    expect(time(() => parseMarkdown(src))).toBeLessThan(500);
+  });
+
+  it('still reads headings and lists', () => {
+    expect(parseMarkdown('##   Title  ')[0]).toMatchObject({ t: 'h', level: 2 });
+    expect(parseMarkdown('-   item\n- ')[0]).toMatchObject({ t: 'ul' });
+    expect(parseMarkdown('#nospace')[0]).toMatchObject({ t: 'p' });
+  });
+});

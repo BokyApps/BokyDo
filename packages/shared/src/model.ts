@@ -1,3 +1,4 @@
+import { parseRRule } from '@bokydo/nlp';
 import { z } from 'zod';
 import { isValidOrderKey } from './ordering.js';
 import { preferencesPatchSchema, type Preferences } from './preferences.js';
@@ -63,7 +64,8 @@ export const labelNameSchema = line(60).refine(
 
 /**
  * A due date. Date-only, or date + time that is either floating (shown in each viewer's time zone)
- * or fixed to an IANA time zone. Recurrence rules are interpreted by the NLP engine (W3).
+ * or fixed to an IANA time zone. `recurrence.rrule` is the subset of RFC 5545
+ * that @bokydo/nlp supports (`parseRRule`); `date` is the series' current occurrence.
  */
 export const dueSchema = z
   .object({
@@ -80,7 +82,8 @@ export const dueSchema = z
         rrule: z
           .string()
           .max(500)
-          .regex(/^[A-Z0-9=;,:+-]+$/, 'Invalid RRULE'),
+          .regex(/^[A-Z0-9=;,:+-]+$/, 'Invalid RRULE')
+          .refine((v) => parseRRule(v) !== null, 'Unsupported recurrence rule'),
         anchor: z.enum(['scheduled', 'completion']),
       })
       .strict()

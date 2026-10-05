@@ -116,7 +116,9 @@ export function parseInline(src: string, depth = 0): Inline[] {
     if ((ch === 'h' || ch === 'H') && !isWord(src[i - 1])) {
       const m = /^https?:\/\/[^\s<>"'`]+/i.exec(src.slice(i, i + 2048));
       if (m) {
-        const url = m[0].replace(/[.,;:!?)\]]+$/, '');
+        let url = m[0];
+        // Trailing punctuation belongs to the sentence (a loop, not a regex: no quadratic backtracking).
+        while (url.length > 0 && '.,;:!?)]'.includes(url[url.length - 1]!)) url = url.slice(0, -1);
         const href = safeHref(url);
         if (href) {
           flush();
@@ -133,6 +135,9 @@ export function parseInline(src: string, depth = 0): Inline[] {
   flush();
   return out;
 }
+
+const BULLET = /^[ \t]*[-*+][ \t]+([^ \t][^]*)?$/;
+const NUMBERED = /^[ \t]*\d{1,9}[.)][ \t]+([^ \t][^]*)?$/;
 
 export function parseMarkdown(src: string): Block[] {
   const lines = src.replace(/\r\n?/g, '\n').split('\n');
@@ -152,22 +157,23 @@ export function parseMarkdown(src: string): Block[] {
       blocks.push({ t: 'pre', v: body.join('\n') });
       continue;
     }
-    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    // Patterns below are unambiguous ([ \t]+ then \S or [^]*), so they run in linear time.
+    const heading = /^(#{1,3})[ \t]+(\S[^]*)$/.exec(line);
     if (heading) {
       endPara();
       blocks.push({ t: 'h', level: heading[1]!.length as 1 | 2 | 3, c: parseInline(heading[2]!) });
       continue;
     }
-    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
-    const numbered = /^\s*\d{1,9}[.)]\s+(.*)$/.exec(line);
+    const bullet = BULLET.exec(line);
+    const numbered = NUMBERED.exec(line);
     if (bullet || numbered) {
       endPara();
       const kind = bullet ? 'ul' : 'ol';
       const items: Inline[][] = [];
       for (; i < lines.length; i++) {
-        const m = (kind === 'ul' ? /^\s*[-*+]\s+(.*)$/ : /^\s*\d{1,9}[.)]\s+(.*)$/).exec(lines[i]!);
+        const m = (kind === 'ul' ? BULLET : NUMBERED).exec(lines[i]!);
         if (!m) break;
-        items.push(parseInline(m[1]!));
+        items.push(parseInline(m[1] ?? ''));
       }
       i--;
       blocks.push({ t: kind, items });

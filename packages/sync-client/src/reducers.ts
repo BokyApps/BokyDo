@@ -1,3 +1,4 @@
+import { localNow, nextOccurrence } from '@bokydo/nlp';
 import { generateKeyBetween, type Command, type Task } from '@bokydo/shared';
 import { dropOrphans, type Draft } from './state.js';
 
@@ -151,15 +152,29 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
       }
       return;
     }
-    case 'task_complete':
-      for (const id of [
-        command.args.id,
-        ...descendants(d.tasks, command.args.id, (t) => t.parentId),
-      ]) {
+    case 'task_complete': {
+      const ids = descendants(d.tasks, command.args.id, (t) => t.parentId);
+      const task = d.tasks.get(command.args.id);
+      // Recurring: move to the next occurrence and reopen sub-tasks, like the server.
+      const timeZone =
+        d.user?.preferences.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const next =
+        task?.due?.recurrence && !task.isCompleted
+          ? nextOccurrence(task.due, localNow(timeZone, new Date(now)))
+          : null;
+      if (task && next) {
+        patch(d.tasks, task.id, { due: next, updatedAt: now });
+        for (const id of ids)
+          if (d.tasks.get(id)?.isCompleted)
+            patch(d.tasks, id, { isCompleted: false, completedAt: null });
+        return;
+      }
+      for (const id of [command.args.id, ...ids]) {
         const t = d.tasks.get(id);
         if (t && !t.isCompleted) patch(d.tasks, id, { isCompleted: true, completedAt: now });
       }
       return;
+    }
     case 'task_uncomplete':
       for (
         let t = d.tasks.get(command.args.id);

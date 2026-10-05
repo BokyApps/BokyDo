@@ -10,12 +10,14 @@ COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
 COPY packages/sync-client/package.json packages/sync-client/
 COPY packages/themes/package.json packages/themes/
+COPY packages/nlp/package.json packages/nlp/
 RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/sync-client packages/sync-client
 COPY packages/themes packages/themes
+COPY packages/nlp packages/nlp
 COPY apps/server apps/server
 COPY apps/web apps/web
 COPY docker/bokydo /cli/bokydo

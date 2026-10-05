@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ (2026-10-05)
 Owner: Sarel
 
 ---
@@ -398,6 +398,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 #### W3 — Natural-language engine · L
 - `packages/nlp` per §4, recurrence engine (RRULE + Todoist semantics incl. `every!`), deadlines, durations, reminders syntax, quick-add with live highlighting and autocomplete, date picker that also accepts NL.
 - **Security gate:** ReDoS fuzz; parser never trusted for authz (`#Project` resolves only to projects the user can write to; `+name` only to members).
+- *Done 2026-10-05. Quick add highlights tokens as you type, autocompletes `#` `@` `/`, shows chips that can be removed to keep text literal, and confirms multi-line adds; the date picker takes typed dates and recurrences; recurring tasks roll forward on completion (server and optimistic client). Reminder syntax (`!30m`) is parsed by `packages/nlp` but left as text in the app until W6 adds reminders; `+name` resolves once W5 brings members; editing a title in task details doesn't parse dates (quick add and the date picker do); completed occurrences of recurring tasks will show in the W5 activity log. Syntax reference: [docs/quick-add.md](quick-add.md).*
 
 #### W4 — Filters, labels & layouts (incl. Kanban) · L
 - `packages/filter-query`: Todoist filter language (`&`, `|`, `!`, `()`, `,` multi-list; `today`, `overdue`, `no date`, `due before:`, `next 7 days`, `p1`, `#`, `##`, `/`, `@`, `no labels`, `assigned to:`, `assigned by:`, `shared`, `search:`, `created before:`, `recurring`, `subtask`, `!subtask`, `deadline:`, `no deadline`, `workspace:` …) → parameterised SQL **and** in-memory evaluator for instant client views.

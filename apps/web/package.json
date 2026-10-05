@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@bokydo/nlp": "workspace:*",
     "@bokydo/shared": "workspace:*",
     "@bokydo/sync-client": "workspace:*",
     "@bokydo/themes": "workspace:*",

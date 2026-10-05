@@ -1,5 +1,5 @@
 {
-  "name": "@bokydo/shared",
+  "name": "@bokydo/nlp",
   "version": "0.0.0",
   "private": true,
   "license": "AGPL-3.0-only",
@@ -15,10 +15,5 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@bokydo/nlp": "workspace:*",
-    "@bokydo/themes": "workspace:*",
-    "zod": "^4.6.5"
   }
 }

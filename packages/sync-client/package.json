@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@bokydo/nlp": "workspace:*",
     "@bokydo/shared": "workspace:*"
   }
 }

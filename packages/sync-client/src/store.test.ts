@@ -203,6 +203,37 @@ describe('SyncStore', () => {
     expect(store.state.tasks.has('child')).toBe(false);
   });
 
+  it('rolls recurring tasks forward instead of completing them', async () => {
+    const { store } = await ready();
+    store.enqueue({
+      type: 'task_add',
+      uuid: uuid(),
+      args: {
+        id: 'daily',
+        content: 'Stretch',
+        due: {
+          date: '2000-01-01',
+          time: null,
+          timezone: null,
+          string: 'every day',
+          recurrence: { rrule: 'FREQ=DAILY', anchor: 'scheduled' },
+        },
+      },
+    });
+    store.enqueue({
+      type: 'task_add',
+      uuid: uuid(),
+      args: { id: 'step', parentId: 'daily', content: 'Warm up' },
+    });
+    store.enqueue({ type: 'task_complete', uuid: uuid(), args: { id: 'step' } });
+    store.enqueue({ type: 'task_complete', uuid: uuid(), args: { id: 'daily' } });
+    const daily = store.state.tasks.get('daily')!;
+    expect(daily.isCompleted).toBe(false);
+    expect(daily.due!.date > '2000-01-01').toBe(true);
+    expect(daily.due!.string).toBe('every day');
+    expect(store.state.tasks.get('step')!.isCompleted).toBe(false);
+  });
+
   it('notifies subscribers', async () => {
     const { store } = await ready();
     const listener = vi.fn();

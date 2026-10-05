@@ -10,6 +10,7 @@ export default defineConfig({
       '@bokydo/shared': pkg('shared'),
       '@bokydo/themes': pkg('themes'),
       '@bokydo/sync-client': pkg('sync-client'),
+      '@bokydo/nlp': pkg('nlp'),
     },
   },
 });

@@ -264,7 +264,7 @@ function GeneralSettings({
           />
           <Checkbox
             label="Smart date recognition"
-            hint="Turn phrases like “tomorrow 5pm” in task names into due dates (arrives with W3)."
+            hint="Turn phrases like “tomorrow 5pm” or “every mon” in quick add into due dates."
             checked={prefs.smartDateRecognition}
             onChange={(e) => update({ smartDateRecognition: e.target.checked })}
           />

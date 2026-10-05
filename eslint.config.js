@@ -1,6 +1,7 @@
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
 import reactHooks from 'eslint-plugin-react-hooks';
+import regexp from 'eslint-plugin-regexp';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
@@ -19,6 +20,18 @@ export default tseslint.config(
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
+    },
+  },
+  {
+    // ReDoS gate: no regex may backtrack super-linearly on hostile input.
+    plugins: { regexp },
+    rules: {
+      'regexp/no-super-linear-backtracking': 'error',
+      'regexp/no-super-linear-move': 'error',
+      'regexp/no-dupe-disjunctions': 'error',
+      'regexp/no-misleading-capturing-group': 'error',
+      'regexp/no-useless-quantifier': 'error',
+      'regexp/no-empty-alternative': 'error',
     },
   },
   {

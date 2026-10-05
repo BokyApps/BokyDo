@@ -132,7 +132,15 @@ check "replayed command is idempotent" \
 CMD2=$(cat /proc/sys/kernel/random/uuid)
 r=$(api POST /api/v1/sync "{\"commands\":[{\"type\":\"user_update_preferences\",\"uuid\":\"$CMD2\",\"args\":{\"timezone\":\"Asia/Phnom_Penh\",\"appearance\":{\"darkTheme\":\"catppuccin-mocha\"}}}]}")
 check "preferences saved and synced" bash -c "jq -e '.user.preferences.timezone == \"Asia/Phnom_Penh\" and .user.preferences.appearance.darkTheme == \"catppuccin-mocha\"' <<<'$(body_of "$r")'"
-check "full-text search finds the task" bash -c "jq -e '.tasks[0].content == \"Smoke task\"' <<<'$(body_of "$(api GET '/api/v1/search?q=smok')")'"
+# W3: a recurring task rolls forward on completion; rules outside the supported subset are refused.
+REC_ID=$(cat /proc/sys/kernel/random/uuid)
+DUE='{"date":"2020-01-06","time":null,"timezone":null,"string":"every mon","recurrence":{"rrule":"FREQ=WEEKLY;BYDAY=MO","anchor":"scheduled"}}'
+r=$(api POST /api/v1/sync "{\"commands\":[{\"type\":\"task_add\",\"uuid\":\"$(cat /proc/sys/kernel/random/uuid)\",\"args\":{\"id\":\"$REC_ID\",\"content\":\"Weekly smoke\",\"due\":$DUE}},{\"type\":\"task_complete\",\"uuid\":\"$(cat /proc/sys/kernel/random/uuid)\",\"args\":{\"id\":\"$REC_ID\"}}]}")
+check "recurring task moves to its next Monday and stays open" bash -c "jq -e '.tasks[] | select(.id==\"$REC_ID\") | (.isCompleted == false) and (.due.date > \"2020-01-06\")' <<<'$(body_of "$r")'"
+BAD=$(cat /proc/sys/kernel/random/uuid)
+r=$(api POST /api/v1/sync "{\"commands\":[{\"type\":\"task_add\",\"uuid\":\"$BAD\",\"args\":{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"content\":\"x\",\"due\":{\"date\":\"2026-01-01\",\"time\":null,\"timezone\":null,\"string\":\"x\",\"recurrence\":{\"rrule\":\"FREQ=SECONDLY\",\"anchor\":\"scheduled\"}}}}]}")
+check "unsupported recurrence rule refused" bash -c "jq -e '.results[\"$BAD\"].error == \"invalid\"' <<<'$(body_of "$r")'"
+check "full-text search finds the task" bash -c "jq -e 'any(.tasks[]; .content == \"Smoke task\")' <<<'$(body_of "$(api GET '/api/v1/search?q=smok')")'"
 check "search treats query syntax as text" test "$(status_of "$(api GET "/api/v1/search?q=%27%20%7C%20%21x%3A*")")" = 200
 check "completed-tasks endpoint answers" test "$(status_of "$(api GET /api/v1/tasks/completed)")" = 200
 check "event stream opens for a signed-in user" \

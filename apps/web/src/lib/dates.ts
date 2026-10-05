@@ -113,19 +113,33 @@ export function describeDue(
   return describeDate(due.date, due.time, today, prefs);
 }
 
+/**
+ * A one-off due date. Its stored `string` is absolute ("6 Oct 17:00"), never relative: "Tomorrow"
+ * would be wrong by the next day. Views show `dueLabel` instead.
+ */
 export function makeDue(
   date: string,
   time: string | null,
   today: string,
   prefs: Pick<Preferences, 'timeFormat' | 'dateFormat'>,
 ): Due {
+  const day = formatDate(date, prefs, date.slice(0, 4) !== today.slice(0, 4));
   return {
     date,
     time,
     timezone: null,
-    string: describeDate(date, time, today, prefs).label,
+    string: time ? `${day} ${formatTime(time, prefs)}` : day,
     recurrence: null,
   };
+}
+
+/** What to show for a due date: the phrase for recurring ones ("every mon"), else relative. */
+export function dueLabel(
+  due: Due,
+  today: string,
+  prefs: Pick<Preferences, 'timeFormat' | 'dateFormat'>,
+): string {
+  return due.recurrence ? due.string : describeDue(due, today, prefs).label;
 }
 
 export const TONE_CLASS: Record<DueTone, string> = {

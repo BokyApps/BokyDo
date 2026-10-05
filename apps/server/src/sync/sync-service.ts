@@ -80,7 +80,12 @@ export class SyncService {
   constructor(
     private readonly db: Database,
     private readonly onCommitted: (affected: Affected) => void = () => undefined,
+    private readonly defaultTimeZone: () => string = () => 'UTC',
   ) {}
+
+  private context(tx: Tx, userId: string, changes: ChangeRecorder): CommandContext {
+    return { tx, userId, now: new Date(), changes, defaultTimeZone: this.defaultTimeZone() };
+  }
 
   async sync(userId: string, request: SyncRequest): Promise<SyncResponse> {
     const results: Record<string, CommandResult> = {};
@@ -139,7 +144,7 @@ export class SyncService {
     try {
       // Savepoint: a failing command rolls back its own partial writes only.
       await tx.transaction(async (sp) => {
-        await HANDLERS[type]({ tx: sp, userId, now: new Date(), changes: recorder }, args as never);
+        await HANDLERS[type](this.context(sp, userId, recorder), args as never);
       });
       return { ok: true };
     } catch (err) {
@@ -162,7 +167,7 @@ export class SyncService {
     const recorder = new ChangeRecorder();
     await this.db.transaction(async (tx) => {
       await tx.execute(WRITE_LOCK);
-      await h.ensureInbox({ tx, userId, now: new Date(), changes: recorder });
+      await h.ensureInbox(this.context(tx, userId, recorder));
       await recorder.flush(tx);
     });
   }

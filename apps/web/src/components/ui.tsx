@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -365,11 +366,30 @@ export function Popover({
     };
   });
   const close = () => setOpen(false);
+  // Keep the panel on screen: open towards whichever side has room (CSSOM, so CSP-safe).
+  const panel = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = panel.current;
+    const anchor = ref.current?.getBoundingClientRect();
+    if (!open || !el || !anchor) return;
+    const { width, height } = el.getBoundingClientRect();
+    const roomRight = anchor.left + width <= window.innerWidth - 8;
+    const roomLeft = anchor.right - width >= 8;
+    const right = align === 'right' ? roomLeft || !roomRight : !roomRight && roomLeft;
+    el.style.left = right ? 'auto' : '0';
+    el.style.right = right ? '0' : 'auto';
+    if (anchor.bottom + height > window.innerHeight - 8 && anchor.top - height >= 8) {
+      el.style.top = 'auto';
+      el.style.bottom = '100%';
+      el.style.marginBottom = '0.25rem';
+    }
+  }, [open, align]);
   return (
     <div ref={ref} className="relative inline-block">
       {trigger({ onClick: () => setOpen(!open), 'aria-expanded': open, 'aria-haspopup': 'dialog' })}
       {open && (
         <div
+          ref={panel}
           role="dialog"
           className={`absolute z-40 mt-1 min-w-48 rounded-xl border border-line bg-surface p-1 text-sm shadow-lg ${align === 'right' ? 'right-0' : 'left-0'} ${panelClassName}`}
         >

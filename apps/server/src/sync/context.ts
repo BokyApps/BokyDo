@@ -65,6 +65,8 @@ export interface CommandContext {
   userId: string;
   now: Date;
   changes: ChangeRecorder;
+  /** The instance default, for users who haven't chosen a time zone. */
+  defaultTimeZone: string;
 }
 
 /** Per-instance abuse limits. Generous for real use; they bound storage and cascade sizes. */

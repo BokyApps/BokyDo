@@ -1,6 +1,7 @@
 import { generateKeyBetween, type CommandArgs, type Due, type Task } from '@bokydo/shared';
 import { useMemo } from 'react';
 import { useConfirm } from './confirm.js';
+import { describeDue, todayIn } from './dates.js';
 import { newId, useSend, useStore } from './sync.js';
 import { useToast } from './toasts.js';
 import { byOrder, childrenOf } from './views.js';
@@ -28,12 +29,26 @@ export function useTaskActions() {
 
       complete: (tasks: Task[]) => {
         for (const t of tasks) send('task_complete', { id: t.id });
+        // A recurring task moved to its next date instead; undo puts the date back.
+        const next = tasks.length === 1 && tasks[0] ? store.state.tasks.get(tasks[0].id) : null;
+        const prefs = store.state.user?.preferences;
+        const rolled = next?.due?.recurrence && !next.isCompleted ? next.due : null;
+        const zone = prefs?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         toast({
           message:
-            tasks.length === 1 ? 'Task completed' : `${plural(tasks.length, 'task')} completed`,
+            rolled && prefs
+              ? `Done. Next: ${describeDue(rolled, todayIn(zone), prefs).label}`
+              : tasks.length === 1
+                ? 'Task completed'
+                : `${plural(tasks.length, 'task')} completed`,
           action: {
             label: 'Undo',
-            onClick: () => tasks.forEach((t) => send('task_uncomplete', { id: t.id })),
+            onClick: () =>
+              tasks.forEach((t) =>
+                store.state.tasks.get(t.id)?.isCompleted
+                  ? send('task_uncomplete', { id: t.id })
+                  : send('task_update', { id: t.id, due: t.due }),
+              ),
           },
         });
       },

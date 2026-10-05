@@ -60,7 +60,11 @@ function TaskDetail({ task }: { task: Task }) {
   }
 
   const saveContent = () => {
-    const v = content.replace(/\s*\n\s*/g, ' ').trim();
+    const v = content
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .join(' ');
     if (v && v !== task.content) actions.update(task.id, { content: v });
     else setContent(task.content);
   };
