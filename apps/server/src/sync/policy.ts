@@ -31,7 +31,7 @@ export type ProjectRow = typeof projects.$inferSelect;
 
 /** The live project and the user's role in it, or null if the user can't see it. */
 export async function projectAccess(
-  tx: Tx,
+  tx: Pick<Tx, 'select'>,
   userId: string,
   projectId: string,
 ): Promise<{ project: ProjectRow; role: Role; isFavorite: boolean } | null> {

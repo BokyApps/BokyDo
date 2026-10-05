@@ -480,3 +480,30 @@ export const activity = pgTable(
     index('activity_task_idx').on(t.taskId, t.id),
   ],
 );
+
+/**
+ * Files attached to comments. Stored on the data volume under their ID (never under the
+ * uploaded name); `contentType` comes from the file's own bytes, not from the uploader.
+ * An upload is pending (no comment) until a comment claims it; unclaimed ones are purged.
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: uuid('id').primaryKey(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    commentId: uuid('comment_id').references(() => comments.id, { onDelete: 'set null' }),
+    uploaderId: uuid('uploader_id').references(() => users.id, { onDelete: 'set null' }),
+    filename: text('filename').notNull(),
+    contentType: text('content_type').notNull(),
+    size: integer('size').notNull(),
+    sha256: text('sha256').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('attachments_project_idx').on(t.projectId),
+    index('attachments_comment_idx').on(t.commentId),
+  ],
+);

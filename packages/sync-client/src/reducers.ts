@@ -249,6 +249,8 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
         createdAt: now,
         updatedAt: now,
         reactions: {},
+        // Filled in by the server's response (names and types come from the uploads).
+        attachments: [],
       });
       return;
     }

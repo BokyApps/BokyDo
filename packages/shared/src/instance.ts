@@ -14,6 +14,8 @@ export const instanceStatusSchema = z.object({
   emailEnabled: z.boolean(),
   /** Passkeys need the public URL to be set and HTTPS (or localhost). */
   passkeysAvailable: z.boolean(),
+  /** Largest attachment in MB (0: uploads are off). */
+  attachmentMaxMb: z.number().int(),
 });
 export type InstanceStatus = z.infer<typeof instanceStatusSchema>;
 

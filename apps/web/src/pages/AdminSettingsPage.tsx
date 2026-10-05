@@ -63,6 +63,7 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
   const [hops, setHops] = useState(String(settings['instance.trustedProxyHops']));
   const [timezone, setTimezone] = useState(settings['instance.defaultTimezone']);
   const [weekStart, setWeekStart] = useState<string>(settings['instance.weekStart']);
+  const [maxMb, setMaxMb] = useState(String(settings['attachments.maxSizeMb']));
   const normalized = normalizePublicUrl(publicUrl);
   const movesAway = normalized !== null && normalized !== window.location.origin;
 
@@ -74,6 +75,7 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
       'instance.trustedProxyHops': Number(hops),
       'instance.defaultTimezone': timezone,
       'instance.weekStart': weekStart as 'monday' | 'sunday' | 'saturday',
+      'attachments.maxSizeMb': Number(maxMb),
     });
   };
 
@@ -122,6 +124,15 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
           ]}
         />
       </div>
+      <TextField
+        label="Largest attachment (MB)"
+        type="number"
+        min={0}
+        max={100}
+        value={maxMb}
+        onChange={(e) => setMaxMb(e.target.value)}
+        hint="Files are stored on this server's data volume. 0 turns uploads off."
+      />
       <SaveRow save={save} />
     </form>
   );

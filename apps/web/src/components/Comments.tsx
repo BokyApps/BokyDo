@@ -1,7 +1,14 @@
-import { REACTIONS, type ActivityEntry, type Comment } from '@bokydo/shared';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import {
+  MAX_ATTACHMENTS_PER_COMMENT,
+  REACTIONS,
+  type ActivityEntry,
+  type AttachmentInfo,
+  type Comment,
+} from '@bokydo/shared';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState, type KeyboardEvent } from 'react';
-import { api } from '../lib/api.js';
+import { ApiError, api, uploadFile } from '../lib/api.js';
+import { instanceQuery } from '../lib/queries.js';
 import { useConfirm } from '../lib/confirm.js';
 import { newId, useSend, useSyncState } from '../lib/sync.js';
 import { Markdown } from './Markdown.js';
@@ -131,8 +138,9 @@ function CommentItem({
             </div>
           </div>
         ) : (
-          <Markdown text={comment.content} className="text-sm" />
+          comment.content.trim() && <Markdown text={comment.content} className="text-sm" />
         )}
+        {comment.attachments.length > 0 && <Attachments files={comment.attachments} />}
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {reactions.map(([emoji, who]) => (
             <button
@@ -187,10 +195,57 @@ function CommentItem({
   );
 }
 
-/** Comment box with @mention suggestions from the project's members. */
+const size = (n: number) =>
+  n < 1024
+    ? `${n} B`
+    : n < 1024 ** 2
+      ? `${Math.round(n / 1024)} KB`
+      : `${(n / 1024 ** 2).toFixed(1)} MB`;
+
+/** Images as thumbnails, everything else as downloads (always served as attachments). */
+function Attachments({ files }: { files: AttachmentInfo[] }) {
+  return (
+    <ul className="mt-1 flex flex-wrap gap-2">
+      {files.map((f) => (
+        <li key={f.id}>
+          {f.contentType.startsWith('image/') ? (
+            <a
+              href={`/api/v1/attachments/${f.id}?inline=1`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={f.filename}
+            >
+              <img
+                src={`/api/v1/attachments/${f.id}?inline=1`}
+                alt={f.filename}
+                loading="lazy"
+                className="max-h-32 max-w-48 rounded-md border border-line object-cover"
+              />
+            </a>
+          ) : (
+            <a
+              href={`/api/v1/attachments/${f.id}`}
+              download={f.filename}
+              className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-xs hover:bg-surface-alt"
+            >
+              📎 {f.filename} <span className="text-muted">{size(f.size)}</span>
+            </a>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Comment box with @mention suggestions from the project's members, and file uploads. */
 function Composer({ projectId, taskId }: { projectId: string; taskId: string | null }) {
   const send = useSend();
   const members = useMembers(projectId);
+  const instance = useQuery(instanceQuery);
+  const maxMb = instance.data?.attachmentMaxMb ?? 0;
+  const [files, setFiles] = useState<AttachmentInfo[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
   const before = text.slice(0, caret);
@@ -200,14 +255,45 @@ function Composer({ projectId, taskId }: { projectId: string; taskId: string | n
         .filter((m) => m.username.toLowerCase().startsWith((mention[1] ?? '').toLowerCase()))
         .slice(0, 6)
     : [];
+  const attach = async (list: FileList | null) => {
+    setUploadError(null);
+    for (const file of [...(list ?? [])]) {
+      if (files.length + uploading >= MAX_ATTACHMENTS_PER_COMMENT) {
+        setUploadError(`At most ${MAX_ATTACHMENTS_PER_COMMENT} files per comment.`);
+        break;
+      }
+      if (file.size > maxMb * 1024 * 1024) {
+        setUploadError(`“${file.name}” is larger than ${maxMb} MB.`);
+        continue;
+      }
+      setUploading((n) => n + 1);
+      try {
+        const info = await uploadFile<AttachmentInfo>(
+          `/api/v1/projects/${projectId}/attachments`,
+          file,
+        );
+        setFiles((f) => [...f, info]);
+      } catch (err) {
+        setUploadError(
+          err instanceof ApiError && err.status === 413
+            ? `“${file.name}” is too large.`
+            : `“${file.name}” could not be uploaded.`,
+        );
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  };
   const submit = () => {
-    if (!text.trim()) return;
+    if ((!text.trim() && files.length === 0) || uploading > 0) return;
     send('comment_add', {
       id: newId(),
       content: text,
       ...(taskId ? { taskId } : { projectId }),
+      ...(files.length ? { attachmentIds: files.map((f) => f.id) } : {}),
     });
     setText('');
+    setFiles([]);
   };
   const pick = (username: string) => {
     const start = caret - (mention?.[1]?.length ?? 0);
@@ -261,8 +347,45 @@ function Composer({ projectId, taskId }: { projectId: string; taskId: string | n
           ))}
         </ul>
       )}
-      <div className="flex justify-end">
-        <Button onClick={submit} disabled={!text.trim()}>
+      {files.length > 0 && (
+        <ul className="flex flex-wrap gap-1 text-xs">
+          {files.map((f) => (
+            <li
+              key={f.id}
+              className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5"
+            >
+              📎 {f.filename}
+              <button
+                type="button"
+                aria-label={`Remove ${f.filename}`}
+                className="text-muted hover:text-fg"
+                onClick={() => setFiles((all) => all.filter((x) => x.id !== f.id))}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {uploadError && <p className="text-xs text-danger">{uploadError}</p>}
+      <div className="flex items-center justify-between gap-2">
+        {maxMb > 0 ? (
+          <label className="cursor-pointer rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt">
+            📎 Attach{uploading > 0 ? ` (uploading ${uploading}…)` : ''}
+            <input
+              type="file"
+              multiple
+              className="sr-only"
+              onChange={(e) => {
+                void attach(e.target.files);
+                e.target.value = '';
+              }}
+            />
+          </label>
+        ) : (
+          <span />
+        )}
+        <Button onClick={submit} disabled={(!text.trim() && files.length === 0) || uploading > 0}>
           Comment
         </Button>
       </div>

@@ -41,6 +41,27 @@ export async function api<T>(
   return data as T;
 }
 
+/** Upload a file as raw bytes (it streams to disk on the server; no multipart). */
+export async function uploadFile<T>(path: string, file: File): Promise<T> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/octet-stream',
+    'x-filename': encodeURIComponent(file.name),
+  };
+  if (csrfToken) headers[CSRF_HEADER] = csrfToken;
+  const res = await fetch(path, {
+    method: 'POST',
+    headers,
+    body: file,
+    credentials: 'same-origin',
+  });
+  const data: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = data as ApiErrorBody | null;
+    throw new ApiError(res.status, err?.error ?? 'error', err);
+  }
+  return data as T;
+}
+
 export function clearCsrfToken(): void {
   csrfToken = null;
 }

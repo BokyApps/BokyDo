@@ -1,7 +1,7 @@
 import type { CommandArgs } from '@bokydo/shared';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, inArray, isNull } from 'drizzle-orm';
 import { logActivity } from '../../activity/log.js';
-import { commentReactions, comments, tasks } from '../../db/schema.js';
+import { attachments, commentReactions, comments, tasks } from '../../db/schema.js';
 import { fail, LIMITS, type CommandContext } from '../context.js';
 import { can, projectAccess, requireProject } from '../policy.js';
 
@@ -47,6 +47,23 @@ export async function commentAdd(
     createdAt: ctx.now,
     updatedAt: ctx.now,
   });
+  if (args.attachmentIds?.length) {
+    // Claim the user's own pending uploads to this project; anything else is refused.
+    const claimed = await ctx.tx
+      .update(attachments)
+      .set({ commentId: args.id })
+      .where(
+        and(
+          inArray(attachments.id, args.attachmentIds),
+          eq(attachments.projectId, project.id),
+          eq(attachments.uploaderId, ctx.userId),
+          isNull(attachments.commentId),
+          isNull(attachments.deletedAt),
+        ),
+      )
+      .returning({ id: attachments.id });
+    if (claimed.length !== new Set(args.attachmentIds).size) fail('invalid', 'unknown attachment');
+  }
   ctx.changes.inProject('comments', args.id, project.id);
   await logActivity(ctx.tx, ctx.userId, {
     projectId: project.id,
@@ -94,6 +111,11 @@ export async function commentDelete(
     .update(comments)
     .set({ deletedAt: ctx.now, updatedAt: ctx.now })
     .where(eq(comments.id, comment.id));
+  // Files go with the comment (removed from disk by the hourly purge).
+  await ctx.tx
+    .update(attachments)
+    .set({ deletedAt: ctx.now })
+    .where(and(eq(attachments.commentId, comment.id), isNull(attachments.deletedAt)));
   ctx.changes.inProject('comments', comment.id, comment.projectId);
 }
 

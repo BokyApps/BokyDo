@@ -26,6 +26,7 @@ async function main(): Promise<void> {
   const app = await buildApp({
     db: dbHandle,
     secrets,
+    dataDir: config.dataDir,
     webRoot: config.webRoot,
     logger: {
       level: config.logLevel,

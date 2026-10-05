@@ -26,6 +26,8 @@ import { registerSyncRoutes } from './sync/routes.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
+import { registerAttachmentRoutes } from './attachments/routes.js';
+import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { VERSION } from './version.js';
 
@@ -33,6 +35,8 @@ export interface AppDeps {
   db: DbHandle;
   secrets: AppSecrets;
   webRoot: string | null;
+  /** The data volume (attachments live under it). */
+  dataDir: string;
   logger?: FastifyServerOptions['logger'];
   /** Outbound fetch (breached-password check); injectable for tests. */
   fetchImpl?: typeof fetch;
@@ -46,6 +50,8 @@ export interface AppServices {
   events: EventBus;
   flows: FlowStore;
   tokens: UserTokenStore;
+  /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
+  purgeAttachments?: () => Promise<void>;
 }
 
 declare module 'fastify' {
@@ -123,6 +129,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       registrationOpen: settings.get('access.registrationMode') === 'open',
       emailEnabled: notifier.canEmail,
       passkeysAvailable: relyingParty(settings) !== null,
+      attachmentMaxMb: settings.get('attachments.maxSizeMb'),
     }),
   );
 
@@ -147,6 +154,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
   registerInviteRoutes(app, { db, sync, notifier, sessionKey: deps.secrets.sessionKey });
   registerActivityRoutes(app, db);
+  const attachmentStore = new AttachmentStore(deps.dataDir);
+  services.purgeAttachments = await registerAttachmentRoutes(app, {
+    db,
+    settings,
+    store: attachmentStore,
+  });
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);
   app.setNotFoundHandler((req, reply) => {

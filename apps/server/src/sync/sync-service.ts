@@ -12,6 +12,7 @@ import {
 import { and, eq, gt, inArray, isNotNull, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
+  attachments,
   changes,
   commentReactions,
   comments,
@@ -474,7 +475,35 @@ export class SyncService {
       (map[emoji] ??= []).push(r.userId);
       byComment.set(r.commentId, map);
     }
-    return rows.map((r) => commentToWire(r, byComment.get(r.id) ?? {}));
+    const files = await tx
+      .select({
+        commentId: attachments.commentId,
+        id: attachments.id,
+        filename: attachments.filename,
+        contentType: attachments.contentType,
+        size: attachments.size,
+      })
+      .from(attachments)
+      .where(
+        and(
+          inArray(
+            attachments.commentId,
+            rows.map((r) => r.id),
+          ),
+          isNull(attachments.deletedAt),
+        ),
+      )
+      .orderBy(attachments.createdAt);
+    const filesByComment = new Map<string, Comment['attachments']>();
+    for (const { commentId, ...file } of files) {
+      if (!commentId) continue;
+      const list = filesByComment.get(commentId) ?? [];
+      list.push(file);
+      filesByComment.set(commentId, list);
+    }
+    return rows.map((r) =>
+      commentToWire(r, byComment.get(r.id) ?? {}, filesByComment.get(r.id) ?? []),
+    );
   }
 
   private userLabels(tx: Tx, userId: string) {

@@ -16,6 +16,7 @@ export const TEST_ORIGIN = `http://${TEST_HOST}`;
 export interface TestApp {
   app: FastifyInstance;
   db: DbHandle;
+  dataDir: string;
   close(): Promise<void>;
 }
 
@@ -23,16 +24,19 @@ export async function testApp(
   opts: { webRoot?: string; fetchImpl?: typeof fetch } = {},
 ): Promise<TestApp> {
   const db = await freshDb();
-  const secrets = await ensureAppSecrets(await mkdtemp(path.join(tmpdir(), 'bokydo-test-')));
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'bokydo-test-'));
+  const secrets = await ensureAppSecrets(dataDir);
   const app = await buildApp({
     db,
     secrets,
+    dataDir,
     webRoot: opts.webRoot ?? null,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
   });
   return {
     app,
     db,
+    dataDir,
     close: async () => {
       await app.close();
       await db.close();

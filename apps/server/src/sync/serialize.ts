@@ -71,6 +71,7 @@ export const filterToWire = (f: Row<typeof filters>): Filter => ({
 export const commentToWire = (
   c: Row<typeof comments>,
   reactions: Comment['reactions'],
+  attachments: Comment['attachments'],
 ): Comment => ({
   id: c.id,
   projectId: c.projectId,
@@ -80,4 +81,5 @@ export const commentToWire = (
   createdAt: c.createdAt.toISOString(),
   updatedAt: c.updatedAt.toISOString(),
   reactions,
+  attachments,
 });

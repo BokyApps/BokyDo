@@ -202,6 +202,16 @@ export const REACTIONS = [
 ] as const;
 export const reactionSchema = z.enum(REACTIONS);
 
+export interface AttachmentInfo {
+  id: string;
+  filename: string;
+  /** Detected from the file's bytes on upload. */
+  contentType: string;
+  size: number;
+}
+
+export const MAX_ATTACHMENTS_PER_COMMENT = 10;
+
 export interface Comment {
   id: string;
   projectId: string;
@@ -214,6 +224,7 @@ export interface Comment {
   updatedAt: string;
   /** emoji → who reacted. */
   reactions: Partial<Record<(typeof REACTIONS)[number], string[]>>;
+  attachments: AttachmentInfo[];
 }
 
 export const ENTITY_TYPES = [
@@ -360,10 +371,16 @@ export const commandArgs = {
       /** A task comment; or `projectId` alone for a project comment. */
       taskId: idSchema.optional(),
       projectId: idSchema.optional(),
-      content: text(15_000).refine((v) => v.trim().length > 0, 'Comment is empty'),
+      content: text(15_000),
+      /** Files uploaded beforehand (by the same user, to the same project). */
+      attachmentIds: z.array(idSchema).max(MAX_ATTACHMENTS_PER_COMMENT).optional(),
     })
     .strict()
-    .refine((v) => Boolean(v.taskId) !== Boolean(v.projectId), 'Give taskId or projectId'),
+    .refine((v) => Boolean(v.taskId) !== Boolean(v.projectId), 'Give taskId or projectId')
+    .refine(
+      (v) => v.content.trim().length > 0 || (v.attachmentIds?.length ?? 0) > 0,
+      'Comment is empty',
+    ),
   comment_update: z
     .object({
       id: idSchema,

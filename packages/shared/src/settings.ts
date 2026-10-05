@@ -76,6 +76,9 @@ export const settingDefinitions = {
     secret: false,
   },
 
+  /** Largest file that can be attached to a comment (0 turns uploads off). */
+  'attachments.maxSizeMb': { schema: z.number().int().min(0).max(100), default: 25, secret: false },
+
   'access.registrationMode': {
     schema: z.enum(['closed', 'invite', 'open']),
     default: 'invite',

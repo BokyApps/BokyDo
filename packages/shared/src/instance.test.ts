@@ -11,6 +11,7 @@ describe('instanceStatusSchema', () => {
       registrationOpen: false,
       emailEnabled: false,
       passkeysAvailable: false,
+      attachmentMaxMb: 25,
       adminPassphrase: 'nope',
     });
     expect(result.success).toBe(false);
