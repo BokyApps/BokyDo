@@ -6,12 +6,15 @@ import {
   type CommandType,
   type EntityType,
   type SyncRequest,
+  type Comment,
   type SyncResponse,
 } from '@bokydo/shared';
-import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
   changes,
+  commentReactions,
+  comments,
   filters,
   labels,
   processedCommands,
@@ -33,6 +36,7 @@ import { pendingInvites } from '../projects/invites.js';
 import * as h from './handlers/index.js';
 import { visibleProjects, type VisibleProjects } from './policy.js';
 import {
+  commentToWire,
   filterToWire,
   labelToWire,
   projectToWire,
@@ -73,6 +77,10 @@ const HANDLERS: Record<CommandType, Handler> = {
   project_member_update: h.projectMemberUpdate,
   project_member_remove: h.projectMemberRemove,
   project_transfer: h.projectTransfer,
+  comment_add: h.commentAdd,
+  comment_update: h.commentUpdate,
+  comment_delete: h.commentDelete,
+  reaction_toggle: h.reactionToggle,
 };
 
 export interface Affected {
@@ -290,12 +298,22 @@ export class SyncService {
           this.userFilters(tx, userId),
         ])
       : [[], [], [], await this.userLabels(tx, userId), await this.userFilters(tx, userId)];
+    const taskIds = new Set(t.map((x) => x.id));
+    const c = projectIds.length
+      ? (
+          await this.loadComments(
+            tx,
+            and(inArray(comments.projectId, projectIds), isNull(comments.deletedAt)),
+          )
+        ).filter((x) => x.taskId === null || taskIds.has(x.taskId))
+      : [];
     return {
       projects: p.map((row) => projectToWire(row, member(visible, row.id))),
       sections: s.map(sectionToWire),
       tasks: t.map(taskToWire),
       labels: l.map(labelToWire),
       filters: f.map(filterToWire),
+      comments: c,
       removed: emptyRemoved(),
     };
   }
@@ -328,6 +346,7 @@ export class SyncService {
       tasks: new Set(),
       labels: new Set(),
       filters: new Set(),
+      comments: new Set(),
     };
     const granted: string[] = [];
     for (const m of marked) {
@@ -337,6 +356,16 @@ export class SyncService {
     }
 
     const isVisible = (projectId: string) => visible.has(projectId);
+    const deletedComments = new Set(
+      ids.comments.size
+        ? (
+            await tx
+              .select({ id: comments.id })
+              .from(comments)
+              .where(and(inArray(comments.id, [...ids.comments]), isNotNull(comments.deletedAt)))
+          ).map((r) => r.id)
+        : [],
+    );
     const load = <T>(set: Set<string>, fn: (list: string[]) => Promise<T[]>) =>
       set.size ? fn([...set]) : Promise.resolve([]);
     const [p, s, t, l, f] = await Promise.all([
@@ -361,7 +390,13 @@ export class SyncService {
       ),
     ]);
 
+    const c = ids.comments.size
+      ? (await this.loadComments(tx, inArray(comments.id, [...ids.comments]))).filter(
+          (x) => isVisible(x.projectId) && !deletedComments.has(x.id),
+        )
+      : [];
     const out = {
+      comments: c,
       projects: p
         .filter((r) => isVisible(r.id) && !r.deletedAt)
         .map((r) => projectToWire(r, member(visible, r.id))),
@@ -397,6 +432,15 @@ export class SyncService {
       );
       out.sections.push(...gs.map(sectionToWire));
       out.tasks.push(...gt.map(taskToWire));
+      const grantedTasks = new Set(gt.map((x) => x.id));
+      out.comments.push(
+        ...(
+          await this.loadComments(
+            tx,
+            and(inArray(comments.projectId, newlyVisible), isNull(comments.deletedAt)),
+          )
+        ).filter((x) => x.taskId === null || grantedTasks.has(x.taskId)),
+      );
     }
     // Revoked projects: tell the client to drop them.
     for (const id of granted) if (!isVisible(id)) ids.projects.add(id);
@@ -408,6 +452,29 @@ export class SyncService {
       removed[type] = [...ids[type]].filter((id) => !kept.has(id));
     }
     return { ...out, removed };
+  }
+
+  /** Comments with their reactions folded in. */
+  private async loadComments(tx: Tx, where: SQL | undefined): Promise<Comment[]> {
+    const rows = await tx.select().from(comments).where(where);
+    if (rows.length === 0) return [];
+    const reactions = await tx
+      .select()
+      .from(commentReactions)
+      .where(
+        inArray(
+          commentReactions.commentId,
+          rows.map((r) => r.id),
+        ),
+      );
+    const byComment = new Map<string, Comment['reactions']>();
+    for (const r of reactions) {
+      const map = byComment.get(r.commentId) ?? {};
+      const emoji = r.emoji as keyof Comment['reactions'];
+      (map[emoji] ??= []).push(r.userId);
+      byComment.set(r.commentId, map);
+    }
+    return rows.map((r) => commentToWire(r, byComment.get(r.id) ?? {}));
   }
 
   private userLabels(tx: Tx, userId: string) {
@@ -432,5 +499,5 @@ function member(visible: VisibleProjects, projectId: string) {
 }
 
 function emptyRemoved(): Record<EntityType, string[]> {
-  return { projects: [], sections: [], tasks: [], labels: [], filters: [] };
+  return { projects: [], sections: [], tasks: [], labels: [], filters: [], comments: [] };
 }

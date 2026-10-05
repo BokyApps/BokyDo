@@ -25,6 +25,7 @@ import { EventBus } from './sync/events.js';
 import { registerSyncRoutes } from './sync/routes.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
+import { registerActivityRoutes } from './activity/routes.js';
 import { SyncService } from './sync/sync-service.js';
 import { VERSION } from './version.js';
 
@@ -145,6 +146,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerSyncRoutes(app, { sync, events, sessions });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
   registerInviteRoutes(app, { db, sync, notifier, sessionKey: deps.secrets.sessionKey });
+  registerActivityRoutes(app, db);
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);
   app.setNotFoundHandler((req, reply) => {

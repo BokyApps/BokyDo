@@ -1,4 +1,5 @@
 import { AssigneePicker } from './Sharing.js';
+import { ActivityList, CommentThread } from './Comments.js';
 import type { Task } from '@bokydo/shared';
 import { useEffect, useState } from 'react';
 import { useTaskActions } from '../lib/actions.js';
@@ -156,6 +157,7 @@ function TaskDetail({ task }: { task: Task }) {
           </ul>
           {!readOnly && <InlineAdd defaults={{ parentId: task.id }} label="Add sub-task" />}
         </section>
+        <TaskTalk task={task} />
       </div>
 
       <aside className="w-full shrink-0 space-y-4 rounded-xl bg-surface-alt/60 p-4 text-sm md:w-64">
@@ -241,5 +243,35 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
       <div className="text-xs font-medium text-muted">{label}</div>
       <div>{children}</div>
     </div>
+  );
+}
+
+/** Comments and activity for one task. */
+function TaskTalk({ task }: { task: Task }) {
+  const state = useSyncState();
+  const [tab, setTab] = useState<'comments' | 'activity'>('comments');
+  const count = [...state.comments.values()].filter((c) => c.taskId === task.id).length;
+  return (
+    <section aria-label="Comments and activity" className="border-t border-line pt-3">
+      <div role="tablist" className="mb-3 flex gap-1 text-sm">
+        {(['comments', 'activity'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => setTab(t)}
+            className={`rounded-md px-3 py-1 ${tab === t ? 'bg-surface-alt font-medium' : 'text-muted hover:text-fg'}`}
+          >
+            {t === 'comments' ? `Comments${count ? ` (${count})` : ''}` : 'Activity'}
+          </button>
+        ))}
+      </div>
+      {tab === 'comments' ? (
+        <CommentThread projectId={task.projectId} taskId={task.id} />
+      ) : (
+        <ActivityList taskId={task.id} />
+      )}
+    </section>
   );
 }

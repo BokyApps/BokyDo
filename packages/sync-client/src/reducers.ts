@@ -236,6 +236,40 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
       d.filters.delete(command.args.id);
       return;
 
+    case 'comment_add': {
+      const a = command.args;
+      const projectId = a.projectId ?? (a.taskId ? d.tasks.get(a.taskId)?.projectId : undefined);
+      if (!projectId || !d.user) return;
+      d.comments.set(a.id, {
+        id: a.id,
+        projectId,
+        taskId: a.taskId ?? null,
+        userId: d.user.id,
+        content: a.content,
+        createdAt: now,
+        updatedAt: now,
+        reactions: {},
+      });
+      return;
+    }
+    case 'comment_update':
+      return patch(d.comments, command.args.id, { content: command.args.content, updatedAt: now });
+    case 'comment_delete':
+      d.comments.delete(command.args.id);
+      return;
+    case 'reaction_toggle': {
+      const c = d.comments.get(command.args.commentId);
+      const me = d.user?.id;
+      if (!c || !me) return;
+      const { emoji } = command.args;
+      const who = c.reactions[emoji] ?? [];
+      const next = who.includes(me) ? who.filter((x) => x !== me) : [...who, me];
+      const reactions = Object.fromEntries(
+        Object.entries({ ...c.reactions, [emoji]: next }).filter(([, who]) => who.length > 0),
+      );
+      d.comments.set(c.id, { ...c, reactions });
+      return;
+    }
     case 'project_member_update': {
       const a = command.args;
       d.members = d.members.map((m) =>

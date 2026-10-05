@@ -281,6 +281,7 @@ export const changes = pgTable(
         'project_access',
         'user',
         'invitations',
+        'comments',
       ],
     }).notNull(),
     entityId: uuid('entity_id').notNull(),
@@ -423,5 +424,59 @@ export const projectInvitations = pgTable(
   (t) => [
     index('project_invitations_project_idx').on(t.projectId),
     index('project_invitations_invitee_idx').on(t.inviteeId),
+  ],
+);
+
+/** Comments on a task (or, with no task, on the project itself). Markdown, rendered safely. */
+export const comments = pgTable(
+  'comments',
+  {
+    id: uuid('id').primaryKey(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    content: text('content').notNull(),
+    ...softDelete,
+  },
+  (t) => [index('comments_project_idx').on(t.projectId), index('comments_task_idx').on(t.taskId)],
+);
+
+export const commentReactions = pgTable(
+  'comment_reactions',
+  {
+    commentId: uuid('comment_id')
+      .notNull()
+      .references(() => comments.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.commentId, t.userId, t.emoji] })],
+);
+
+/**
+ * What happened in a project, for the activity log: who did what to which task. Readable by the
+ * project's members; `data` holds a snapshot (e.g. the task title) so entries outlive deletions.
+ */
+export const activity = pgTable(
+  'activity',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id'),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    type: text('type').notNull(),
+    data: jsonb('data').notNull().default({}),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('activity_project_idx').on(t.projectId, t.id),
+    index('activity_task_idx').on(t.taskId, t.id),
   ],
 );

@@ -47,7 +47,8 @@ function response(partial: Partial<SyncResponse> = {}): SyncResponse {
     tasks: [],
     labels: [],
     filters: [],
-    removed: { projects: [], sections: [], tasks: [], labels: [], filters: [] },
+    comments: [],
+    removed: { projects: [], sections: [], tasks: [], labels: [], filters: [], comments: [] },
     collaborators: [],
     members: [],
     invitations: [],
@@ -184,7 +185,14 @@ describe('SyncStore', () => {
     pull = store.pull();
     calls.at(-1)!.resolve(
       response({
-        removed: { projects: ['p2'], sections: [], tasks: [], labels: [], filters: [] },
+        removed: {
+          projects: ['p2'],
+          sections: [],
+          tasks: [],
+          labels: [],
+          filters: [],
+          comments: [],
+        },
       }),
     );
     await pull;

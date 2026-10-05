@@ -1,3 +1,4 @@
+import { logActivity } from '../../activity/log.js';
 import type { CommandArgs } from '@bokydo/shared';
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { newId } from '../../db/ids.js';
@@ -195,6 +196,10 @@ async function setArchived(ctx: CommandContext, id: string, isArchived: boolean)
     .set({ isArchived, updatedAt: ctx.now })
     .where(inArray(projects.id, ids));
   for (const pid of ids) ctx.changes.inProject('projects', pid, pid);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: id,
+    type: isArchived ? 'project_archived' : 'project_unarchived',
+  });
 }
 
 export const projectArchive = (ctx: CommandContext, args: CommandArgs<'project_archive'>) =>

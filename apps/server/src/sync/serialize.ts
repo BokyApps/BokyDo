@@ -1,5 +1,5 @@
-import type { Color, Filter, Label, Project, Role, Section, Task } from '@bokydo/shared';
-import type { filters, labels, projects, sections, tasks } from '../db/schema.js';
+import type { Color, Comment, Filter, Label, Project, Role, Section, Task } from '@bokydo/shared';
+import type { comments, filters, labels, projects, sections, tasks } from '../db/schema.js';
 
 type Row<T extends { $inferSelect: unknown }> = T['$inferSelect'];
 
@@ -66,4 +66,18 @@ export const filterToWire = (f: Row<typeof filters>): Filter => ({
   color: f.color as Color,
   itemOrder: f.itemOrder,
   isFavorite: f.isFavorite,
+});
+
+export const commentToWire = (
+  c: Row<typeof comments>,
+  reactions: Comment['reactions'],
+): Comment => ({
+  id: c.id,
+  projectId: c.projectId,
+  taskId: c.taskId,
+  userId: c.userId,
+  content: c.content,
+  createdAt: c.createdAt.toISOString(),
+  updatedAt: c.updatedAt.toISOString(),
+  reactions,
 });

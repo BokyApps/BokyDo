@@ -185,7 +185,45 @@ export interface ProjectMember {
 export const grantableRoleSchema = z.enum(['admin', 'editor', 'commenter', 'viewer']);
 export type GrantableRole = z.infer<typeof grantableRoleSchema>;
 
-export const ENTITY_TYPES = ['projects', 'sections', 'tasks', 'labels', 'filters'] as const;
+/** Reactions are a fixed set: no arbitrary Unicode (homoglyph or zalgo spam) on comments. */
+export const REACTIONS = [
+  '👍',
+  '👎',
+  '❤️',
+  '🎉',
+  '😄',
+  '😮',
+  '😢',
+  '👀',
+  '✅',
+  '🙏',
+  '🔥',
+  '💯',
+] as const;
+export const reactionSchema = z.enum(REACTIONS);
+
+export interface Comment {
+  id: string;
+  projectId: string;
+  /** Null for a comment on the project itself. */
+  taskId: string | null;
+  /** Null if the author's account was deleted. */
+  userId: string | null;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  /** emoji → who reacted. */
+  reactions: Partial<Record<(typeof REACTIONS)[number], string[]>>;
+}
+
+export const ENTITY_TYPES = [
+  'projects',
+  'sections',
+  'tasks',
+  'labels',
+  'filters',
+  'comments',
+] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 // ---------------------------------------------------------------------------------------------
@@ -316,6 +354,25 @@ export const commandArgs = {
   filter_update: z.object({ id: idSchema, ...partial(filterFields) }).strict(),
   filter_delete: byId,
 
+  comment_add: z
+    .object({
+      id: idSchema,
+      /** A task comment; or `projectId` alone for a project comment. */
+      taskId: idSchema.optional(),
+      projectId: idSchema.optional(),
+      content: text(15_000).refine((v) => v.trim().length > 0, 'Comment is empty'),
+    })
+    .strict()
+    .refine((v) => Boolean(v.taskId) !== Boolean(v.projectId), 'Give taskId or projectId'),
+  comment_update: z
+    .object({
+      id: idSchema,
+      content: text(15_000).refine((v) => v.trim().length > 0, 'Comment is empty'),
+    })
+    .strict(),
+  comment_delete: byId,
+  reaction_toggle: z.object({ commentId: idSchema, emoji: reactionSchema }).strict(),
+
   /** Change a member's role (admins and owners; only owners touch admins). */
   project_member_update: z
     .object({ projectId: idSchema, userId: idSchema, role: grantableRoleSchema })
@@ -372,6 +429,7 @@ export interface SyncResponse {
   tasks: Task[];
   labels: Label[];
   filters: Filter[];
+  comments: Comment[];
   /** IDs the client must drop (deleted, or no longer visible to this user). */
   removed: Record<EntityType, string[]>;
   /** Always complete (not a delta): everyone you share a project with, and every membership. */
@@ -424,4 +482,16 @@ export interface PendingInvite {
   role: GrantableRole;
   invitedBy: string | null;
   expiresAt: string;
+}
+
+/** One line of a project's or task's activity log. */
+export interface ActivityEntry {
+  id: number;
+  projectId: string;
+  taskId: string | null;
+  actorId: string | null;
+  type: string;
+  /** Snapshot at the time (e.g. `title`, `fields`, `userId`). */
+  data: Record<string, unknown>;
+  at: string;
 }

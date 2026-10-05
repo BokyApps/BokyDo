@@ -1,5 +1,6 @@
 import type { CommandArgs, GrantableRole, Role } from '@bokydo/shared';
 import { and, count, eq } from 'drizzle-orm';
+import { logActivity } from '../../activity/log.js';
 import { projectMembers, projects, tasks } from '../../db/schema.js';
 import { fail, LIMITS, type ChangeRecorder, type CommandContext, type Tx } from '../context.js';
 import { projectAccess, requireProject } from '../policy.js';
@@ -74,6 +75,11 @@ export async function projectMemberUpdate(
     .set({ role: args.role })
     .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, args.userId)));
   announce(ctx.changes, project.id, args.userId);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: project.id,
+    type: 'member_role_changed',
+    data: { userId: args.userId, from: target, role: args.role },
+  });
 }
 
 export async function projectMemberRemove(
@@ -108,6 +114,11 @@ export async function projectMemberRemove(
     .returning({ id: tasks.id });
   for (const t of unassigned) ctx.changes.inProject('tasks', t.id, args.projectId);
   announce(ctx.changes, args.projectId, args.userId);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: args.projectId,
+    type: leaving ? 'member_left' : 'member_removed',
+    data: { userId: args.userId },
+  });
 }
 
 export async function projectTransfer(
@@ -133,4 +144,9 @@ export async function projectTransfer(
     .where(eq(projects.id, project.id));
   announce(ctx.changes, project.id, args.userId);
   announce(ctx.changes, project.id, ctx.userId);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: project.id,
+    type: 'owner_transferred',
+    data: { userId: args.userId },
+  });
 }

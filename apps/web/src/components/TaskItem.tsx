@@ -12,6 +12,7 @@ import {
   CalendarIcon,
   CheckIcon,
   ChevronIcon,
+  CommentIcon,
   CopyIcon,
   DeadlineIcon,
   DescriptionIcon,
@@ -94,6 +95,8 @@ export function TaskItem({
   const readOnly = project ? !['owner', 'admin', 'editor'].includes(project.role) : true;
   const firstLine = task.description.split('\n').find((l) => l.trim()) ?? '';
   const assignee = task.assigneeId ? state.collaborators.get(task.assigneeId) : undefined;
+  let commentCount = 0;
+  for (const c of state.comments.values()) if (c.taskId === task.id) commentCount++;
 
   const onClick = (e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey) ui.select(task.id, 'toggle', orderedIds);
@@ -225,6 +228,11 @@ export function TaskItem({
               </span>
             )}
             {task.description && !firstLine && <DescriptionIcon />}
+            {commentCount > 0 && (
+              <span className="inline-flex items-center gap-1" title={`${commentCount} comments`}>
+                <CommentIcon /> {commentCount}
+              </span>
+            )}
             {task.labels.map((l) => (
               <span key={l} className="text-p3">
                 @{l}

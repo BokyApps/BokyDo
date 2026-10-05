@@ -4,3 +4,4 @@ export * from './sections.js';
 export * from './tasks.js';
 export * from './preferences.js';
 export * from './members.js';
+export * from './comments.js';

@@ -1,6 +1,7 @@
 import { localNow, nextOccurrence } from '@bokydo/nlp';
 import { resolvePreferences, type CommandArgs, type Due } from '@bokydo/shared';
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { logActivity } from '../../activity/log.js';
 import { tasks, users } from '../../db/schema.js';
 import { fail, LIMITS, type CommandContext, type Tx } from '../context.js';
 import { isProjectMember, requireProject } from '../policy.js';
@@ -143,6 +144,12 @@ export async function taskAdd(ctx: CommandContext, args: CommandArgs<'task_add'>
     .returning({ id: tasks.id });
   if (inserted.length === 0) fail('conflict', 'id already in use');
   ctx.changes.inProject('tasks', args.id, project.id);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: project.id,
+    taskId: args.id,
+    type: 'task_added',
+    data: { title: args.content, parentId: args.parentId ?? null },
+  });
 }
 
 export async function taskUpdate(
@@ -167,6 +174,27 @@ export async function taskUpdate(
     })
     .where(eq(tasks.id, id));
   ctx.changes.inProject('tasks', id, task.projectId);
+  const changed = Object.keys(args).filter(
+    (k) =>
+      k !== 'id' &&
+      JSON.stringify((args as Record<string, unknown>)[k]) !==
+        JSON.stringify((task as Record<string, unknown>)[k]),
+  );
+  if (changed.length)
+    await logActivity(ctx.tx, ctx.userId, {
+      projectId: task.projectId,
+      taskId: id,
+      type: 'task_updated',
+      data: {
+        title: args.content ?? task.content,
+        fields: changed,
+        ...(args.content !== undefined && args.content !== task.content
+          ? { from: task.content }
+          : {}),
+        ...(assigneeId !== undefined ? { assigneeId } : {}),
+        ...(due !== undefined ? { due: due?.string ?? null } : {}),
+      },
+    });
 }
 
 /** Move a task (with its sub-tasks) to another project, section or parent, and/or reorder it. */
@@ -243,6 +271,21 @@ export async function taskMove(ctx: CommandContext, args: CommandArgs<'task_move
     ctx.changes.inProject('tasks', id, task.projectId);
     if (project.id !== task.projectId) ctx.changes.inProject('tasks', id, project.id);
   }
+  if (project.id !== task.projectId) {
+    const data = { title: task.content, from: task.projectId, to: project.id };
+    await logActivity(ctx.tx, ctx.userId, {
+      projectId: task.projectId,
+      taskId: task.id,
+      type: 'task_moved',
+      data,
+    });
+    await logActivity(ctx.tx, ctx.userId, {
+      projectId: project.id,
+      taskId: task.id,
+      type: 'task_moved',
+      data,
+    });
+  }
 }
 
 /** The completing user's local time: "today" for recurrence is theirs, not the server's. */
@@ -273,6 +316,13 @@ export async function taskComplete(
       .set({ due: next, dueDate: next.date, updatedAt: ctx.now })
       .where(eq(tasks.id, task.id));
     ctx.changes.inProject('tasks', task.id, task.projectId);
+    // Each completed occurrence of a repeating task is kept here.
+    await logActivity(ctx.tx, ctx.userId, {
+      projectId: task.projectId,
+      taskId: task.id,
+      type: 'task_completed',
+      data: { title: task.content, occurrence: task.due?.date ?? null, next: next.date },
+    });
     if (descendants.length === 0) return;
     const reopened = await ctx.tx
       .update(tasks)
@@ -289,6 +339,13 @@ export async function taskComplete(
     .where(and(inArray(tasks.id, ids), eq(tasks.isCompleted, false)))
     .returning({ id: tasks.id });
   for (const t of done) ctx.changes.inProject('tasks', t.id, task.projectId);
+  if (!task.isCompleted)
+    await logActivity(ctx.tx, ctx.userId, {
+      projectId: task.projectId,
+      taskId: task.id,
+      type: 'task_completed',
+      data: { title: task.content },
+    });
 }
 
 /** Reopening a task also reopens any completed ancestors so it stays visible. */
@@ -304,6 +361,12 @@ export async function taskUncomplete(
     .set({ isCompleted: false, completedAt: null, completedById: null, updatedAt: ctx.now })
     .where(inArray(tasks.id, ids));
   for (const id of ids) ctx.changes.inProject('tasks', id, task.projectId);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: task.projectId,
+    taskId: task.id,
+    type: 'task_uncompleted',
+    data: { title: task.content },
+  });
 }
 
 export async function taskDelete(
@@ -317,4 +380,10 @@ export async function taskDelete(
     .set({ deletedAt: ctx.now, updatedAt: ctx.now })
     .where(inArray(tasks.id, ids));
   for (const id of ids) ctx.changes.inProject('tasks', id, task.projectId);
+  await logActivity(ctx.tx, ctx.userId, {
+    projectId: task.projectId,
+    taskId: task.id,
+    type: 'task_deleted',
+    data: { title: task.content, subtasks: ids.length - 1 },
+  });
 }

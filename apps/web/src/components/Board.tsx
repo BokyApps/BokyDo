@@ -25,7 +25,7 @@ import { describeDate, describeDue, TONE_CLASS, todayIn } from '../lib/dates.js'
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { useTaskUI, type AddDefaults } from '../lib/task-ui.js';
 import { subtaskProgress } from '../lib/views.js';
-import { CalendarIcon, ChevronIcon, DeadlineIcon, SubtaskIcon } from './icons.js';
+import { CalendarIcon, ChevronIcon, CommentIcon, DeadlineIcon, SubtaskIcon } from './icons.js';
 import { InlineMarkdown } from './Markdown.js';
 import { ProjectDot } from './pickers.js';
 import { InlineAdd } from './TaskEditor.js';
@@ -284,6 +284,8 @@ export function TaskCard({
   const due = task.due ? describeDue(task.due, today, prefs) : null;
   const deadline = task.deadline ? describeDate(task.deadline, null, today, prefs) : null;
   const project = state.projects.get(task.projectId);
+  let comments = 0;
+  for (const c of state.comments.values()) if (c.taskId === task.id) comments++;
   return (
     <div
       onClick={() => ui.openTask(task.id)}
@@ -322,6 +324,11 @@ export function TaskCard({
         {progress && (
           <span className="inline-flex items-center gap-1">
             <SubtaskIcon /> {progress.done}/{progress.total}
+          </span>
+        )}
+        {comments > 0 && (
+          <span className="inline-flex items-center gap-1">
+            <CommentIcon /> {comments}
           </span>
         )}
         {task.labels.map((l) => (

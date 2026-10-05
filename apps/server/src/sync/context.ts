@@ -30,7 +30,8 @@ type ChangeType =
   | 'filters'
   | 'project_access'
   | 'user'
-  | 'invitations';
+  | 'invitations'
+  | 'comments';
 interface ChangeRow {
   entityType: ChangeType;
   entityId: string;
@@ -87,4 +88,5 @@ export const LIMITS = {
   filtersPerUser: 500,
   membersPerProject: 250,
   pendingInvitesPerProject: 100,
+  commentsPerThread: 2000,
 } as const;

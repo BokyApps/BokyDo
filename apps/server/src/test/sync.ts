@@ -1,5 +1,6 @@
 import type {
   CommandArgs,
+  Comment,
   CommandType,
   EntityType,
   Filter,
@@ -31,6 +32,7 @@ export class SyncUser {
   tasks = new Map<string, Task>();
   labels = new Map<string, Label>();
   filters = new Map<string, Filter>();
+  comments = new Map<string, Comment>();
   last!: SyncResponse;
 
   constructor(
@@ -75,6 +77,7 @@ export class SyncUser {
       tasks: this.tasks,
       labels: this.labels,
       filters: this.filters,
+      comments: this.comments,
     };
     if (res.fullSync) for (const m of Object.values(maps)) m.clear();
     for (const type of Object.keys(maps) as EntityType[]) {
@@ -85,5 +88,8 @@ export class SyncUser {
     for (const [sid, s] of this.sections)
       if (!this.projects.has(s.projectId)) this.sections.delete(sid);
     for (const [tid, t] of this.tasks) if (!this.projects.has(t.projectId)) this.tasks.delete(tid);
+    for (const [cid, c] of this.comments)
+      if (!this.projects.has(c.projectId) || (c.taskId && !this.tasks.has(c.taskId)))
+        this.comments.delete(cid);
   }
 }

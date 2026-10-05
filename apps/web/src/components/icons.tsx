@@ -172,3 +172,13 @@ export const GripIcon = () => (
     <circle cx="15" cy="18" r="1" />
   </Icon>
 );
+export const CommentIcon = () => (
+  <Icon>
+    <path d="M4 5h16v11H9l-5 4z" />
+  </Icon>
+);
+export const ActivityIcon = () => (
+  <Icon>
+    <path d="M3 12h4l3-8 4 16 3-8h4" />
+  </Icon>
+);

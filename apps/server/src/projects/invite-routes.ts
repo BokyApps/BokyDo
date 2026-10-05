@@ -2,6 +2,7 @@ import { createInviteSchema, type GrantableRole, type ProjectInvite } from '@bok
 import { and, count, eq, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { logActivity } from '../activity/log.js';
 import { audit } from '../audit.js';
 import { RateLimiter } from '../auth/rate-limiter.js';
 import { newToken, tokenId } from '../auth/tokens.js';
@@ -394,4 +395,5 @@ async function joinProject(
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
   if (member && (member.role === 'owner' || RANK[member.role] >= RANK[role])) return;
   await addMember(tx, changes, projectId, userId, role);
+  await logActivity(tx, userId, { projectId, type: 'member_joined', data: { userId, role } });
 }

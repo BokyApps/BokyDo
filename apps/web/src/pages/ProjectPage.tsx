@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  ActivityIcon,
   ArchiveIcon,
   ChevronIcon,
+  CommentIcon,
   EditIcon,
   MoreIcon,
   PlusIcon,
@@ -12,12 +14,13 @@ import {
   TrashIcon,
 } from '../components/icons.js';
 import { Board, orderBetween } from '../components/Board.js';
+import { ActivityList, CommentThread } from '../components/Comments.js';
 import { CalendarView } from '../components/Calendar.js';
 import { ProjectDialog } from '../components/ProjectDialog.js';
 import { Avatar, ShareDialog, useMembers } from '../components/Sharing.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { PlainTaskList, SortableTaskList, TaskDnd } from '../components/TaskTree.js';
-import { Alert, Button, inputClass, MenuItem, Popover } from '../components/ui.js';
+import { Alert, Button, Dialog, inputClass, MenuItem, Popover } from '../components/ui.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
@@ -44,6 +47,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const [options, setOptions] = useViewOptions(`project.${projectId}`);
   const [editing, setEditing] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [talk, setTalk] = useState<'comments' | 'activity' | null>(null);
   const members = useMembers(projectId);
   useEffect(() => setViewDefaults({ projectId }), [projectId, setViewDefaults]);
 
@@ -98,7 +102,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
                   'Share'
                 )}
               </button>
-              <ProjectMenu project={project} onEdit={() => setEditing(true)} />
+              <ProjectMenu project={project} onEdit={() => setEditing(true)} onTalk={setTalk} />
             </>
           )
         }
@@ -174,11 +178,32 @@ export function ProjectView({ projectId }: { projectId: string }) {
       {layout === 'list' && options.showCompleted && <CompletedList projectId={projectId} />}
       <ProjectDialog open={editing} onClose={() => setEditing(false)} project={project} />
       <ShareDialog project={project} open={sharing} onClose={() => setSharing(false)} />
+      <Dialog
+        open={talk !== null}
+        onClose={() => setTalk(null)}
+        title={
+          talk === 'activity' ? `Activity in “${project.name}”` : `Comments on “${project.name}”`
+        }
+      >
+        {talk === 'activity' ? (
+          <ActivityList projectId={project.id} />
+        ) : (
+          talk && <CommentThread projectId={project.id} />
+        )}
+      </Dialog>
     </Page>
   );
 }
 
-function ProjectMenu({ project, onEdit }: { project: Project; onEdit: () => void }) {
+function ProjectMenu({
+  project,
+  onEdit,
+  onTalk,
+}: {
+  project: Project;
+  onEdit: () => void;
+  onTalk: (tab: 'comments' | 'activity') => void;
+}) {
   const send = useSend();
   const confirm = useConfirm();
   const navigate = useNavigate();
@@ -210,6 +235,24 @@ function ProjectMenu({ project, onEdit }: { project: Project; onEdit: () => void
               Edit project
             </MenuItem>
           )}
+          <MenuItem
+            icon={<CommentIcon />}
+            onClick={() => {
+              close();
+              onTalk('comments');
+            }}
+          >
+            Comments
+          </MenuItem>
+          <MenuItem
+            icon={<ActivityIcon />}
+            onClick={() => {
+              close();
+              onTalk('activity');
+            }}
+          >
+            Activity
+          </MenuItem>
           <MenuItem
             icon={<StarIcon filled={project.isFavorite} />}
             onClick={() => {
