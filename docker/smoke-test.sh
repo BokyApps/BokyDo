@@ -148,6 +148,10 @@ check "recurring task moves to its next Monday and stays open" bash -c "jq -e '.
 BAD=$(cat /proc/sys/kernel/random/uuid)
 r=$(api POST /api/v1/sync "{\"commands\":[{\"type\":\"task_add\",\"uuid\":\"$BAD\",\"args\":{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"content\":\"x\",\"due\":{\"date\":\"2026-01-01\",\"time\":null,\"timezone\":null,\"string\":\"x\",\"recurrence\":{\"rrule\":\"FREQ=SECONDLY\",\"anchor\":\"scheduled\"}}}}]}")
 check "unsupported recurrence rule refused" bash -c "jq -e '.results[\"$BAD\"].error == \"invalid\"' <<<'$(body_of "$r")'"
+# W4: filters run server-side as parameterised SQL; bad queries get a positioned error.
+check "filter endpoint runs a query" bash -c "jq -e 'any(.lists[0].tasks[]; .content == \"Smoke task\")' <<<'$(body_of "$(api GET "/api/v1/tasks/filter?query=search%3A%20smoke%20%26%20no%20date")")'"
+r=$(api GET "/api/v1/tasks/filter?query=today%20%7C%20bogus")
+check "invalid filter is a 400 with a position" bash -c "[[ $(status_of "$r") == 400 ]] && jq -e '.error == \"invalid_filter\" and .start == 8' <<<'$(body_of "$r")'"
 check "full-text search finds the task" bash -c "jq -e 'any(.tasks[]; .content == \"Smoke task\")' <<<'$(body_of "$(api GET '/api/v1/search?q=smok')")'"
 check "search treats query syntax as text" test "$(status_of "$(api GET "/api/v1/search?q=%27%20%7C%20%21x%3A*")")" = 200
 check "completed-tasks endpoint answers" test "$(status_of "$(api GET /api/v1/tasks/completed)")" = 200

@@ -257,8 +257,15 @@ function Day({
           className={`inline-flex size-6 items-center justify-center rounded-full ${day === today ? 'bg-accent font-bold text-on-accent' : ''}`}
         >
           {Number(day.slice(8))}
-          {tall && <span className="sr-only">{label}</span>}
         </span>
+        {tall && (
+          <span className="mr-auto ml-1 text-muted sm:hidden" aria-hidden>
+            {new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+              weekday: 'short',
+              timeZone: 'UTC',
+            })}
+          </span>
+        )}
         {onAdd && (
           <button
             type="button"

@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ (2026-10-05)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ (2026-10-05) · W4 ✅ (2026-10-05)
 Owner: Sarel
 
 ---
@@ -406,6 +406,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - **Board layout**: sections as columns, drag cards between columns/sections, card shows due/deadline/priority/labels/assignee/sub-task count/comment count, add-card per column, collapse columns.
 - **Calendar layout** (month/week) for projects and filters.
 - **Security gate:** filter → SQL injection fuzzing; filter results always intersected with visible projects; ReDoS.
+- *Done 2026-10-05. `packages/filter-query` (parser + in-memory evaluator) and a server SQL compiler kept identical by a differential test; `GET /api/v1/tasks/filter`; saved filters validated on save; live editor with error positions and match counts; favourite filters with counts. Board (projects: sections as columns; filters/labels: columns from the grouping, drops apply priority/date/project) and month/week calendar for projects, filters and labels. Deferred to W5: `shared`, `workspace:`, assignee names, comment counts on cards. Board sub-tasks show as a count rather than nested cards. Reference: [docs/filters.md](filters.md).*
 
 #### W5 — Collaboration · L
 - Workspaces (team) + personal space; folders; roles: owner/admin/member/guest at workspace level; project roles: admin / editor / commenter / viewer.
