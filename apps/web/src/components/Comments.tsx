@@ -416,9 +416,22 @@ const DESCRIBE: Record<
   project_unarchived: () => 'unarchived the project',
 };
 
-/** The activity log of a project or a task. */
-export function ActivityList({ projectId, taskId }: { projectId?: string; taskId?: string }) {
-  const q = projectId ? `projectId=${projectId}` : `taskId=${taskId ?? ''}`;
+/** The activity log of a project, a task or a whole team. */
+export function ActivityList({
+  projectId,
+  taskId,
+  workspaceId,
+}: {
+  projectId?: string;
+  taskId?: string;
+  workspaceId?: string;
+}) {
+  const state = useSyncState();
+  const q = workspaceId
+    ? `workspaceId=${workspaceId}`
+    : projectId
+      ? `projectId=${projectId}`
+      : `taskId=${taskId ?? ''}`;
   const pages = useInfiniteQuery({
     queryKey: ['activity', q],
     initialPageParam: null as number | null,
@@ -445,6 +458,13 @@ export function ActivityList({ projectId, taskId }: { projectId?: string; taskId
             <span className="min-w-0 flex-1">
               <strong>{name(e.actorId)}</strong>{' '}
               {(DESCRIBE[e.type] ?? (() => e.type))(e.data, name)}
+              {/* A team-wide log spans projects, so name the one each entry came from. */}
+              {workspaceId && (
+                <span className="text-muted">
+                  {' · '}
+                  {state.projects.get(e.projectId)?.name ?? 'a project'}
+                </span>
+              )}
             </span>
             <time className="shrink-0 text-xs text-muted" dateTime={e.at}>
               {ago(e.at)}
