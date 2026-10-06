@@ -725,3 +725,98 @@ export const aiUsage = pgTable(
     check('ai_usage_status_check', sql`status in ('reserved', 'done', 'failed')`),
   ],
 );
+
+/**
+ * OAuth clients. Registered dynamically (RFC 7591, as MCP connectors do) or by an admin. All are
+ * public clients: PKCE is mandatory and there is no client secret.
+ */
+export const oauthClients = pgTable('oauth_clients', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
+  registeredVia: text('registered_via', { enum: ['dynamic', 'admin'] }).notNull(),
+  registeredIp: text('registered_ip'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** First consent; dynamic clients nobody ever authorized are purged after a day. */
+  authorizedAt: timestamp('authorized_at', { withTimezone: true }),
+});
+
+/** An authorization request waiting for the user's decision on the consent screen. */
+export const oauthRequests = pgTable('oauth_requests', {
+  /** tokenId of the request handle carried in the consent page's URL fragment. */
+  id: text('id').primaryKey(),
+  clientId: text('client_id')
+    .notNull()
+    .references(() => oauthClients.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  scopes: jsonb('scopes').$type<string[]>().notNull(),
+  audience: text('audience', { enum: ['api', 'mcp'] }).notNull(),
+  state: text('state'),
+  codeChallenge: text('code_challenge').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
+/** A user's consent to one client: the family every code, access and refresh token belongs to. */
+export const oauthGrants = pgTable(
+  'oauth_grants',
+  {
+    id: uuid('id').primaryKey(),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    scopes: jsonb('scopes').$type<string[]>().notNull(),
+    audience: text('audience', { enum: ['api', 'mcp'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    /** Set on revocation, including automatically on refresh-token or code reuse. */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedReason: text('revoked_reason'),
+  },
+  (t) => [index('oauth_grants_user_idx').on(t.userId)],
+);
+
+export const oauthCodes = pgTable('oauth_codes', {
+  id: text('id').primaryKey(),
+  grantId: uuid('grant_id')
+    .notNull()
+    .references(() => oauthGrants.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  codeChallenge: text('code_challenge').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+});
+
+/**
+ * Bearer tokens: personal access tokens and OAuth access/refresh tokens. Only a keyed hash of
+ * the token is stored. Refresh tokens are single-use (rotation); presenting a used one revokes
+ * its whole grant.
+ */
+export const apiTokens = pgTable(
+  'api_tokens',
+  {
+    id: uuid('id').primaryKey(),
+    hash: text('hash').notNull().unique(),
+    kind: text('kind', { enum: ['pat', 'access', 'refresh'] }).notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    grantId: uuid('grant_id').references(() => oauthGrants.id, { onDelete: 'cascade' }),
+    /** Personal access tokens only. */
+    name: text('name'),
+    scopes: jsonb('scopes').$type<string[]>().notNull(),
+    /** null for personal access tokens (valid for every audience). */
+    audience: text('audience', { enum: ['api', 'mcp'] }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('api_tokens_user_idx').on(t.userId, t.kind),
+    index('api_tokens_grant_idx').on(t.grantId),
+  ],
+);

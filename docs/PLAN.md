@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ (2026-10-06) · **Next: rest of W7 (W7b–W7d).** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ (2026-10-06) · **Next: W7b–W7d, W10b–W10c.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -441,6 +441,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 #### W10 — Public API, OAuth AS & MCP · L
 - REST v1 + OpenAPI docs, PATs with scopes, OAuth 2.1 AS (DCR, PKCE, metadata, consent, revocation), MCP server (§6), webhooks, recipes for Claude/ChatGPT/Grok/Hermes.
 - **Security gate:** scope enforcement per tool/route (matrix), DCR abuse (redirect URI validation, open redirect, client impersonation), token leakage in logs, consent-screen clickjacking, PKCE downgrade, refresh-token reuse detection, webhook SSRF + signature verification docs, MCP tool output injection framing.
+- *W10a done 2026-10-06 (see ADR 0008): OAuth 2.1 authorization server (RFC 8414 and RFC 9728 metadata incl. `/.well-known/oauth-protected-resource/mcp`, dynamic registration, `/oauth/authorize` with PKCE S256 only, consent page at `/oauth/consent`, `/oauth/token` with code and refresh-token grants, rotation with reuse detection, RFC 7009 revocation, RFC 8707 audiences `api`/`mcp`), personal access tokens with scopes and expiry (Settings → Apps & tokens, which also lists and removes authorized apps), bearer authentication in the access hook with per-route `config.scopes` (pinned by the authz matrix), and account resets revoking all API access. Admin settings: `api.enabled`, `api.dynamicClientRegistration`. Deviations: in-house instead of `oidc-provider` (no OpenID Connect needed); public clients only; personal-access-token project restriction deferred to W10b. Only `/api/v1/sync` and `/api/v1/sync/events` accept tokens so far (scope `sync`, for Android). For W10b: give each REST route `config: { access: 'user', scopes: [...] }`, use `requireUser(req)` in its handler, and add it to `TOKEN_SCOPES` in the authz matrix. For W10c: authenticate `/mcp` with `apiTokens.authenticate(token, 'mcp')` and answer 401 with `WWW-Authenticate: Bearer resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"`.*
 
 #### W11 — Parity extras · L
 - **Import from Todoist** (user's API token via Todoist Sync API, or backup/CSV) — projects, sections, tasks, labels, filters, comments, recurring rules. Huge for adoption.
@@ -532,9 +533,9 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 ## 12. Status & handoff (for the next contributor)
 
-*Updated 2026-10-06, after W7a.* Everything needed to pick up where work stopped.
+*Updated 2026-10-06, after W10a.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6, W7a (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T87); design decisions are in `docs/adr/0001`–`0006`.
+**Done:** F1–F4, W1–W6, W7a, W10a (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T103; the W11 branch's T82–T94 must be renumbered on merge); design decisions are in `docs/adr/0001`–`0006` and `0008` (the W11 branch has `0006`–`0007` too: renumber on merge).
 
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
@@ -561,7 +562,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | W7a; current provider docs and test accounts from the owner; ToS check | W10, W11 |
 | W8 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | W7a–W7b (STT/LLM providers) | W10, W11, W12 |
 | W9 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | W7; Ask-your-tasks tools reuse W10's MCP tool layer if built first | W10, W11, W12 |
-| W10a | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | None | W7, W11, W12 |
+| W10a ✅ | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | **Done 2026-10-06** (ADR 0008, migration 0013) | W7, W11, W12 |
 | W10b | REST v1 + OpenAPI docs, scope matrix tests | Sonnet | W10a scopes | W7, W11 |
 | W10c | MCP server and webhooks (signed, SSRF-safe delivery) | Opus | W10a; webhooks reuse W7a's outbound client | W11, W12 |
 | W11a | Granular Todoist import (API token or backup/CSV, preview, per-item choices, dry run, background job, re-runnable) | Opus (untrusted input, token handling) + Sonnet (UI) | None (uses the W6 job runner) | W7, W10, W12 |
@@ -585,7 +586,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
-- Now: **W10a** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3 and W7a are done; W11 is in progress on branch `w11-sonnet`.)
+- Now: **W10c MCP + webhooks** or **A1 Android foundation** (Opus) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a and W10a are done; W11 is in progress on branch `w11-sonnet`: when it merges it must renumber its migration (main has 0012–0013), its ADRs 0006–0007 and threat rows T82–T94 that clash with main.)
 - **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
 - **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
 - **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).

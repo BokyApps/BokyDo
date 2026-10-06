@@ -126,6 +126,14 @@ export const settingDefinitions = {
   'email.fromAddress': { schema: z.email().max(254).nullable(), default: null, secret: false },
   'email.fromName': { schema: headerSafe(80), default: 'BokyDo', secret: false },
 
+  /** Personal access tokens and OAuth apps may call the API (off = bearer tokens refused). */
+  'api.enabled': { schema: z.boolean(), default: true, secret: false },
+  /**
+   * Anyone may register an OAuth client (RFC 7591), as MCP connectors such as Claude and ChatGPT
+   * expect. Registration grants nothing: every client still needs a user's consent.
+   */
+  'api.dynamicClientRegistration': { schema: z.boolean(), default: true, secret: false },
+
   /** Users may add their own provider keys (their usage is metered but not budgeted). */
   'ai.userKeys': { schema: z.boolean(), default: true, secret: false },
   /** Who may use the instance's routing and keys, which count against the budgets below. */

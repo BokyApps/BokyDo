@@ -16,7 +16,9 @@ export type SecurityEvent =
   | 'passkey_added'
   | 'passkey_removed'
   | 'mfa_reset_by_admin'
-  | 'email_changed';
+  | 'email_changed'
+  | 'api_token_created'
+  | 'app_authorized';
 
 const SUBJECTS: Record<SecurityEvent, string> = {
   new_login: 'New sign-in to your account',
@@ -29,6 +31,8 @@ const SUBJECTS: Record<SecurityEvent, string> = {
   passkey_removed: 'A passkey was removed from your account',
   mfa_reset_by_admin: 'An administrator reset your two-factor authentication',
   email_changed: 'Your email address was changed',
+  api_token_created: 'A personal access token was created for your account',
+  app_authorized: 'An app was given access to your account',
 };
 
 export interface RequestMeta {

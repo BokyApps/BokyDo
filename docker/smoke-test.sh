@@ -320,6 +320,43 @@ check "own credentials need https" \
   test "$(status_of "$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://models.example.com/v1"}')")" = 400
 check "AI key never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q smoke-ai-secret"
 
+echo "== public API auth: OAuth 2.1 and personal access tokens (W10a)"
+check "OAuth metadata names this instance as issuer" \
+  test "$(curl -s "$BASE/.well-known/oauth-authorization-server" | jq -r .issuer)" = "$BASE"
+oauth_post() { curl -s -X POST -H 'content-type: application/json' --data "$2" "$BASE$1"; }
+check "client registration refuses non-loopback http redirects" \
+  test "$(oauth_post /oauth/register '{"redirect_uris":["http://evil.example/cb"]}' | jq -r .error)" = invalid_redirect_uri
+CLIENT=$(oauth_post /oauth/register '{"redirect_uris":["https://client.example/cb"],"client_name":"Smoke client"}' | jq -r .client_id)
+check "client registered dynamically" bash -c "[[ $CLIENT == bkdc_* ]]"
+VERIFIER=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')
+CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
+AUTHZ="$BASE/oauth/authorize?response_type=code&client_id=$CLIENT&code_challenge=$CHALLENGE&code_challenge_method=S256&scope=sync&state=st"
+check "unregistered redirect URI gets an error page, never a redirect" \
+  test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$AUTHZ&redirect_uri=https://evil.example/cb")" = "400 "
+LOC=$(curl -s -o /dev/null -w '%{redirect_url}' "$AUTHZ&redirect_uri=https://client.example/cb")
+check "authorization request goes to the consent page" bash -c "[[ '$LOC' == $BASE/oauth/consent#* ]]"
+r=$(api POST /api/v1/oauth/request/decision "{\"request\":\"${LOC#*#}\",\"approve\":true}")
+CODE=$(body_of "$r" | jq -r .redirect | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')
+check "consent returns a code to the registered redirect" bash -c "[[ -n '$CODE' ]]"
+token_req() { curl -s -X POST -H 'content-type: application/x-www-form-urlencoded' --data "$1" "$BASE/oauth/token"; }
+TOKENS=$(token_req "grant_type=authorization_code&code=$CODE&redirect_uri=https://client.example/cb&client_id=$CLIENT&code_verifier=$VERIFIER")
+AT=$(jq -r .access_token <<<"$TOKENS")
+bearer_sync() { curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $1" -H 'content-type: application/json' --data '{"cursor":null}' "$BASE/api/v1/sync"; }
+check "access token works for sync" test "$(bearer_sync "$AT")" = 200
+check "bearer tokens can't reach session-only routes" \
+  test "$(curl -s -H "authorization: Bearer $AT" "$BASE/api/v1/account/tokens" | jq -r .error)" = token_not_accepted
+check "replayed code is refused and revokes its tokens" \
+  bash -c "[[ \$(jq -r .error <<<'$(token_req "grant_type=authorization_code&code=$CODE&redirect_uri=https://client.example/cb&client_id=$CLIENT&code_verifier=$VERIFIER")') == invalid_grant && $(bearer_sync "$AT") == 401 ]]"
+api POST /api/v1/auth/reauth "{\"password\":\"$NEWPW2\"}" >/dev/null
+r=$(api POST /api/v1/account/tokens '{"name":"smoke","scopes":["sync"],"expiresInDays":1}')
+PAT=$(body_of "$r" | jq -r .token)
+check "personal access token created and works" bash -c "[[ $(status_of "$r") == 201 && $(bearer_sync "$PAT") == 200 ]]"
+check "tokens stored only as hashes" \
+  bash -c "! docker exec ${PROJECT}-db-1 psql -U bokydo -d bokydo -Atc 'select hash from api_tokens' | grep -q '${PAT#bkd_pat_}'"
+check "tokens never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q -e '${PAT#bkd_pat_}' -e '${AT#bkd_at_}'"
+api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
+check "revoked token stops working" test "$(bearer_sync "$PAT")" = 401
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5

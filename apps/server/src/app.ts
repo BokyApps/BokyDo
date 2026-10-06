@@ -23,6 +23,9 @@ import { SettingsService } from './settings/settings-service.js';
 import { registerSetupRoutes } from './setup/routes.js';
 import { EventBus } from './sync/events.js';
 import { registerSyncRoutes } from './sync/routes.js';
+import { registerOAuthRoutes } from './oauth/routes.js';
+import { purgeOAuth, registerOAuthServer } from './oauth/server.js';
+import { ApiTokenStore } from './oauth/token-store.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
@@ -65,6 +68,7 @@ export interface AppServices {
   jobs: JobRunner;
   delivery: Delivery;
   ai: AiService;
+  apiTokens: ApiTokenStore;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -79,6 +83,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const { db } = deps.db;
   const settings = await SettingsService.load(db, deps.secrets.masterKey);
   const sessions = new SessionStore(db, deps.secrets.sessionKey, settings);
+  const apiTokens = new ApiTokenStore(db, deps.secrets.sessionKey, settings);
+  sessions.onRevokeAll = (userId) => apiTokens.revokeAllForUser(userId);
   const mailer = new Mailer(settings);
   const events = new EventBus(db);
 
@@ -93,6 +99,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     routerOptions: { maxParamLength: 200 },
   });
   const jobs = new JobRunner(app.log);
+  let lastOAuthPurge = 0;
   const sync = new SyncService(
     db,
     (affected) => {
@@ -141,6 +148,16 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       },
     },
     { name: 'digests', run: (now) => delivery.digests(now) },
+    {
+      name: 'oauth-housekeeping',
+      run: async (now) => {
+        // Hourly is plenty: expired rows are already unusable.
+        if (now.getTime() - lastOAuthPurge < 3600_000) return;
+        lastOAuthPurge = now.getTime();
+        await purgeOAuth(db, now);
+        await apiTokens.purge(now);
+      },
+    },
   );
   const aiCredentials = new AiCredentialStore(db, deps.secrets.masterKey);
   const ai = new AiService({
@@ -160,6 +177,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     jobs,
     delivery,
     ai,
+    apiTokens,
   };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
@@ -178,7 +196,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(cookie);
   await registerSecurityHeaders(app, settings);
-  registerAccessControl(app, { settings, sessions });
+  registerAccessControl(app, { settings, sessions, tokens: apiTokens });
 
   // Liveness: process is up. Readiness: database reachable.
   app.get('/healthz', async (): Promise<Health> => ({ status: 'ok' }));
@@ -224,7 +242,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerAdminUserRoutes(app, authDeps);
   registerSetupRoutes(app, settings);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
-  registerSyncRoutes(app, { sync, events, sessions });
+  registerSyncRoutes(app, { sync, events, sessions, tokens: apiTokens });
+  registerOAuthServer(app, { db, settings, tokens: apiTokens, key: deps.secrets.sessionKey });
+  registerOAuthRoutes(app, {
+    db,
+    settings,
+    tokens: apiTokens,
+    notifier,
+    key: deps.secrets.sessionKey,
+  });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
   registerInviteRoutes(app, { db, sync, sessionKey: deps.secrets.sessionKey });
   registerActivityRoutes(app, db);

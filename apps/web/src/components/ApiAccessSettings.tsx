@@ -1,0 +1,203 @@
+import {
+  API_SCOPE_KEYS,
+  API_SCOPES,
+  type ApiScope,
+  type AuthorizedApp,
+  type PersonalAccessToken,
+} from '@bokydo/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, type FormEvent } from 'react';
+import { api } from '../lib/api.js';
+import { useConfirm } from '../lib/confirm.js';
+import { errorMessage } from '../lib/messages.js';
+import { useSensitive } from '../lib/reauth.js';
+import { Alert, Button, Card, Checkbox, SecretList, SelectField, TextField } from './ui.js';
+
+const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
+
+/** Settings → Apps & tokens: connected apps (OAuth) and personal access tokens. */
+export function ApiAccessSettings() {
+  return (
+    <div className="space-y-6">
+      <ConnectedApps />
+      <PersonalTokens />
+    </div>
+  );
+}
+
+function ConnectedApps() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const apps = useQuery({
+    queryKey: ['account-apps'],
+    queryFn: () => api<{ apps: AuthorizedApp[] }>('GET', '/api/v1/account/apps'),
+  });
+  const revoke = useMutation({
+    mutationFn: (clientId: string) => api('DELETE', `/api/v1/account/apps/${clientId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['account-apps'] }),
+  });
+  const list = apps.data?.apps ?? [];
+  return (
+    <Card>
+      <h2 className="mb-1 font-semibold">Connected apps</h2>
+      <p className="mb-4 text-sm text-muted">
+        Apps and AI assistants you allowed to use your account. Removing one signs it out.
+      </p>
+      {list.length === 0 && <p className="text-sm text-muted">No apps connected.</p>}
+      <ul className="divide-y divide-line">
+        {list.map((a) => (
+          <li key={a.clientId} className="flex flex-wrap items-start justify-between gap-2 py-3">
+            <div className="min-w-0">
+              <p className="font-medium break-words">{a.name}</p>
+              <p className="text-xs text-muted">
+                {a.redirectHosts.join(', ')} · since {day(a.firstAuthorizedAt)} · last used{' '}
+                {day(a.lastUsedAt)}
+              </p>
+              <p className="text-xs text-muted">{a.scopes.join(', ')}</p>
+            </div>
+            <Button
+              variant="secondary"
+              busy={revoke.isPending && revoke.variables === a.clientId}
+              onClick={() =>
+                void confirm({
+                  title: 'Remove this app?',
+                  message: `“${a.name}” will lose access to your account.`,
+                  confirmLabel: 'Remove',
+                  danger: true,
+                }).then((ok) => ok && revoke.mutate(a.clientId))
+              }
+            >
+              Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {revoke.isError && <Alert tone="error">{errorMessage(revoke.error)}</Alert>}
+    </Card>
+  );
+}
+
+function PersonalTokens() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const sensitive = useSensitive();
+  const [name, setName] = useState('');
+  const [scopes, setScopes] = useState<Set<ApiScope>>(new Set(['tasks:read']));
+  const [expires, setExpires] = useState('90');
+  const [created, setCreated] = useState<string | null>(null);
+  const tokens = useQuery({
+    queryKey: ['account-tokens'],
+    queryFn: () => api<{ tokens: PersonalAccessToken[] }>('GET', '/api/v1/account/tokens'),
+  });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['account-tokens'] });
+  const create = useMutation({
+    mutationFn: () =>
+      sensitive(() =>
+        api<{ token: string }>('POST', '/api/v1/account/tokens', {
+          name,
+          scopes: [...scopes],
+          expiresInDays: expires === 'never' ? null : Number(expires),
+        }),
+      ),
+    onSuccess: async ({ token }) => {
+      setCreated(token);
+      setName('');
+      await refresh();
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => api('DELETE', `/api/v1/account/tokens/${id}`),
+    onSuccess: refresh,
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setCreated(null);
+    create.mutate();
+  };
+  const toggle = (s: ApiScope) =>
+    setScopes((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+
+  return (
+    <Card>
+      <h2 className="mb-1 font-semibold">Personal access tokens</h2>
+      <p className="mb-4 text-sm text-muted">
+        For scripts and tools such as n8n or Home Assistant. Treat a token like a password.
+      </p>
+      {created && (
+        <div className="mb-4 space-y-2">
+          <Alert tone="success">Copy your new token now. It won't be shown again.</Alert>
+          <SecretList items={[created]} filename="bokydo-token.txt" />
+        </div>
+      )}
+      <ul className="mb-4 divide-y divide-line">
+        {(tokens.data?.tokens ?? []).map((t) => (
+          <li key={t.id} className="flex flex-wrap items-start justify-between gap-2 py-3">
+            <div className="min-w-0">
+              <p className="font-medium break-words">{t.name}</p>
+              <p className="text-xs text-muted">
+                {t.scopes.join(', ')} · expires {t.expiresAt ? day(t.expiresAt) : 'never'} · last
+                used {day(t.lastUsedAt)}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              busy={revoke.isPending && revoke.variables === t.id}
+              onClick={() =>
+                void confirm({
+                  title: 'Revoke this token?',
+                  message: `Anything using “${t.name}” will stop working.`,
+                  confirmLabel: 'Revoke',
+                  danger: true,
+                }).then((ok) => ok && revoke.mutate(t.id))
+              }
+            >
+              Revoke
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={submit} className="space-y-3 border-t border-line pt-4">
+        <TextField
+          label="New token name"
+          value={name}
+          maxLength={80}
+          required
+          onChange={(e) => setName(e.target.value)}
+        />
+        <fieldset className="space-y-2">
+          <legend className="mb-1 text-sm font-medium">What it may do</legend>
+          {API_SCOPE_KEYS.map((s) => (
+            <Checkbox
+              key={s}
+              label={API_SCOPES[s]}
+              hint={s}
+              checked={scopes.has(s)}
+              onChange={() => toggle(s)}
+            />
+          ))}
+        </fieldset>
+        <SelectField
+          label="Expires"
+          value={expires}
+          onChange={(e) => setExpires(e.target.value)}
+          options={[
+            { value: '7', label: 'In 7 days' },
+            { value: '30', label: 'In 30 days' },
+            { value: '90', label: 'In 90 days' },
+            { value: '366', label: 'In a year' },
+            { value: 'never', label: 'Never' },
+          ]}
+        />
+        {create.isError && <Alert tone="error">{errorMessage(create.error)}</Alert>}
+        <Button type="submit" busy={create.isPending} disabled={!name.trim() || scopes.size === 0}>
+          Create token
+        </Button>
+      </form>
+    </Card>
+  );
+}

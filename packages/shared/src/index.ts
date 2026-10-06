@@ -1,4 +1,5 @@
 export * from './ai.js';
+export * from './api-auth.js';
 export * from './auth.js';
 export * from './errors.js';
 export * from './instance.js';

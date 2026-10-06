@@ -2,6 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { audit } from '../audit.js';
 import { recoveryCodes, sessions, users, webauthnCredentials } from '../db/schema.js';
+import { revokeApiAccess } from '../oauth/token-store.js';
 import { generatePassphrase } from '../security/passphrase.js';
 import { hashPassword } from '../security/password.js';
 
@@ -23,6 +24,7 @@ export async function resetPasswordFromCli(db: Database, username: string): Prom
     if (!user) return null;
     // Whoever might be holding the old credentials loses their sessions too.
     await tx.delete(sessions).where(eq(sessions.userId, user.id));
+    await revokeApiAccess(tx, user.id);
     await audit(tx, {
       actorType: 'cli',
       action: 'user.password_reset_cli',
@@ -49,6 +51,7 @@ export async function resetMfaFromCli(db: Database, username: string): Promise<b
     await tx.delete(webauthnCredentials).where(eq(webauthnCredentials.userId, user.id));
     await tx.delete(recoveryCodes).where(eq(recoveryCodes.userId, user.id));
     await tx.delete(sessions).where(eq(sessions.userId, user.id));
+    await revokeApiAccess(tx, user.id);
     await audit(tx, {
       actorType: 'cli',
       action: 'user.mfa_reset_cli',
