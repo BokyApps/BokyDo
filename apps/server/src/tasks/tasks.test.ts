@@ -56,6 +56,52 @@ describe.skipIf(!TEST_DATABASE_URL)('completed tasks', () => {
     expect(second.nextBefore).toBeNull();
   });
 
+  it('pages through tasks that share one completion timestamp without skipping or repeating', async () => {
+    // Completing a parent completes its sub-tasks in one statement, so all five rows get the
+    // same completed_at: a timestamp-only cursor would drop the rest of the group at a page edge.
+    const parent = id();
+    const subs = Array.from({ length: 4 }, () => id());
+    const later = id();
+    await alice.ok(
+      cmd('task_add', { id: parent, content: 'Parent' }),
+      ...subs.map((sub, i) => cmd('task_add', { id: sub, parentId: parent, content: `Sub ${i}` })),
+    );
+    await alice.ok(cmd('task_complete', { id: parent }));
+    await alice.ok(
+      cmd('task_add', { id: later, content: 'Later' }),
+      cmd('task_complete', { id: later }),
+    );
+
+    const seen: string[] = [];
+    let before: string | null = null;
+    for (let pages = 0; pages < 10; pages++) {
+      const query: string = `limit=2${before ? `&before=${encodeURIComponent(before)}` : ''}`;
+      const res = (await aliceHttp.get(`/api/v1/tasks/completed?${query}`)).json();
+      seen.push(...res.tasks.map((x: { id: string }) => x.id));
+      before = res.nextBefore;
+      if (!before) break;
+    }
+    expect(new Set(seen).size).toBe(seen.length);
+    expect([...seen].sort()).toEqual([parent, ...subs, later].sort());
+    expect(seen[0]).toBe(later);
+  });
+
+  it('rejects a paging cursor that is not a time and a task id', async () => {
+    const now = new Date().toISOString();
+    for (const before of [
+      now,
+      'garbage',
+      `${now}_not-a-uuid`,
+      `${id()}_${now}`,
+      `${now}_${id()}_x`,
+    ])
+      expect(
+        (await aliceHttp.get(`/api/v1/tasks/completed?before=${encodeURIComponent(before)}`))
+          .statusCode,
+        before,
+      ).toBe(400);
+  });
+
   it('never returns another user’s tasks, even when asked for their project', async () => {
     const task = id();
     await alice.ok(
@@ -65,6 +111,22 @@ describe.skipIf(!TEST_DATABASE_URL)('completed tasks', () => {
     const asBob = await bobHttp.get(`/api/v1/tasks/completed?projectId=${alice.inbox}`);
     expect(asBob.json()).toEqual({ tasks: [], nextBefore: null });
     expect((await bobHttp.get('/api/v1/tasks/completed')).body).not.toContain('Secret');
+  });
+
+  it('a cursor taken from another user’s page only compares values, never widens access', async () => {
+    const ids = [id(), id()];
+    for (const task of ids)
+      await alice.ok(
+        cmd('task_add', { id: task, content: 'Alice done' }),
+        cmd('task_complete', { id: task }),
+      );
+    const page = (await aliceHttp.get('/api/v1/tasks/completed?limit=1')).json();
+    expect(page.nextBefore).not.toBeNull();
+    const asBob = await bobHttp.get(
+      `/api/v1/tasks/completed?before=${encodeURIComponent(page.nextBefore)}`,
+    );
+    expect(asBob.statusCode).toBe(200);
+    expect(asBob.json()).toEqual({ tasks: [], nextBefore: null });
   });
 
   it('rejects unknown parameters', async () => {

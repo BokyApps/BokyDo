@@ -1,5 +1,5 @@
 import type { Task } from '@bokydo/shared';
-import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../db/client.js';
@@ -12,10 +12,29 @@ import { runFilter } from './filter-sql.js';
 const completedQuery = z
   .object({
     projectId: z.uuid().optional(),
-    before: z.iso.datetime().optional(),
+    before: z.string().max(100).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
   })
   .strict();
+
+/**
+ * Paging cursor for the completed-task history: the last row's completion time and id, so tasks
+ * that share a timestamp (a parent and its sub-tasks complete in one statement) are neither
+ * skipped nor repeated across a page edge. Clients treat it as opaque.
+ * completed_at is always written from a JS `Date`, so it round-trips through ISO text exactly.
+ */
+const CURSOR_FIELDS = z.object({ at: z.iso.datetime(), id: z.uuid() }).strict();
+
+export function encodeCompletedCursor(at: Date, id: string): string {
+  return `${at.toISOString()}_${id}`;
+}
+
+export function parseCompletedCursor(cursor: string): { at: Date; id: string } | null {
+  const parts = cursor.split('_');
+  if (parts.length !== 2) return null;
+  const parsed = CURSOR_FIELDS.safeParse({ at: parts[0], id: parts[1] });
+  return parsed.success ? { at: new Date(parsed.data.at), id: parsed.data.id } : null;
+}
 
 const filterQuery = z
   .object({
@@ -54,6 +73,8 @@ export function registerTaskRoutes(
     const parsed = completedQuery.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'validation_failed' });
     const { projectId, before, limit } = parsed.data;
+    const cursor = before === undefined ? undefined : parseCompletedCursor(before);
+    if (cursor === null) return reply.status(400).send({ error: 'validation_failed' });
     const userId = requireSession(req).user.id;
     return db.transaction(async (tx) => {
       const visible = [...(await visibleProjects(tx, userId)).keys()];
@@ -67,16 +88,24 @@ export function registerTaskRoutes(
             inArray(tasks.projectId, scope),
             eq(tasks.isCompleted, true),
             isNull(tasks.deletedAt),
-            before ? lt(tasks.completedAt, new Date(before)) : undefined,
+            // The cursor only compares values: visibility is still decided by `scope` above.
+            cursor
+              ? or(
+                  lt(tasks.completedAt, cursor.at),
+                  and(eq(tasks.completedAt, cursor.at), lt(tasks.id, cursor.id)),
+                )
+              : undefined,
           ),
         )
-        .orderBy(desc(tasks.completedAt))
+        .orderBy(desc(tasks.completedAt), desc(tasks.id))
         .limit(limit);
       const last = rows.at(-1);
       return {
         tasks: rows.map(taskToWire),
         nextBefore:
-          rows.length === limit && last?.completedAt ? last.completedAt.toISOString() : null,
+          rows.length === limit && last?.completedAt
+            ? encodeCompletedCursor(last.completedAt, last.id)
+            : null,
       };
     });
   });

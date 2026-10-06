@@ -12,8 +12,9 @@ describe('completedTasksPath', () => {
   });
 
   it('carries the paging cursor, percent-encoded', () => {
-    expect(completedTasksPath(undefined, '2026-10-06T10:00:00.000Z')).toBe(
-      '/api/v1/tasks/completed?before=2026-10-06T10%3A00%3A00.000Z',
+    // The cursor is opaque to the client: "<completion time>_<task id>".
+    expect(completedTasksPath(undefined, '2026-10-06T10:00:00.000Z_0192a3b4')).toBe(
+      '/api/v1/tasks/completed?before=2026-10-06T10%3A00%3A00.000Z_0192a3b4',
     );
     expect(completedTasksPath('p 1', 'a&b')).toBe(
       '/api/v1/tasks/completed?projectId=p+1&before=a%26b',
