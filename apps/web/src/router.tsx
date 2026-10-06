@@ -149,6 +149,7 @@ const routeTree = rootRoute.addChildren([
     appPage('/archived', ArchivedPage),
     appPage('/settings', () => <SettingsPage />),
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
+    appPage('/settings/calendar', () => <SettingsPage initialTab="calendar" />),
     appPage('/invitations', InvitationsPage),
     appPage('/join', JoinPage),
     projectRoute,

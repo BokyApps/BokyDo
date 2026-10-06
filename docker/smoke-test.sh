@@ -4,7 +4,7 @@
 #        KEEP=1 docker/smoke-test.sh     (leave the stack running afterwards)
 set -euo pipefail
 
-PROJECT=bokydo-smoke
+PROJECT=${PROJECT:-bokydo-smoke}
 PORT=${PORT:-18080}
 C=(docker compose -p "$PROJECT" -f compose.yml -f docker/compose.smoke.yml)
 BASE="http://127.0.0.1:$PORT"
@@ -297,6 +297,24 @@ check "signed unsubscribe link turns that email off" \
   bash -c "[[ $(status_of "$(api POST /api/v1/notifications/unsubscribe "{\"token\":\"$UNSUB\"}")") == 200 ]]"
 check "unsubscribe changed only that preference" \
   bash -c "jq -e '.user.preferences.notifications.channels | (.reminder.email == false) and (.assigned.email == true)' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
+
+echo "== calendar feeds (W11d)"
+INBOX=$(body_of "$(api POST /api/v1/sync '{"cursor":null}')" | jq -r .user.inboxProjectId)
+FEED=$(body_of "$(api POST /api/v1/calendar-feeds "{\"kind\":\"project\",\"targetId\":\"$INBOX\"}")")
+FEED_ID=$(jq -r .id <<<"$FEED"); FEED_TOKEN=$(jq -r .url <<<"$FEED"); FEED_TOKEN=${FEED_TOKEN##*/}; FEED_TOKEN=${FEED_TOKEN%.ics}
+FEED_PATH=/api/v1/calendar/$FEED_TOKEN.ics
+check "feed link carries a 256-bit secret" bash -c "[[ '$FEED_TOKEN' =~ ^[A-Za-z0-9_-]{43}$ ]]"
+FEED_RES=$(curl -s -D - "$BASE$FEED_PATH") # no cookie: the link is the credential
+feed_has() { grep -qi -- "$1" <<<"$FEED_RES"; }
+check "feed is served without a session, as text/calendar" feed_has '^content-type: text/calendar'
+check "feed lists tasks that have a due date" feed_has '^SUMMARY:Smoke reminder'
+check "feed link needs the exact secret" test "$(http_code "$BASE/api/v1/calendar/${FEED_TOKEN%?}x.ics")" = 404
+check "database holds only a hash of the link" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from calendar_feeds where token_id = '$FEED_TOKEN'")" = 0
+check "feed link stays out of the logs" \
+  bash -c "! ${C[*]} logs app 2>&1 | grep -q '$FEED_TOKEN' && ${C[*]} logs app 2>&1 | grep -q 'calendar/\[redacted\]'"
+check "revoking a feed kills its link at once" \
+  bash -c "[[ $(status_of "$(api DELETE /api/v1/calendar-feeds/$FEED_ID)") == 204 && $(http_code "$BASE$FEED_PATH") == 404 ]]"
 
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
