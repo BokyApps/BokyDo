@@ -442,12 +442,19 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 
 #### W11 — Parity extras · L
 - **Import from Todoist** (user's API token via Todoist Sync API, or backup/CSV) — projects, sections, tasks, labels, filters, comments, recurring rules. Huge for adoption.
+- **Granular import:** after connecting, preview what's in the Todoist account and choose what comes over instead of all-or-nothing:
+  - pick individual projects (with or without sub-projects), and whether to include completed tasks (and how far back), comments, attachments and activity;
+  - pick which labels and saved filters to bring; filters that reference unselected projects/labels are flagged rather than silently broken;
+  - per item: import as new, merge into an existing BokyDo project/label of the same name, or skip; choose the destination (personal or a team) for each project;
+  - people: map Todoist collaborators to BokyDo users (or leave tasks unassigned); never invite anyone automatically;
+  - preferences (time zone, week start, date format, theme-ish settings) as an opt-in;
+  - dry-run summary (counts, conflicts, unsupported features such as Todoist-only filter syntax) before anything is written; the import runs as a background job with progress and can be re-run to pick up items skipped the first time (Todoist IDs remembered, so nothing is duplicated).
 - Templates: export/import project as CSV (Todoist-compatible format), template gallery.
 - Productivity: karma-style points, daily/weekly goals, streaks, vacation mode, productivity view.
 - iCal feed per project/filter (secret-tokenised URL, revocable); Google/CalDAV calendar sync as stretch.
 - Export everything (JSON/CSV), scheduled encrypted backups + restore (admin), account deletion (GDPR).
 - Email-to-project address (stretch, needs inbound mail).
-- **Security gate:** import file parsing (zip bombs, CSV injection on export → prefix `=+-@`), iCal token entropy/revocation, backup encryption & restore integrity, account deletion completeness.
+- **Security gate:** import file parsing (zip bombs, CSV injection on export → prefix `=+-@`), Todoist token handling (used for the import session only, never logged, encrypted if kept for re-runs, revocable), imported content treated as untrusted (same validation and limits as sync commands, attachments re-sniffed), import can't write into projects the user can't edit, iCal token entropy/revocation, backup encryption & restore integrity, account deletion completeness.
 
 #### W12 — PWA, accessibility & i18n · M
 - Installable PWA, offline read cache + queued writes (reuses sync-client), responsive/mobile web layout.
