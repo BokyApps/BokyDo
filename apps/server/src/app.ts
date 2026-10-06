@@ -26,6 +26,7 @@ import { registerSyncRoutes } from './sync/routes.js';
 import { registerOAuthRoutes } from './oauth/routes.js';
 import { purgeOAuth, registerOAuthServer } from './oauth/server.js';
 import { ApiTokenStore } from './oauth/token-store.js';
+import { registerMcpServer } from './mcp/server.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
@@ -252,6 +253,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     key: deps.secrets.sessionKey,
   });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
+  registerMcpServer(app, { db, sync, settings, tokens: apiTokens });
   registerInviteRoutes(app, { db, sync, sessionKey: deps.secrets.sessionKey });
   registerActivityRoutes(app, db);
   registerDeliveryRoutes(app, {

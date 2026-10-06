@@ -133,6 +133,8 @@ export const settingDefinitions = {
    * expect. Registration grants nothing: every client still needs a user's consent.
    */
   'api.dynamicClientRegistration': { schema: z.boolean(), default: true, secret: false },
+  /** The MCP endpoint (`/mcp`) for AI assistants such as Claude and ChatGPT. */
+  'api.mcpEnabled': { schema: z.boolean(), default: true, secret: false },
 
   /** Users may add their own provider keys (their usage is metered but not budgeted). */
   'ai.userKeys': { schema: z.boolean(), default: true, secret: false },

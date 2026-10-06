@@ -128,27 +128,33 @@ export function registerTaskRoutes(
   app.get('/api/v1/search', user, async (req, reply) => {
     const parsed = searchQuery.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'validation_failed' });
-    const tsquery = toPrefixQuery(parsed.data.q);
-    if (!tsquery) return { tasks: [] as Task[] };
     const userId = requireSession(req).user.id;
-    return db.transaction(async (tx) => {
-      const visible = [...(await visibleProjects(tx, userId)).keys()];
-      if (visible.length === 0) return { tasks: [] as Task[] };
-      const vector = sql`to_tsvector('simple', ${tasks.content} || ' ' || ${tasks.description})`;
-      const query = sql`to_tsquery('simple', ${tsquery})`;
-      const rows = await tx
-        .select()
-        .from(tasks)
-        .where(
-          and(
-            inArray(tasks.projectId, visible),
-            isNull(tasks.deletedAt),
-            sql`${vector} @@ ${query}`,
-          ),
-        )
-        .orderBy(tasks.isCompleted, desc(sql`ts_rank(${vector}, ${query})`), desc(tasks.updatedAt))
-        .limit(parsed.data.limit);
-      return { tasks: rows.map(taskToWire) };
-    });
+    return { tasks: await searchTasks(db, userId, parsed.data.q, parsed.data.limit) };
+  });
+}
+
+/** Full-text search over the tasks in projects the user can see (open tasks first). */
+export async function searchTasks(
+  db: Database,
+  userId: string,
+  q: string,
+  limit: number,
+): Promise<Task[]> {
+  const tsquery = toPrefixQuery(q);
+  if (!tsquery) return [];
+  return db.transaction(async (tx) => {
+    const visible = [...(await visibleProjects(tx, userId)).keys()];
+    if (visible.length === 0) return [];
+    const vector = sql`to_tsvector('simple', ${tasks.content} || ' ' || ${tasks.description})`;
+    const query = sql`to_tsquery('simple', ${tsquery})`;
+    const rows = await tx
+      .select()
+      .from(tasks)
+      .where(
+        and(inArray(tasks.projectId, visible), isNull(tasks.deletedAt), sql`${vector} @@ ${query}`),
+      )
+      .orderBy(tasks.isCompleted, desc(sql`ts_rank(${vector}, ${query})`), desc(tasks.updatedAt))
+      .limit(limit);
+    return rows.map(taskToWire);
   });
 }

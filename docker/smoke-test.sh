@@ -357,6 +357,24 @@ check "tokens never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q -e '${PAT
 api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
 check "revoked token stops working" test "$(bearer_sync "$PAT")" = 401
 
+echo "== MCP server (W10c)"
+mcp() { curl -s -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' "${@:2}" --data "$1" "$BASE/mcp"; }
+check "MCP asks for a token and points to its metadata" \
+  bash -c "curl -s -D - -o /dev/null -X POST -H 'content-type: application/json' --data '{}' $BASE/mcp | grep -qi 'resource_metadata=\"$BASE/.well-known/oauth-protected-resource/mcp\"'"
+check "MCP resource metadata published" \
+  test "$(curl -s "$BASE/.well-known/oauth-protected-resource/mcp" | jq -r .resource)" = "$BASE/mcp"
+r=$(api POST /api/v1/account/tokens '{"name":"mcp","scopes":["tasks:read","tasks:write"],"expiresInDays":1}')
+MCPT=$(body_of "$r" | jq -r .token)
+check "MCP initialize with a token" \
+  test "$(mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' -H "authorization: Bearer $MCPT" | jq -r .result.protocolVersion)" = 2025-06-18
+check "MCP refuses a foreign Origin" \
+  test "$(mcp '{"jsonrpc":"2.0","id":1,"method":"ping"}' -H "authorization: Bearer $MCPT" -H 'origin: https://evil.example' -o /dev/null -w '%{http_code}')" = 403
+check "MCP lists only the token's tools" \
+  test "$(mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' -H "authorization: Bearer $MCPT" | jq -r '[.result.tools[].name] | sort | join(",")')" = "add_task,complete_task,get_report,get_task,run_filter,search_tasks,update_task"
+check "MCP adds a task from natural language" \
+  test "$(mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"text":"Smoke via MCP tomorrow p1"}}}' -H "authorization: Bearer $MCPT" | jq -r '.result.structuredContent.task | "\(.content) \(.priority)"')" = "Smoke via MCP p1"
+api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5
