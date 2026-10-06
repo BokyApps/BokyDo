@@ -121,4 +121,4 @@ Living document, STRIDE per component. Every deliverable updates it. **v0.8 — 
 
 - Login rate limits are in memory (single replica) and reset on restart. Move to Postgres when multi-replica support lands.
 - Backups must include `master.key`, or restored encrypted secrets are unrecoverable. The UX for this lands in W11.
-- Losing the `db-secret` volume while keeping `pg-data` recovers automatically (the app republishes its copy). Losing both DB-password copies needs a documented manual procedure (W13).
+- Losing the `db-secret` volume while keeping `pg-data` recovers automatically (the app republishes its copy). Losing both DB-password copies is a documented, end-to-end tested procedure: [recovery.md](recovery.md).

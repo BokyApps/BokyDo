@@ -38,6 +38,7 @@ api() { # api <METHOD> <path> [json-body]
 status_of() { tail -n1 <<<"$1"; }
 body_of() { sed '$d' <<<"$1"; }
 volume() { docker run --rm -v "${PROJECT}_$1:/v:ro" busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e "${@:2}"; }
+volume_rw() { docker run --rm -v "${PROJECT}_$1:/v" busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e "${@:2}"; }
 
 echo "== starting stack"
 PORT=$PORT "${C[@]}" up -d --build --quiet-pull >/dev/null 2>&1 || { "${C[@]}" logs --tail 50; exit 1; }
@@ -339,6 +340,30 @@ check "CLI clear-public-url works" bash -c "${C[*]} exec -T app bokydo admin cle
 check "reset revokes existing sessions" test "$(status_of "$(api GET /api/v1/auth/session)")" = 401
 check "reset is audited" \
   test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from audit_log where action='user.password_reset_cli'")" = 1
+
+echo "== losing both database password copies (docs/recovery.md)"
+"${C[@]}" stop app db >/dev/null 2>&1
+volume_rw app-data rm -f /v/secrets/db_password
+volume_rw db-secret rm -f /v/password
+PORT=$PORT "${C[@]}" up -d >/dev/null 2>&1
+# The app generates a fresh pair and publishes it, but Postgres still expects the old password.
+for _ in $(seq 30); do
+  [[ -n "$(volume db-secret sh -c 'cat /v/password 2>/dev/null')" ]] && break
+  sleep 1
+done
+NEW_PW=$(volume db-secret cat /v/password)
+printf "%s\n" "ALTER ROLE bokydo WITH PASSWORD :'pw';" \
+  | "${C[@]}" exec -T db psql -U bokydo -d bokydo -v pw="$NEW_PW" >/dev/null 2>&1
+for _ in $(seq 60); do
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
+  sleep 2
+done
+check "app recovers after both password copies are lost" \
+  test "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1")" = healthy
+check "recovery kept the database (same admin, not a fresh one)" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc 'select count(*) from users where is_admin')" = 1
+check "recovery leaves one agreed password in both copies" \
+  test "$(volume db-secret sha256sum /v/password | cut -d' ' -f1)" = "$(volume app-data sha256sum /v/secrets/db_password | cut -d' ' -f1)"
 
 if [[ $fail == 0 ]]; then echo "== all checks passed"; else echo "== FAILURES"; "${C[@]}" logs --tail 50; fi
 exit $fail
