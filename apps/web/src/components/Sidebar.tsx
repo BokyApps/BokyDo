@@ -8,6 +8,7 @@ import { useTaskUI } from '../lib/task-ui.js';
 import { isOpen, liveTasks, projectTree, todayTasks, type ProjectNode } from '../lib/views.js';
 import {
   ArchiveIcon,
+  CheckIcon,
   ChevronIcon,
   InboxIcon,
   PlusIcon,
@@ -94,6 +95,12 @@ export function Sidebar({
             <UpcomingIcon />
           </span>{' '}
           Upcoming
+        </Link>
+        <Link to="/completed" className={item} activeProps={active}>
+          <span className="text-muted">
+            <CheckIcon />
+          </span>{' '}
+          Completed
         </Link>
         {state.invitations.length > 0 && (
           <Link to="/invitations" className={item} activeProps={active}>

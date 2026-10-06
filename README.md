@@ -15,9 +15,8 @@ docker compose logs app        # shows the one-time admin passphrase
 ```
 
 Open <http://localhost:8080> and sign in as `admin` with that passphrase. You'll be asked to set a
-new password. _(Sign-in and the setup wizard arrive in deliverables F3/W1; today the page only shows
-instance status.)_ There is nothing to configure beforehand: everything else (public URL, email, AI
-providers, registration policy, MFA policy) is set in **Admin → Settings**.
+new password. There is nothing to configure beforehand: everything else (public URL, email,
+registration policy, MFA policy) is set in **Admin → Settings**.
 
 Lost the passphrase? `docker compose exec app bokydo admin reset-password admin`
 Lost your phone and recovery codes? `docker compose exec app bokydo admin reset-mfa <username>`

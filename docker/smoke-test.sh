@@ -87,6 +87,10 @@ check "CSP has no unsafe-inline" \
   bash -c "curl -sI $BASE/ | grep -i '^content-security-policy' | grep -vq unsafe-inline"
 check "API responses are no-store"    bash -c "curl -sI $BASE/api/v1/instance | grep -qi '^cache-control: no-store'"
 check "X-Frame-Options DENY"           bash -c "curl -sI $BASE/ | grep -qi '^x-frame-options: DENY'"
+check "cross-origin isolated (COEP/COOP/CORP)" \
+  bash -c "curl -sI $BASE/ | grep -qi '^cross-origin-embedder-policy: require-corp' \
+    && curl -sI $BASE/ | grep -qi '^cross-origin-opener-policy: same-origin' \
+    && curl -sI $BASE/ | grep -qi '^cross-origin-resource-policy: same-origin'"
 check "no CORS for foreign origins" \
   bash -c "! curl -s -D - -o /dev/null -H 'Origin: https://evil.example' $BASE/api/v1/instance | grep -qi access-control-allow-origin"
 for path in '/../../etc/passwd' '/assets/..%2f..%2f..%2fetc%2fpasswd' '/.env' '/package.json' '/../dist/main.js'; do

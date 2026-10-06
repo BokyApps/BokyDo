@@ -393,7 +393,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Today (with overdue + "reschedule all"), Upcoming (day strip, week view, drag to reschedule).
 - Drag & drop everywhere, multi-select + bulk edit, undo toasts, global search (Postgres FTS), keyboard shortcuts (Todoist-like: `q`, `/`, `g t`, `e`, `t`…), view options (group/sort/filter per view), **theme engine with the ten terminal-theme families from §4a** (system/light/dark modes, synced per user, WCAG AA contrast test per variant), **font, text size and density choices (§4a)**, user preferences (start page, **time zone with detection + smart search (§4b)**, week start, time format, date format, smart date recognition). Admin → default time zone switches to the same smart picker.
 - **Security gate:** XSS in every text field (title, description, comment, project/label names) incl. markdown edge cases; IDOR via move/duplicate across projects; bulk endpoints check every item.
-- *Done 2026-10-04. Includes the appearance engine (§4a: 11 theme families / 28 variants, 8 fonts, text size, density) and the smart time-zone picker (§4b). Quick add is plain text until W3 adds natural-language parsing; the board and calendar layouts and running filter queries come with W4. A global “completed” view is replaced for now by per-project completed lists plus search across completed tasks.*
+- *Done 2026-10-04. Includes the appearance engine (§4a: 11 theme families / 28 variants, 8 fonts, text size, density) and the smart time-zone picker (§4b). Quick add is plain text until W3 adds natural-language parsing; the board and calendar layouts and running filter queries come with W4. A global “completed” view was deferred at the time; it landed after W6 (sidebar entry, `g c`, backed by the same `/api/v1/tasks/completed` endpoint), so today both the global view and per-project completed lists exist.*
 
 #### W3 — Natural-language engine · L
 - `packages/nlp` per §4, recurrence engine (RRULE + Todoist semantics incl. `every!`), deadlines, durations, reminders syntax, quick-add with live highlighting and autocomplete, date picker that also accepts NL.
@@ -542,6 +542,53 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 - Push delivery was verified by tests (RFC 8291 vector, real decryption) but not in a real browser (the dev browser blocks notification permission). Check on a real HTTPS install.
 - Push only goes to the browser vendors' push services; UnifiedPush/self-hosted push needs an admin allow-list (Android phase, ADR 0005).
 - Multi-replica would need LISTEN/NOTIFY pokes and shared rate limiters (ADR 0003); jobs already use `SKIP LOCKED`.
+
+**Open work, classified** (*added 2026-10-06*). Model tiers:
+- **Opus 5.5** — security-critical or cross-cutting design: auth/OAuth, crypto, secrets, SSRF-safe outbound calls, prompt-injection boundaries, data migration/restore, release hardening. Also does the security gate for any deliverable.
+- **Sonnet** — well-specified work inside existing patterns: endpoints with tests, UI pages, adapters, smoke checks, and reviewing DeepSeek output.
+- **DeepSeek 4.1 Flash** — small, mechanical, low-risk work with clear acceptance tests and no security decisions: dependency bumps, doc edits, string extraction, CSV formats, UI polish, test fixtures. Its output is always reviewed (diff read + `pnpm check` + smoke test) by Sonnet or Opus before it's committed.
+
+| ID | Task | Model | Blockers | Can run alongside |
+|---|---|---|---|---|
+| R1 | Finish the review of the DeepSeek change (global Completed view + COEP `require-corp`, F-008): one thumbnail check with COEP on, then commit and push | Sonnet | None (format, lint, types, tests and smoke already pass) | Everything |
+| R2 | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | Release-age gate: not before 2026-10-07 14:08 UTC | Everything |
+| R3 | Completed-tasks paging skips tasks that share a completion timestamp (parent + sub-tasks, ms-truncated cursor): use a `(completed_at, id)` cursor, scoped to visible projects, plus a test | Sonnet | None | Everything |
+| R4 | Verify Web Push in a real browser on an HTTPS install (enable, test push, click-through, sign-out removes it) | Sonnet (guided) | Needs an HTTPS deployment and a person with a real browser | Everything |
+| W7a | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | None | W10a, W11b–W11e, W12a |
+| W7b | Provider adapters on top of W7a (OpenAI-compatible, Anthropic, Gemini, Ollama, …), streaming, retries, live model list, "test connection" | Sonnet | W7a interfaces | W10, W11 |
+| W7c | Admin + user AI settings UI | DeepSeek (Sonnet review) | W7a/W7b API shapes | Anything server-side |
+| W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | W7a; current provider docs and test accounts from the owner; ToS check | W10, W11 |
+| W8 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | W7a–W7b (STT/LLM providers) | W10, W11, W12 |
+| W9 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | W7; Ask-your-tasks tools reuse W10's MCP tool layer if built first | W10, W11, W12 |
+| W10a | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | None | W7, W11, W12 |
+| W10b | REST v1 + OpenAPI docs, scope matrix tests | Sonnet | W10a scopes | W7, W11 |
+| W10c | MCP server and webhooks (signed, SSRF-safe delivery) | Opus | W10a; webhooks reuse W7a's outbound client | W11, W12 |
+| W11a | Granular Todoist import (API token or backup/CSV, preview, per-item choices, dry run, background job, re-runnable) | Opus (untrusted input, token handling) + Sonnet (UI) | None (uses the W6 job runner) | W7, W10, W12 |
+| W11b | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | None | Everything |
+| W11c | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | None | Everything |
+| W11d | iCal feed per project/filter (secret, revocable URL) | Sonnet | None | Everything |
+| W11e | Export everything, scheduled encrypted backups + restore, account deletion | Opus | None | W7b–c, W11b–d, W12 |
+| W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
+| W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Best after UI churn from W7–W11 settles; caching must not break the push service worker | W10, W11 |
+| W12b | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | None (repeat after big UI changes) | Everything |
+| W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Do after most UI exists (late W11) to avoid churn | Server work |
+| W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |
+| M1 | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | Needed by A3 | A1, A2 |
+| M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
+| A1 | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | W10a (OAuth AS); server `assetlinks.json`; note the server uses SSE pokes, not WebSocket (ADR 0003) | Web W11–W12 |
+| A2 | Android core screens, themes, time-zone picker, quick add (QuickJS spike vs server `/parse`) | Sonnet (Opus for the parser spike decision) | A1 | A4 later screens, web work |
+| A3 | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | A1; M1 | A2, A4 |
+| A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A1–A2 | A3, A5 |
+| A5 | Ramble on Android | Sonnet | W8, A1 | A4 |
+| A6 | Android security hardening (MobSF, MASVS) | Opus | A1–A5 | — |
+| A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
+
+**Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
+- Now: **R1 + R3** (Sonnet) while **W7a** (Opus) starts; **R2** (DeepSeek) on/after 2026-10-07.
+- **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
+- **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
+- **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).
+- Android **A1** (Opus) can start as soon as W10a lands, alongside the remaining web deliverables.
 
 **How to work (the process used so far):**
 - Toolchain: Node 22, pnpm 12, Docker. `pnpm install`, then `pnpm check` (format, lint, typecheck, all tests) must pass. Server integration tests need a throwaway Postgres 17 container and `BOKYDO_TEST_DATABASE_URL` pointing at it (the tests skip without it).

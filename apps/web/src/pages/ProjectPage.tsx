@@ -1,5 +1,4 @@
 import type { Project, Section, Task } from '@bokydo/shared';
-import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
@@ -16,13 +15,13 @@ import {
 import { Board, orderBetween } from '../components/Board.js';
 import { ActivityList, CommentThread } from '../components/Comments.js';
 import { CalendarView } from '../components/Calendar.js';
+import { CompletedList } from '../components/CompletedList.js';
 import { ProjectDialog } from '../components/ProjectDialog.js';
 import { Avatar, ShareDialog, useMembers } from '../components/Sharing.js';
 import { InlineAdd } from '../components/TaskEditor.js';
-import { PlainTaskList, SortableTaskList, TaskDnd } from '../components/TaskTree.js';
+import { SortableTaskList, TaskDnd } from '../components/TaskTree.js';
 import { Alert, Button, Dialog, inputClass, MenuItem, Popover } from '../components/ui.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
-import { api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
 import { newId, useSend, useSyncState } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
@@ -175,7 +174,12 @@ export function ProjectView({ projectId }: { projectId: string }) {
       )}
       {layout === 'list' && canEdit && <AddSection projectId={projectId} />}
       {empty && !canEdit && <EmptyState title="Nothing here yet" />}
-      {layout === 'list' && options.showCompleted && <CompletedList projectId={projectId} />}
+      {layout === 'list' && options.showCompleted && (
+        <section className="mt-8" aria-label="Completed tasks">
+          <h2 className="mb-1 border-b border-line pb-1 font-semibold text-muted">Completed</h2>
+          <CompletedList projectId={projectId} />
+        </section>
+      )}
       <ProjectDialog open={editing} onClose={() => setEditing(false)} project={project} />
       <ShareDialog project={project} open={sharing} onClose={() => setSharing(false)} />
       <Dialog
@@ -494,43 +498,5 @@ function AddSection({ projectId, column = false }: { projectId: string; column?:
         Cancel
       </Button>
     </form>
-  );
-}
-
-/** Completed tasks come from the server (sync only carries the last week of them). */
-function CompletedList({ projectId }: { projectId: string }) {
-  const [before, setBefore] = useState<string[]>([]);
-  const pages = useQuery({
-    queryKey: ['completed', projectId, before],
-    queryFn: async () => {
-      const all: Task[] = [];
-      let cursor: string | null = null;
-      for (let i = 0; i <= before.length; i++) {
-        const res: { tasks: Task[]; nextBefore: string | null } = await api(
-          'GET',
-          `/api/v1/tasks/completed?projectId=${projectId}${cursor ? `&before=${encodeURIComponent(cursor)}` : ''}`,
-        );
-        all.push(...res.tasks);
-        cursor = res.nextBefore;
-        if (!cursor) break;
-      }
-      return { tasks: all, more: cursor };
-    },
-  });
-  const tasks = (pages.data?.tasks ?? []).filter((t) => !t.parentId);
-  return (
-    <section className="mt-8" aria-label="Completed tasks">
-      <h2 className="mb-1 border-b border-line pb-1 font-semibold text-muted">Completed</h2>
-      {tasks.length ? (
-        <PlainTaskList tasks={tasks} showProject={false} />
-      ) : (
-        <p className="py-2 text-sm text-muted">No completed tasks.</p>
-      )}
-      {pages.data?.more && (
-        <Button variant="ghost" onClick={() => setBefore([...before, pages.data.more ?? ''])}>
-          Show more
-        </Button>
-      )}
-    </section>
   );
 }

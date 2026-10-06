@@ -31,7 +31,10 @@ export async function registerSecurityHeaders(
     },
     frameguard: { action: 'deny' },
     strictTransportSecurity: false,
-    crossOriginEmbedderPolicy: false,
+    // Cross-origin isolation (F-008). Free here: the CSP below pins every subresource to
+    // 'self'/data:, and helmet's default Cross-Origin-Resource-Policy: same-origin keeps
+    // same-origin loads working, so no legitimate embed regresses.
+    crossOriginEmbedderPolicy: { policy: 'require-corp' },
     referrerPolicy: { policy: 'no-referrer' },
   });
   app.addHook('onSend', async (req, reply) => {

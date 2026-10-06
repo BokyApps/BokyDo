@@ -71,8 +71,14 @@ function Layout() {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (pendingG.current) {
         pendingG.current = false;
-        const to = { i: '/inbox', t: '/today', u: '/upcoming', f: '/filters-labels' }[e.key] as
-          '/inbox' | '/today' | '/upcoming' | '/filters-labels' | undefined;
+        const to = {
+          i: '/inbox',
+          t: '/today',
+          u: '/upcoming',
+          f: '/filters-labels',
+          c: '/completed',
+        }[e.key] as
+          '/inbox' | '/today' | '/upcoming' | '/filters-labels' | '/completed' | undefined;
         if (to) {
           e.preventDefault();
           void navigate({ to });

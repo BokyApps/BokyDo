@@ -47,6 +47,10 @@ describe.skipIf(!TEST_DATABASE_URL)('HTTP app', () => {
     expect(headers['x-frame-options']).toBe('DENY');
     expect(headers['referrer-policy']).toBe('no-referrer');
     expect(headers['permissions-policy']).toContain('microphone=()');
+    // Cross-origin isolation (F-008): the app loads only same-origin resources, so COEP is free.
+    expect(headers['cross-origin-embedder-policy']).toBe('require-corp');
+    expect(headers['cross-origin-opener-policy']).toBe('same-origin');
+    expect(headers['cross-origin-resource-policy']).toBe('same-origin');
     expect(headers['x-powered-by']).toBeUndefined();
     // Off until an HTTPS public URL is confirmed in setup (see settings tests).
     expect(headers['strict-transport-security']).toBeUndefined();

@@ -198,7 +198,7 @@ export function SearchDialog({ open, onClose }: { open: boolean; onClose: () => 
 export const SHORTCUTS: [string, string][] = [
   ['q', 'Quick add'],
   ['/ or Ctrl+K', 'Search'],
-  ['g then i / t / u / f', 'Go to Inbox / Today / Upcoming / Filters & Labels'],
+  ['g then i / t / u / f / c', 'Go to Inbox / Today / Upcoming / Filters & Labels / Completed'],
   ['↑ ↓ or j k', 'Move between tasks'],
   ['Enter or e', 'Open task'],
   ['c', 'Complete task'],
