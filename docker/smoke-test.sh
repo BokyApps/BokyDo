@@ -69,7 +69,7 @@ check "no secrets in app environment" \
 echo "== secrets on disk"
 check "app secrets dir is 0700 uid 65532" \
   test "$(volume app-data stat -c '%a %u' /v/secrets)" = "700 65532"
-for f in db_password master.key session.key; do
+for f in db_password master.key session.key vapid.key; do
   check "app $f is 0400 uid 65532" test "$(volume app-data stat -c '%a %u' "/v/secrets/$f")" = "400 65532"
 done
 check "shared DB password is 0400 uid 65532" test "$(volume db-secret stat -c '%a %u' /v/password)" = "400 65532"
@@ -267,6 +267,32 @@ check "team member gets team-visible projects" \
 check "team member can't invite (admins only)" \
   test "$(status_of "$(api POST "/api/v1/workspaces/$WS/invites" '{"role":"member"}')")" = 403
 as_admin
+
+echo "== reminders & notifications (W6)"
+check "push key is a P-256 public key" \
+  test "$(body_of "$(api GET /api/v1/push/key)" | jq -r '.publicKey | length')" = 87
+r=$(api POST /api/v1/push/subscriptions '{"endpoint":"https://169.254.169.254/latest/meta-data/","keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}}') # gitleaks:allow (RFC 8291 example keys)
+check "push endpoints outside known push services are refused (SSRF)" \
+  bash -c "[[ $(status_of "$r") == 400 ]] && jq -e '.error == \"unsupported_push_service\"' <<<'$(body_of "$r")'"
+# A real reminder: due two minutes from now (the smoke admin's zone), reminded one minute before.
+DUE_DAY=$(TZ=Asia/Phnom_Penh date -d '+2 min' +%F); DUE_TIME=$(TZ=Asia/Phnom_Penh date -d '+2 min' +%H:%M)
+REM_TASK=$(uuid)
+sync_cmds "$(cmd user_update_preferences '{"notifications":{"channels":{"reminder":{"email":true}}}}'),$(cmd task_add "{\"id\":\"$REM_TASK\",\"content\":\"Smoke reminder\",\"due\":{\"date\":\"$DUE_DAY\",\"time\":\"$DUE_TIME\",\"timezone\":null,\"string\":\"x\",\"recurrence\":null}}"),$(cmd reminder_add "{\"id\":\"$(uuid)\",\"taskId\":\"$REM_TASK\",\"type\":\"relative\",\"minutesBefore\":1}")" >/dev/null
+reminder_mail() { curl -s "$MAILPIT/api/v1/search?query=subject:%22Smoke%20reminder%22" | jq -r '.messages[0].ID // empty'; }
+for _ in $(seq 50); do [[ -n "$(reminder_mail)" ]] && break; sleep 3; done
+REM_MAIL=$(reminder_mail)
+check "reminder fires on time and is emailed" test -n "$REM_MAIL"
+check "reminder shows in the in-app inbox" \
+  bash -c "jq -e 'any(.notifications[]; .type == \"reminder\")' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
+check "notification email has List-Unsubscribe" \
+  bash -c "curl -s $MAILPIT/api/v1/message/$REM_MAIL/headers | jq -e '.\"List-Unsubscribe\"[0] | test(\"/unsubscribe#\")'"
+UNSUB=$(curl -s "$MAILPIT/api/v1/message/$REM_MAIL" | jq -r .Text | grep -o 'unsubscribe#[A-Za-z0-9._-]*' | head -1 | cut -d'#' -f2)
+check "forged unsubscribe token is refused" \
+  test "$(status_of "$(api POST /api/v1/notifications/unsubscribe "{\"token\":\"${UNSUB%?}x\"}")")" = 400
+check "signed unsubscribe link turns that email off" \
+  bash -c "[[ $(status_of "$(api POST /api/v1/notifications/unsubscribe "{\"token\":\"$UNSUB\"}")") == 200 ]]"
+check "unsubscribe changed only that preference" \
+  bash -c "jq -e '.user.preferences.notifications.channels | (.reminder.email == false) and (.assigned.email == true)' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
 
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1

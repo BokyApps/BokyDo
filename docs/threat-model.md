@@ -1,6 +1,6 @@
 # Threat model
 
-Living document, STRIDE per component. Every deliverable updates it. **v0.6 — F1–F4, W1–W5 (2026-10-06).**
+Living document, STRIDE per component. Every deliverable updates it. **v0.7 — F1–F4, W1–W6 (2026-10-06).**
 
 ## Assets
 
@@ -14,12 +14,13 @@ Living document, STRIDE per component. Every deliverable updates it. **v0.6 — 
 | Initial admin passphrase                                              | stdout once; Argon2id hash in DB                | Full instance takeover before setup               |
 | Attachment files                                                      | `/data/attachments` (app volume)                | Users' files; must never run as the app's origin  |
 | Invite tokens                                                         | Link fragment once; HMAC in DB                  | Joining someone else's project or team            |
+| VAPID private key                                                     | `/data/secrets/vapid.key` (app volume, 0400)    | Sending push messages as this server              |
 
 ## Trust boundaries
 
 1. Internet / LAN → reverse proxy → app (HTTP)
 2. App → Postgres (`internal` Docker network, no egress, not published)
-3. App → outbound internet (SMTP, AI providers, webhooks) via the `egress` network
+3. App → outbound internet (SMTP, browser push services, AI providers, webhooks) via the `egress` network
 4. Host shell → containers (`docker compose exec`); fully trusted by design
 5. (later) Browser ↔ third-party content inside tasks (XSS), LLM ↔ untrusted task text (prompt injection)
 
@@ -99,6 +100,14 @@ Living document, STRIDE per component. Every deliverable updates it. **v0.6 — 
 | T70 | T/I/D  | Malicious uploads: HTML/SVG served from the app's origin, MIME confusion, oversized files, path tricks                                  | Type sniffed from the bytes (never the name or client header); only raster images display inline; every download has `default-src 'none'; sandbox` CSP and `nosniff`; files stored under server-generated IDs; streaming size cap (admin setting ≤ 100 MB), per-user upload rate and per-project count; the upload route accepts only raw bytes | ✅ W5                                  |
 | T71 | D      | Mention, comment or notification spam                                                                                                   | ≤ 10 mentions per comment; each user can cause ≤ 300 notifications per hour; sync rate limits apply to comments                                                                                                                                                                                                                                 | ✅ W5                                  |
 | T72 | T/I    | A reply sent before its transaction commits (the client syncs before the change exists, or success is reported for a rolled-back write) | Responses decided inside a transaction are sent only after commit (F-028)                                                                                                                                                                                                                                                                       | ✅ W5                                  |
+| T73 | S/I    | Push subscription hijack: someone else's endpoint registered to an account, or a shared browser receiving the previous user's alerts    | Subscriptions belong to the session that created them (sign-out and expiry delete them); re-registering an endpoint moves it to the new user; users delete only their own; tested                                                                                                                                                               | ✅ W6                                  |
+| T74 | T/I    | SSRF through push endpoints the server POSTs to                                                                                         | Endpoints must be HTTPS on 443 at a known browser push service (FCM, Mozilla, Apple, WNS); no redirects; browser keys validated before storing; 10 s timeout; tested with metadata, LAN and look-alike hosts                                                                                                                                    | ✅ W6                                  |
+| T75 | I      | Task content exposed in push payloads                                                                                                   | Payloads are encrypted end to end per RFC 8291 (only the browser can read them; verified against the RFC vector and by decrypting in tests)                                                                                                                                                                                                     | ✅ W6                                  |
+| T76 | T      | Email header or template injection through task titles, names or comments                                                               | Single-line fields reject control characters; subjects are flattened again and capped; plain-text bodies only; links built from the configured public URL, never request headers                                                                                                                                                                | ✅ W6                                  |
+| T77 | E/T    | Forged unsubscribe links (turning off someone else's email)                                                                             | Per-user, per-topic HMAC tokens; security alerts can't be unsubscribed; the link opens a confirm page whose POST still passes the Origin check; tested with altered, cross-user and security tokens                                                                                                                                             | ✅ W6                                  |
+| T78 | I      | Reminders and notifications leaking after access is lost                                                                                | Reminders are owner-only in sync and fire only while the owner can still see the task; queued email/push about projects the user can no longer see is dropped                                                                                                                                                                                   | ✅ W6                                  |
+| T79 | D      | Notification floods (email/push spam, reminder storms after downtime)                                                                   | ≤ 300 notifications caused per user per hour, ≤ 20 notification emails per recipient per hour, 20 reminders per task and 5,000 per user, push test 10/hour; reminders more than 12 h late are skipped; jobs work in bounded batches                                                                                                             | ✅ W6                                  |
+| T80 | T      | Reminders firing at the wrong time (DST, time zones, floating times, recurring tasks)                                                   | `zonedInstant` with Temporal "compatible" rules, tested across DST gaps/overlaps and 30-minute zones; fire times recomputed on every task or zone change; `fired_for` makes each occurrence fire exactly once                                                                                                                                   | ✅ W6                                  |
 
 ## Open questions
 
