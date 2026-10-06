@@ -19,6 +19,7 @@ Call the plumber tomorrow at 5pm #Home Reno @phone p1 for 30min {fri}
 | `p1`–`p4`      | priority                                      | `p1`                                                                                                                                                                                                                                                             |
 | `for …`        | duration                                      | `for 45min`, `for 1h30m`, `for half an hour`                                                                                                                                                                                                                     |
 | `{…}`          | deadline                                      | `{next friday}`, `{27/10}`                                                                                                                                                                                                                                       |
+| `!…`           | reminder (for you)                            | `!30m` (30 minutes before the due time; also `!1h`, `!1d`), `!tomorrow 9am`, `!fri 8am` (at that time). Reminders before the due time need a task with a time                                                                                                    |
 
 `#`, `@` and `/` open suggestions: use ↑ ↓ and Enter or Tab to pick one. Pasting several lines
 adds one task per line, after you confirm.

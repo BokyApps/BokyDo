@@ -1,6 +1,7 @@
-import { resolvePreferences, type CommandArgs } from '@bokydo/shared';
+import { mergeNotifications, resolvePreferences, type CommandArgs } from '@bokydo/shared';
 import { eq } from 'drizzle-orm';
 import { users } from '../../db/schema.js';
+import { refreshUserReminders } from '../../reminders/reminders.js';
 import type { CommandContext } from '../context.js';
 
 /**
@@ -16,7 +17,7 @@ export async function userUpdatePreferences(
     .from(users)
     .where(eq(users.id, ctx.userId));
   const current = resolvePreferences(row?.preferences);
-  const { appearance, ...rest } = args;
+  const { appearance, notifications, ...rest } = args;
   const defined = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
   const next = resolvePreferences({
     ...current,
@@ -25,10 +26,17 @@ export async function userUpdatePreferences(
       ...current.appearance,
       ...Object.fromEntries(Object.entries(appearance ?? {}).filter(([, v]) => v !== undefined)),
     },
+    notifications: mergeNotifications(current.notifications, notifications ?? {}),
   });
   await ctx.tx
     .update(users)
     .set({ preferences: next, updatedAt: ctx.now })
     .where(eq(users.id, ctx.userId));
   ctx.changes.forUser('user', ctx.userId, ctx.userId);
+  // Floating due times and automatic reminders depend on these.
+  if (
+    next.timezone !== current.timezone ||
+    next.notifications.autoReminder !== current.notifications.autoReminder
+  )
+    await refreshUserReminders(ctx.tx, ctx.changes, ctx.userId, ctx.defaultTimeZone);
 }

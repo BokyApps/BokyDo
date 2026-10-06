@@ -357,6 +357,24 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
       d.unreadNotifications = ids ? Math.max(0, d.unreadNotifications - marked) : 0;
       return;
     }
+    case 'reminder_add': {
+      const a = command.args;
+      d.reminders.set(a.id, {
+        id: a.id,
+        taskId: a.taskId,
+        type: a.type,
+        minutesBefore: a.type === 'relative' ? a.minutesBefore : null,
+        date: a.type === 'absolute' ? a.date : null,
+        time: a.type === 'absolute' ? a.time : null,
+        timeZone: a.type === 'absolute' ? (d.user?.preferences.timezone ?? null) : null,
+        isAuto: false,
+        updatedAt: now,
+      });
+      return;
+    }
+    case 'reminder_delete':
+      d.reminders.delete(command.args.id);
+      return;
     case 'comment_add': {
       const a = command.args;
       const projectId = a.projectId ?? (a.taskId ? d.tasks.get(a.taskId)?.projectId : undefined);

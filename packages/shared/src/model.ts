@@ -244,6 +244,27 @@ export interface AttachmentInfo {
 
 export const MAX_ATTACHMENTS_PER_COMMENT = 10;
 
+/**
+ * A personal reminder on a task: relative to the task's due time, or at a fixed local time in
+ * `timeZone`. Only its owner sees and receives it. Automatic ones come from the "automatic
+ * reminder" preference and can be deleted like any other.
+ */
+export interface Reminder {
+  id: string;
+  taskId: string;
+  type: 'relative' | 'absolute';
+  /** relative: minutes before the due time. */
+  minutesBefore: number | null;
+  /** absolute: local date and time in `timeZone`. */
+  date: string | null;
+  time: string | null;
+  timeZone: string | null;
+  isAuto: boolean;
+  updatedAt: string;
+}
+
+export const MAX_REMINDER_MINUTES_BEFORE = 30 * 1440;
+
 export interface Comment {
   id: string;
   projectId: string;
@@ -266,6 +287,7 @@ export const ENTITY_TYPES = [
   'labels',
   'filters',
   'comments',
+  'reminders',
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
@@ -456,6 +478,28 @@ export const commandArgs = {
     .strict(),
   folder_delete: byId,
 
+  /** Add a reminder for yourself (relative ones need a task with a due time). */
+  reminder_add: z.discriminatedUnion('type', [
+    z
+      .object({
+        id: idSchema,
+        taskId: idSchema,
+        type: z.literal('relative'),
+        minutesBefore: z.number().int().min(0).max(MAX_REMINDER_MINUTES_BEFORE),
+      })
+      .strict(),
+    z
+      .object({
+        id: idSchema,
+        taskId: idSchema,
+        type: z.literal('absolute'),
+        date: dateString,
+        time: timeString,
+      })
+      .strict(),
+  ]),
+  reminder_delete: byId,
+
   /** Mark notifications read: the given ones, or all of them. */
   notifications_mark_read: z
     .object({ ids: z.array(idSchema).max(200).optional(), all: z.literal(true).optional() })
@@ -519,6 +563,7 @@ export interface SyncResponse {
   labels: Label[];
   filters: Filter[];
   comments: Comment[];
+  reminders: Reminder[];
   /** IDs the client must drop (deleted, or no longer visible to this user). */
   removed: Record<EntityType, string[]>;
   /** Always complete (not a delta): everyone you share a project with, and every membership. */
@@ -599,7 +644,16 @@ export interface ActivityEntry {
 }
 
 export type NotificationType =
-  'assigned' | 'mentioned' | 'commented' | 'role_changed' | 'removed_from_project' | 'became_owner';
+  | 'reminder'
+  | 'assigned'
+  | 'mentioned'
+  | 'commented'
+  | 'invited'
+  | 'completed'
+  | 'role_changed'
+  | 'removed_from_project'
+  | 'became_owner'
+  | 'security';
 
 export interface AppNotification {
   id: string;

@@ -1,3 +1,4 @@
+import { TaskReminders } from './Reminders.js';
 import { AssigneePicker } from './Sharing.js';
 import { ActivityList, CommentThread } from './Comments.js';
 import type { Task } from '@bokydo/shared';
@@ -177,6 +178,9 @@ function TaskDetail({ task }: { task: Task }) {
         </Prop>
         <Prop label="Date">
           <DatePicker value={task.due} onChange={(d) => actions.update(task.id, { due: d })} />
+        </Prop>
+        <Prop label="Reminders">
+          <TaskReminders task={task} />
         </Prop>
         <Prop label="Deadline">
           <DatePicker

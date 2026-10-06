@@ -41,6 +41,8 @@ export const users = pgTable(
     totpLastStep: integer('totp_last_step'),
     /** User preferences (validated by @bokydo/shared preferencesSchema; merged over defaults on read). */
     preferences: jsonb('preferences').notNull().default({}),
+    /** The user's local date of the last daily digest sent (so it goes out once a day). */
+    lastDigestOn: date('last_digest_on'),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),
     ...timestamps,
   },
@@ -299,6 +301,7 @@ export const changes = pgTable(
         'comments',
         'notifications',
         'workspaces',
+        'reminders',
       ],
     }).notNull(),
     entityId: uuid('entity_id').notNull(),
@@ -550,11 +553,76 @@ export const notifications = pgTable(
     data: jsonb('data').notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     readAt: timestamp('read_at', { withTimezone: true }),
+    /** Set once email/push delivery was decided (the outbox for the delivery job). */
+    dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
   },
   (t) => [
     index('notifications_user_idx').on(t.userId, t.createdAt),
     index('notifications_actor_idx').on(t.actorId, t.createdAt),
+    index('notifications_outbox_idx')
+      .on(t.createdAt)
+      .where(sql`dispatched_at is null`),
   ],
+);
+
+/**
+ * Personal reminders. `fireAt` is derived (recomputed whenever the task's due date, the owner's
+ * time zone or the reminder changes); `firedFor` is the `fireAt` value already delivered, so a
+ * recurring task's next occurrence fires again while a delivered one never repeats.
+ */
+export const reminders = pgTable(
+  'reminders',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    minutesBefore: integer('minutes_before'),
+    date: date('date'),
+    time: text('time'),
+    timeZone: text('time_zone'),
+    isAuto: boolean('is_auto').notNull().default(false),
+    fireAt: timestamp('fire_at', { withTimezone: true }),
+    firedFor: timestamp('fired_for', { withTimezone: true }),
+    ...softDelete,
+  },
+  (t) => [
+    index('reminders_task_idx').on(t.taskId),
+    index('reminders_user_idx').on(t.userId),
+    index('reminders_due_idx')
+      .on(t.fireAt)
+      .where(sql`deleted_at is null`),
+    check('reminders_type_check', sql`type in ('relative', 'absolute')`),
+  ],
+);
+
+/**
+ * Web Push subscriptions, one per browser, tied to the session that registered it: signing out
+ * (or the session expiring) removes it, so a shared browser never gets someone else's alerts.
+ */
+export const pushSubscriptions = pgTable(
+  'push_subscriptions',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull().unique(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+    failures: integer('failures').notNull().default(0),
+  },
+  (t) => [index('push_subscriptions_user_idx').on(t.userId)],
 );
 
 /** Team workspaces: a group of people and the projects they share. */

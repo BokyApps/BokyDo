@@ -33,7 +33,8 @@ type ChangeType =
   | 'invitations'
   | 'comments'
   | 'notifications'
-  | 'workspaces';
+  | 'workspaces'
+  | 'reminders';
 interface ChangeRow {
   entityType: ChangeType;
   entityId: string;
@@ -65,6 +66,11 @@ export class ChangeRecorder {
     }
   }
 
+  /** IDs of entities of `type` this writer touched. */
+  touched(type: ChangeType): string[] {
+    return [...new Set(this.rows.filter((r) => r.entityType === type).map((r) => r.entityId))];
+  }
+
   get isEmpty(): boolean {
     return this.rows.length === 0;
   }
@@ -94,4 +100,6 @@ export const LIMITS = {
   workspacesPerUser: 50,
   membersPerWorkspace: 500,
   foldersPerWorkspace: 200,
+  remindersPerTask: 20,
+  remindersPerUser: 5000,
 } as const;

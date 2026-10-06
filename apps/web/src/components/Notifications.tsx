@@ -15,6 +15,14 @@ const text = (n: AppNotification, actor: string): string => {
         ? `“${d.projectName}”`
         : 'a project';
   switch (n.type) {
+    case 'reminder':
+      return `Reminder: ${title}${d.late ? ' (sent late)' : ''}`;
+    case 'invited':
+      return `${actor} invited you to ${project}`;
+    case 'completed':
+      return `${actor} completed ${title}`;
+    case 'security':
+      return typeof d.message === 'string' ? d.message : 'Security alert on your account';
     case 'assigned':
       return `${actor} assigned ${title} to you`;
     case 'mentioned':

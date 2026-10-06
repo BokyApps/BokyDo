@@ -10,12 +10,13 @@ const KEEP = 50;
 
 /**
  * Record a notification for `userId` (never for the actor themself) and poke their clients.
- * Over the per-actor hourly budget, further notifications are silently dropped.
+ * Over the per-actor hourly budget, further notifications are silently dropped. A null actor is
+ * the system (reminders, security alerts): no budget applies.
  */
 export async function notify(
   tx: Tx,
   changes: ChangeRecorder,
-  actorId: string,
+  actorId: string | null,
   n: {
     userId: string;
     type: NotificationType;
@@ -26,16 +27,18 @@ export async function notify(
   },
 ): Promise<void> {
   if (n.userId === actorId) return;
-  const [recent] = await tx
-    .select({ n: count() })
-    .from(notifications)
-    .where(
-      and(
-        eq(notifications.actorId, actorId),
-        gt(notifications.createdAt, new Date(Date.now() - 3600_000)),
-      ),
-    );
-  if ((recent?.n ?? 0) >= NOTIFICATIONS_PER_ACTOR_PER_HOUR) return;
+  if (actorId !== null) {
+    const [recent] = await tx
+      .select({ n: count() })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.actorId, actorId),
+          gt(notifications.createdAt, new Date(Date.now() - 3600_000)),
+        ),
+      );
+    if ((recent?.n ?? 0) >= NOTIFICATIONS_PER_ACTOR_PER_HOUR) return;
+  }
   const id = newId();
   await tx.insert(notifications).values({
     id,

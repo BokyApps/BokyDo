@@ -56,6 +56,7 @@ async function main(): Promise<void> {
     60 * 60 * 1000,
   );
   purge.unref();
+  app.services.jobs.start();
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down');

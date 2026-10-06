@@ -1,6 +1,7 @@
 import type {
   CommandArgs,
   Comment,
+  Reminder,
   CommandType,
   EntityType,
   Filter,
@@ -33,6 +34,7 @@ export class SyncUser {
   labels = new Map<string, Label>();
   filters = new Map<string, Filter>();
   comments = new Map<string, Comment>();
+  reminders = new Map<string, Reminder>();
   last!: SyncResponse;
 
   constructor(
@@ -78,6 +80,7 @@ export class SyncUser {
       labels: this.labels,
       filters: this.filters,
       comments: this.comments,
+      reminders: this.reminders,
     };
     if (res.fullSync) for (const m of Object.values(maps)) m.clear();
     for (const type of Object.keys(maps) as EntityType[]) {

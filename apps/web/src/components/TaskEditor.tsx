@@ -12,8 +12,9 @@ import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react
 import { useTaskActions } from '../lib/actions.js';
 import { useConfirm } from '../lib/confirm.js';
 import { dueLabel, formatDate } from '../lib/dates.js';
+import { reminderLabel } from '../lib/reminders.js';
 import { quickAddCandidates, toTaskDue } from '../lib/quick-add.js';
-import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
+import { newId, usePreferences, useSend, useSyncState, useTimeZone } from '../lib/sync.js';
 import type { AddDefaults } from '../lib/task-ui.js';
 import { DatePicker, LabelPicker, PriorityPicker, ProjectDot, ProjectPicker } from './pickers.js';
 import { SmartInput, TOKEN_CLASS, type Suggestion } from './SmartInput.js';
@@ -39,6 +40,7 @@ export function TaskEditor({
   const prefs = usePreferences();
   const timeZone = useTimeZone();
   const actions = useTaskActions();
+  const send = useSend();
   const confirm = useConfirm();
   const [content, setContent] = useState('');
   const [description, setDescription] = useState('');
@@ -61,8 +63,7 @@ export function TaskEditor({
     weekStart: prefs.weekStart,
     dateOrder: prefs.dateFormat,
     smartDates: prefs.smartDateRecognition,
-    // Reminders arrive with W6; until then "!" stays text.
-    reminders: false,
+    reminders: true,
     // A sub-task always lives with its parent.
     projects: isSubtask ? [] : candidates.projects,
     sections: isSubtask ? [] : candidates.sections,
@@ -161,7 +162,7 @@ export function TaskEditor({
       return;
     for (const { text, result } of nonEmpty) {
       const r = resolve(result);
-      actions.add({
+      const taskId = actions.add({
         // A line that was nothing but tokens ("tomorrow #Work") keeps its text as the name.
         content: (result.content || text.trim()).slice(0, 1000),
         ...(nonEmpty.length === 1 && description.trim() ? { description } : {}),
@@ -175,6 +176,13 @@ export function TaskEditor({
         ...(result.durationMinutes ? { durationMinutes: result.durationMinutes } : {}),
         ...(result.assigneeId ? { assigneeId: result.assigneeId } : {}),
       });
+      for (const rem of result.reminders)
+        send(
+          'reminder_add',
+          rem.type === 'relative'
+            ? { id: newId(), taskId, type: 'relative', minutesBefore: rem.minutesBefore }
+            : { id: newId(), taskId, type: 'absolute', date: rem.date, time: rem.time },
+        );
     }
     setContent('');
     setDescription('');
@@ -185,6 +193,7 @@ export function TaskEditor({
 
   const chips: { key: string; kind: Token['kind']; label: ReactNode; keys: string[] }[] = [];
   if (first) {
+    let reminderIndex = 0;
     for (const t of first.tokens) {
       const key = tokenKey(t);
       let label: ReactNode = t.text;
@@ -199,6 +208,17 @@ export function TaskEditor({
       if (t.kind === 'duration' && first.durationMinutes)
         label = formatDuration(first.durationMinutes);
       if (t.kind === 'priority') label = t.text.toUpperCase();
+      if (t.kind === 'reminder') {
+        const rem = first.reminders[reminderIndex++];
+        if (rem)
+          label = `⏰ ${reminderLabel(
+            rem.type === 'relative'
+              ? { type: 'relative', minutesBefore: rem.minutesBefore, date: null, time: null }
+              : { type: 'absolute', minutesBefore: null, date: rem.date, time: rem.time },
+            today,
+            prefs,
+          )}${rem.type === 'relative' && !resolve(first).due?.time ? ' (needs a time)' : ''}`;
+      }
       if (t.kind === 'assignee' && first.assigneeId)
         label = `→ ${state.collaborators.get(first.assigneeId)?.username ?? t.text}`;
       chips.push({ key: `${t.kind}:${t.start}`, kind: t.kind, label, keys: [key] });

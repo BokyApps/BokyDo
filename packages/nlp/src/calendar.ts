@@ -126,3 +126,26 @@ export function localNow(timeZone: string, now: Date = new Date()): LocalNow {
     time: `${get('hour')}:${get('minute')}`,
   };
 }
+
+/** Minutes the zone is ahead of UTC at instant `ms` (unknown zones count as UTC). */
+function zoneOffsetMs(timeZone: string, ms: number): number {
+  const minute = Math.floor(ms / 60_000) * 60_000;
+  const l = localNow(timeZone, new Date(minute));
+  return toUtc(l.date) + toMinutes(l.time) * 60_000 - minute;
+}
+
+/**
+ * The UTC instant (ms) of a wall-clock `date` + `time` in an IANA zone. A time skipped by a DST
+ * jump moves forward by the gap; a repeated time resolves to its first occurrence (the same
+ * rules as Temporal's "compatible" disambiguation). Unknown zones are treated as UTC.
+ */
+export function zonedInstant(date: string, time: string, timeZone: string): number {
+  const wall = toUtc(date) + toMinutes(time) * 60_000;
+  const before = zoneOffsetMs(timeZone, wall - 86_400_000);
+  const after = zoneOffsetMs(timeZone, wall + 86_400_000);
+  const candidates = [wall - before, wall - after].filter(
+    (ms) => ms + zoneOffsetMs(timeZone, ms) === wall,
+  );
+  // No candidate: the time falls in a gap; the pre-transition offset lands just after it.
+  return candidates.length ? Math.min(...candidates) : wall - before;
+}

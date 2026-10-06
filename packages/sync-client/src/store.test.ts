@@ -51,7 +51,15 @@ function response(partial: Partial<SyncResponse> = {}): SyncResponse {
     labels: [],
     filters: [],
     comments: [],
-    removed: { projects: [], sections: [], tasks: [], labels: [], filters: [], comments: [] },
+    removed: {
+      projects: [],
+      sections: [],
+      tasks: [],
+      labels: [],
+      filters: [],
+      comments: [],
+      reminders: [],
+    },
     collaborators: [],
     members: [],
     invitations: [],
@@ -60,6 +68,7 @@ function response(partial: Partial<SyncResponse> = {}): SyncResponse {
     workspaces: [],
     workspaceMembers: [],
     folders: [],
+    reminders: [],
     results: {},
     ...partial,
   };
@@ -200,6 +209,7 @@ describe('SyncStore', () => {
           labels: [],
           filters: [],
           comments: [],
+          reminders: [],
         },
       }),
     );

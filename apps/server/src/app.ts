@@ -29,6 +29,8 @@ import { registerActivityRoutes } from './activity/routes.js';
 import { registerAttachmentRoutes } from './attachments/routes.js';
 import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
+import { JobRunner } from './jobs/runner.js';
+import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
 
 export interface AppDeps {
@@ -50,6 +52,8 @@ export interface AppServices {
   events: EventBus;
   flows: FlowStore;
   tokens: UserTokenStore;
+  /** Reminders, notification delivery and digests (started by main; tests call `tick`). */
+  jobs: JobRunner;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -89,9 +93,27 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const flows = new FlowStore(db, deps.secrets.sessionKey);
   const tokens = new UserTokenStore(db, deps.secrets.sessionKey);
   const notifier = new Notifier(db, settings, mailer, app.log);
-  const services: AppServices = { settings, sessions, mailer, sync, events, flows, tokens };
+  const jobs = new JobRunner(
+    [
+      {
+        name: 'reminders',
+        run: async (now) => {
+          // Batches of 200 until caught up (after downtime there may be many).
+          for (let i = 0; i < 50; i++) {
+            const handled = await sync.write((tx, changes) => fireDueReminders(tx, changes, now));
+            if (handled < 200) break;
+          }
+        },
+      },
+    ],
+    app.log,
+  );
+  const services: AppServices = { settings, sessions, mailer, sync, events, flows, tokens, jobs };
   app.decorate('services', services);
-  app.addHook('onClose', async () => events.closeAll());
+  app.addHook('onClose', async () => {
+    await jobs.stop();
+    events.closeAll();
+  });
 
   app.setErrorHandler((err: { statusCode?: number; message?: string }, req, reply) => {
     const statusCode = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;

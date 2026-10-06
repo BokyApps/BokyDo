@@ -22,12 +22,14 @@ import {
   processedCommands,
   projectMembers,
   projects,
+  reminders,
   sections,
   tasks,
   users,
   workspaceMembers,
   workspaces,
 } from '../db/schema.js';
+import { refreshTaskReminders, reminderToWire } from '../reminders/reminders.js';
 import {
   ChangeRecorder,
   CommandFailure,
@@ -100,6 +102,8 @@ const HANDLERS: Record<CommandType, Handler> = {
   folder_update: h.folderUpdate,
   folder_delete: h.folderDelete,
   project_move_workspace: h.projectMoveWorkspace,
+  reminder_add: h.reminderAdd,
+  reminder_delete: h.reminderDelete,
 };
 
 export interface Affected {
@@ -127,6 +131,7 @@ export class SyncService {
     const result = await this.db.transaction(async (tx) => {
       await tx.execute(WRITE_LOCK);
       const value = await fn(tx, recorder);
+      await this.afterWrite(tx, recorder);
       await recorder.flush(tx);
       return value;
     });
@@ -172,7 +177,10 @@ export class SyncService {
       } else {
         result = await this.runHandler(tx, userId, type, parsed.data, recorder);
       }
-      if (result.ok) await recorder.flush(tx);
+      if (result.ok) {
+        await this.afterWrite(tx, recorder);
+        await recorder.flush(tx);
+      }
       await tx.insert(processedCommands).values({ userId, uuid, result });
       return result;
     });
@@ -180,6 +188,11 @@ export class SyncService {
       this.onCommitted({ projectIds: recorder.projectScopes, userIds: recorder.userScopes });
     }
     return result;
+  }
+
+  /** Derived state that follows task changes: reminder times and automatic reminders. */
+  private async afterWrite(tx: Tx, recorder: ChangeRecorder): Promise<void> {
+    await refreshTaskReminders(tx, recorder, recorder.touched('tasks'), this.defaultTimeZone());
   }
 
   private async runHandler(
@@ -387,6 +400,7 @@ export class SyncService {
       labels: l.map(labelToWire),
       filters: f.map(filterToWire),
       comments: c,
+      reminders: (await this.userReminders(tx, userId)).filter((r) => taskIds.has(r.taskId)),
       removed: emptyRemoved(),
     };
   }
@@ -420,6 +434,7 @@ export class SyncService {
       labels: new Set(),
       filters: new Set(),
       comments: new Set(),
+      reminders: new Set(),
     };
     const granted: string[] = [];
     for (const m of marked) {
@@ -468,8 +483,24 @@ export class SyncService {
           (x) => isVisible(x.projectId) && !deletedComments.has(x.id),
         )
       : [];
+    const r = ids.reminders.size
+      ? (
+          await tx
+            .select({
+              reminder: reminders,
+              projectId: tasks.projectId,
+              taskDeleted: tasks.deletedAt,
+            })
+            .from(reminders)
+            .innerJoin(tasks, eq(tasks.id, reminders.taskId))
+            .where(and(inArray(reminders.id, [...ids.reminders]), eq(reminders.userId, userId)))
+        )
+          .filter((x) => !x.reminder.deletedAt && !x.taskDeleted && isVisible(x.projectId))
+          .map((x) => reminderToWire(x.reminder))
+      : [];
     const out = {
       comments: c,
+      reminders: r,
       projects: p
         .filter((r) => isVisible(r.id) && !r.deletedAt)
         .map((r) => projectToWire(r, member(visible, r.id))),
@@ -514,6 +545,9 @@ export class SyncService {
           )
         ).filter((x) => x.taskId === null || grantedTasks.has(x.taskId)),
       );
+      out.reminders.push(
+        ...(await this.userReminders(tx, userId)).filter((x) => grantedTasks.has(x.taskId)),
+      );
     }
     // Revoked projects: tell the client to drop them.
     for (const id of granted) if (!isVisible(id)) ids.projects.add(id);
@@ -525,6 +559,15 @@ export class SyncService {
       removed[type] = [...ids[type]].filter((id) => !kept.has(id));
     }
     return { ...out, removed };
+  }
+
+  /** The user's live reminders (callers keep those on tasks they send). */
+  private async userReminders(tx: Tx, userId: string) {
+    const rows = await tx
+      .select()
+      .from(reminders)
+      .where(and(eq(reminders.userId, userId), isNull(reminders.deletedAt)));
+    return rows.map(reminderToWire);
   }
 
   /** Comments with their reactions folded in. */
@@ -600,5 +643,13 @@ function member(visible: VisibleProjects, projectId: string) {
 }
 
 function emptyRemoved(): Record<EntityType, string[]> {
-  return { projects: [], sections: [], tasks: [], labels: [], filters: [], comments: [] };
+  return {
+    projects: [],
+    sections: [],
+    tasks: [],
+    labels: [],
+    filters: [],
+    comments: [],
+    reminders: [],
+  };
 }

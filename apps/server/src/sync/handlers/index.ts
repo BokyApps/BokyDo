@@ -7,3 +7,4 @@ export * from './members.js';
 export * from './comments.js';
 export * from './notifications.js';
 export * from './workspaces.js';
+export * from './reminders.js';

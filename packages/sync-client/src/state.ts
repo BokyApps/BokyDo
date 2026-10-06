@@ -10,6 +10,7 @@ import type {
   PendingInvite,
   Project,
   ProjectMember,
+  Reminder,
   Section,
   SyncResponse,
   SyncUser,
@@ -33,6 +34,8 @@ export interface SyncState {
   labels: ReadonlyMap<string, Label>;
   filters: ReadonlyMap<string, Filter>;
   comments: ReadonlyMap<string, Comment>;
+  /** The user's own reminders. */
+  reminders: ReadonlyMap<string, Reminder>;
 }
 
 /** Mutable working copy used while applying a server response or replaying commands. */
@@ -52,6 +55,7 @@ export interface Draft {
   labels: Map<string, Label>;
   filters: Map<string, Filter>;
   comments: Map<string, Comment>;
+  reminders: Map<string, Reminder>;
 }
 
 export const emptyState = (): SyncState => ({
@@ -70,6 +74,7 @@ export const emptyState = (): SyncState => ({
   labels: new Map(),
   filters: new Map(),
   comments: new Map(),
+  reminders: new Map(),
 });
 
 export function draftOf(state: SyncState): Draft {
@@ -89,6 +94,7 @@ export function draftOf(state: SyncState): Draft {
     labels: new Map(state.labels),
     filters: new Map(state.filters),
     comments: new Map(state.comments),
+    reminders: new Map(state.reminders),
   };
 }
 
@@ -110,12 +116,14 @@ export function applyServerResponse(state: SyncState, res: SyncResponse): SyncSt
   for (const l of res.labels) d.labels.set(l.id, l);
   for (const f of res.filters) d.filters.set(f.id, f);
   for (const c of res.comments) d.comments.set(c.id, c);
+  for (const r of res.reminders) d.reminders.set(r.id, r);
   for (const id of res.removed.projects) d.projects.delete(id);
   for (const id of res.removed.sections) d.sections.delete(id);
   for (const id of res.removed.tasks) d.tasks.delete(id);
   for (const id of res.removed.labels) d.labels.delete(id);
   for (const id of res.removed.filters) d.filters.delete(id);
   for (const id of res.removed.comments) d.comments.delete(id);
+  for (const id of res.removed.reminders) d.reminders.delete(id);
   dropOrphans(d);
   return d;
 }
@@ -141,4 +149,5 @@ export function dropOrphans(d: Draft): void {
   // Comments go with their task or project.
   for (const [id, c] of d.comments)
     if (!d.projects.has(c.projectId) || (c.taskId && !d.tasks.has(c.taskId))) d.comments.delete(id);
+  for (const [id, r] of d.reminders) if (!d.tasks.has(r.taskId)) d.reminders.delete(id);
 }
