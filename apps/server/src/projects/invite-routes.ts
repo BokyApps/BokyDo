@@ -15,7 +15,7 @@ import { newToken, tokenId } from '../auth/tokens.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { projectInvitations, projectMembers, projects, users, workspaces } from '../db/schema.js';
-import type { Notifier } from '../email/notifier.js';
+import { notify } from '../notifications/notify.js';
 import { requireSession } from '../http/access.js';
 import { CommandFailure, LIMITS, type ChangeRecorder, type Tx } from '../sync/context.js';
 import { addMember } from '../sync/handlers/members.js';
@@ -40,7 +40,6 @@ const tokenBody = z.object({ token: z.string().min(20).max(100) }).strict();
 interface Deps {
   db: Database;
   sync: SyncService;
-  notifier: Notifier;
   sessionKey: Buffer;
 }
 
@@ -217,7 +216,12 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
               });
               // Pokes the invitee's open clients so the invitation shows up straight away.
               changes.forUser('invitations', target.id, invitee.id);
-              deps.notifier.projectInvite(invitee.id, me.username, target.name);
+              // In-app, and by email/push per their preferences (no project link: not a member yet).
+              await notify(tx, changes, me.id, {
+                userId: invitee.id,
+                type: 'invited',
+                data: { name: target.name, kind: target.kind },
+              });
             }
           }
           return out(202, { sent: true });

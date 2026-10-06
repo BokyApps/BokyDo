@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { newVapidKey } from '../delivery/webpush.js';
 import { ensureSecretDir, ensureSecretFile, randomSecret } from './secret-files.js';
 
 export interface AppSecrets {
@@ -6,6 +7,8 @@ export interface AppSecrets {
   masterKey: Buffer;
   /** HMAC key for signing session cookies and other server-issued tokens. */
   sessionKey: Buffer;
+  /** P-256 private key identifying this server to browser push services (VAPID). */
+  vapidKey: Buffer;
 }
 
 /**
@@ -20,9 +23,11 @@ export async function ensureAppSecrets(secretsDir: string): Promise<AppSecrets> 
   const sessionKey = await ensureSecretFile(path.join(secretsDir, 'session.key'), () =>
     randomSecret(32),
   );
+  const vapidKey = await ensureSecretFile(path.join(secretsDir, 'vapid.key'), newVapidKey);
   return {
     masterKey: decodeKey(masterKey, 'master.key'),
     sessionKey: decodeKey(sessionKey, 'session.key'),
+    vapidKey: decodeKey(vapidKey, 'vapid.key'),
   };
 }
 

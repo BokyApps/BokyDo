@@ -162,7 +162,12 @@ async function updateFireTimes(
     if (!task) continue;
     const fireAt = computeFireAt(r, task, people.get(r.userId)?.zone ?? defaultTimeZone);
     if (fireAt?.getTime() === r.fireAt?.getTime()) continue;
-    await tx.update(reminders).set({ fireAt }).where(eq(reminders.id, r.id));
+    // A time that is already past (e.g. the task moved earlier) counts as handled, not "late".
+    const passed = fireAt !== null && fireAt.getTime() <= Date.now();
+    await tx
+      .update(reminders)
+      .set({ fireAt, ...(passed ? { firedFor: fireAt } : {}) })
+      .where(eq(reminders.id, r.id));
   }
 }
 

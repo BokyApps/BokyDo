@@ -327,6 +327,15 @@ export async function taskComplete(
   const task = await requireTask(ctx, args.id);
   const descendants = await descendantTasks(ctx.tx, task.id);
   const next = task.due?.recurrence ? nextOccurrence(task.due, await userNow(ctx)) : null;
+  // Whoever assigned the task hears that it's done (not when they complete it themselves).
+  if (!task.isCompleted && task.assigneeId && task.assignedById)
+    await notify(ctx.tx, ctx.changes, ctx.userId, {
+      userId: task.assignedById,
+      type: 'completed',
+      projectId: task.projectId,
+      taskId: task.id,
+      data: { title: task.content },
+    });
   if (next && !task.isCompleted) {
     await ctx.tx
       .update(tasks)

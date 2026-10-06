@@ -54,16 +54,33 @@ export async function reminderAdd(
           timeZone: null,
         }
       : { type: 'absolute', minutesBefore: null, date: args.date, time: args.time, timeZone: zone };
+  const fireAt = computeFireAt(row, task, zone);
   await ctx.tx.insert(reminders).values({
     id: args.id,
     userId: ctx.userId,
     taskId: task.id,
     ...row,
-    fireAt: computeFireAt(row, task, zone),
+    fireAt,
+    // Reminders set for a time that has already passed never fire.
+    firedFor: fireAt && fireAt <= ctx.now ? fireAt : null,
     createdAt: ctx.now,
     updatedAt: ctx.now,
   });
   ctx.changes.forUser('reminders', args.id, ctx.userId);
+  // Your own reminder replaces the automatic one (deleted, so it doesn't come back).
+  const autos = await ctx.tx
+    .update(reminders)
+    .set({ deletedAt: ctx.now, updatedAt: ctx.now })
+    .where(
+      and(
+        eq(reminders.taskId, task.id),
+        eq(reminders.userId, ctx.userId),
+        eq(reminders.isAuto, true),
+        isNull(reminders.deletedAt),
+      ),
+    )
+    .returning({ id: reminders.id });
+  for (const a of autos) ctx.changes.forUser('reminders', a.id, ctx.userId);
 }
 
 export async function reminderDelete(

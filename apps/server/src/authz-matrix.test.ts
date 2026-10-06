@@ -74,6 +74,12 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/projects/:id/invites': 'user/after',
   'GET /api/v1/projects/:id/invites': 'user/after',
   'DELETE /api/v1/projects/:id/invites/:inviteId': 'user/after',
+  // Notification delivery
+  'GET /api/v1/push/key': 'user/after',
+  'POST /api/v1/push/subscriptions': 'user/after',
+  'DELETE /api/v1/push/subscriptions': 'user/after',
+  'POST /api/v1/push/test': 'user/after',
+  'POST /api/v1/notifications/unsubscribe': 'public/after',
   'POST /api/v1/workspaces/:id/invites': 'user/after',
   'GET /api/v1/workspaces/:id/invites': 'user/after',
   'DELETE /api/v1/workspaces/:id/invites/:inviteId': 'user/after',

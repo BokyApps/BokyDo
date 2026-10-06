@@ -30,6 +30,9 @@ import { registerAttachmentRoutes } from './attachments/routes.js';
 import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
+import { Delivery } from './delivery/delivery.js';
+import { registerDeliveryRoutes } from './delivery/routes.js';
+import { VapidKeys } from './delivery/webpush.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
 
@@ -54,6 +57,7 @@ export interface AppServices {
   tokens: UserTokenStore;
   /** Reminders, notification delivery and digests (started by main; tests call `tick`). */
   jobs: JobRunner;
+  delivery: Delivery;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -81,34 +85,67 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return503OnClosing: true,
     routerOptions: { maxParamLength: 200 },
   });
+  const jobs = new JobRunner(app.log);
   const sync = new SyncService(
     db,
     (affected) => {
       events
         .publish(affected)
         .catch((err: unknown) => app.log.warn({ err }, 'event publish failed'));
+      // New notifications may be waiting for email/push delivery.
+      jobs.poke();
     },
     () => settings.get('instance.defaultTimezone'),
   );
   const flows = new FlowStore(db, deps.secrets.sessionKey);
   const tokens = new UserTokenStore(db, deps.secrets.sessionKey);
   const notifier = new Notifier(db, settings, mailer, app.log);
-  const jobs = new JobRunner(
-    [
-      {
-        name: 'reminders',
-        run: async (now) => {
-          // Batches of 200 until caught up (after downtime there may be many).
-          for (let i = 0; i < 50; i++) {
-            const handled = await sync.write((tx, changes) => fireDueReminders(tx, changes, now));
-            if (handled < 200) break;
-          }
-        },
+  notifier.onAlert = (userId) => {
+    events
+      .publish({ projectIds: new Set(), userIds: new Set([userId]) })
+      .catch((err: unknown) => app.log.warn({ err }, 'event publish failed'));
+    jobs.poke();
+  };
+  const vapid = new VapidKeys(deps.secrets.vapidKey);
+  const delivery = new Delivery({
+    db,
+    settings,
+    mailer,
+    vapid,
+    sessionKey: deps.secrets.sessionKey,
+    log: app.log,
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+  });
+  jobs.add(
+    {
+      name: 'reminders',
+      run: async (now) => {
+        // Batches of 200 until caught up (after downtime there may be many).
+        for (let i = 0; i < 50; i++) {
+          const handled = await sync.write((tx, changes) => fireDueReminders(tx, changes, now));
+          if (handled < 200) break;
+        }
       },
-    ],
-    app.log,
+    },
+    {
+      name: 'delivery',
+      run: async (now) => {
+        for (let i = 0; i < 20; i++) if ((await delivery.dispatch(now)) < 100) break;
+      },
+    },
+    { name: 'digests', run: (now) => delivery.digests(now) },
   );
-  const services: AppServices = { settings, sessions, mailer, sync, events, flows, tokens, jobs };
+  const services: AppServices = {
+    settings,
+    sessions,
+    mailer,
+    sync,
+    events,
+    flows,
+    tokens,
+    jobs,
+    delivery,
+  };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
     await jobs.stop();
@@ -174,8 +211,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerAdminSettingsRoutes(app, { db, settings, mailer });
   registerSyncRoutes(app, { sync, events, sessions });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
-  registerInviteRoutes(app, { db, sync, notifier, sessionKey: deps.secrets.sessionKey });
+  registerInviteRoutes(app, { db, sync, sessionKey: deps.secrets.sessionKey });
   registerActivityRoutes(app, db);
+  registerDeliveryRoutes(app, {
+    db,
+    sync,
+    delivery,
+    vapid,
+    sessionKey: deps.secrets.sessionKey,
+  });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

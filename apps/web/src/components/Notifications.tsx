@@ -115,7 +115,16 @@ export function NotificationBell() {
                     onClick={() => open(n, close)}
                     className={`flex w-full gap-2 rounded-md px-2 py-2 text-left hover:bg-surface-alt ${n.read ? 'text-muted' : ''}`}
                   >
-                    <Avatar name={actor} />
+                    {n.type === 'reminder' || n.type === 'security' ? (
+                      <span
+                        aria-hidden
+                        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-accent/20 text-[0.65rem]"
+                      >
+                        {n.type === 'reminder' ? '⏰' : '🔒'}
+                      </span>
+                    ) : (
+                      <Avatar name={actor} />
+                    )}
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm">{text(n, actor)}</span>
                       {typeof n.data.excerpt === 'string' && (

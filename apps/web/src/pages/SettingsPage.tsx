@@ -5,17 +5,20 @@ import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
 import { usePreferences, useSend } from '../lib/sync.js';
+import { NotificationSettings } from './NotificationSettings.js';
 
-export function SettingsPage() {
+type Tab = 'appearance' | 'general' | 'notifications';
+
+export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }) {
   const prefs = usePreferences();
   const send = useSend();
-  const [tab, setTab] = useState<'appearance' | 'general'>('appearance');
+  const [tab, setTab] = useState<Tab>(initialTab);
   const update = (patch: PreferencesPatch) => send('user_update_preferences', patch);
   return (
     <Page>
       <ViewHeader title="Settings" />
       <div role="tablist" className="mb-6 flex gap-1 border-b border-line">
-        {(['appearance', 'general'] as const).map((t) => (
+        {(['appearance', 'general', 'notifications'] as const).map((t) => (
           <button
             key={t}
             role="tab"
@@ -28,11 +31,9 @@ export function SettingsPage() {
           </button>
         ))}
       </div>
-      {tab === 'appearance' ? (
-        <AppearanceSettings prefs={prefs} update={update} />
-      ) : (
-        <GeneralSettings prefs={prefs} update={update} />
-      )}
+      {tab === 'appearance' && <AppearanceSettings prefs={prefs} update={update} />}
+      {tab === 'general' && <GeneralSettings prefs={prefs} update={update} />}
+      {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
     </Page>
   );
 }

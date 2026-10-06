@@ -11,6 +11,8 @@ export interface OutgoingEmail {
   to: string;
   subject: string;
   text: string;
+  /** Adds a List-Unsubscribe header (the link opens a page that confirms first). */
+  unsubscribeUrl?: string;
 }
 
 /** Sends mail with the SMTP settings from Admin → Settings → Email (read fresh on every send). */
@@ -47,6 +49,9 @@ export class Mailer {
         to: mail.to,
         subject: mail.subject,
         text: mail.text,
+        ...(mail.unsubscribeUrl
+          ? { list: { unsubscribe: { url: mail.unsubscribeUrl, comment: 'Unsubscribe' } } }
+          : {}),
         disableFileAccess: true,
         disableUrlAccess: true,
       });

@@ -20,6 +20,7 @@ describe('secret files', () => {
     expect(await mode(secrets)).toBe(0o700);
     expect(await mode(path.join(secrets, 'master.key'))).toBe(0o400);
     expect(await mode(path.join(secrets, 'session.key'))).toBe(0o400);
+    expect(await mode(path.join(secrets, 'vapid.key'))).toBe(0o400);
   });
 
   it('is idempotent and never regenerates keys', async () => {
@@ -28,6 +29,7 @@ describe('secret files', () => {
     const b = await ensureAppSecrets(secrets);
     expect(a.masterKey.equals(b.masterKey)).toBe(true);
     expect(a.masterKey).toHaveLength(32);
+    expect(a.vapidKey.equals(b.vapidKey)).toBe(true);
   });
 
   it('refuses to overwrite an existing secret', async () => {

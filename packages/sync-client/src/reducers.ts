@@ -1,5 +1,5 @@
 import { localNow, nextOccurrence } from '@bokydo/nlp';
-import { generateKeyBetween, type Command, type Task } from '@bokydo/shared';
+import { generateKeyBetween, mergeNotifications, type Command, type Task } from '@bokydo/shared';
 import { dropOrphans, type Draft } from './state.js';
 
 /**
@@ -449,7 +449,7 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
     }
     case 'user_update_preferences': {
       if (!d.user) return;
-      const { appearance, ...rest } = command.args;
+      const { appearance, notifications, ...rest } = command.args;
       const defined = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
       const appearanceDefined = Object.fromEntries(
         Object.entries(appearance ?? {}).filter(([, v]) => v !== undefined),
@@ -460,6 +460,8 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
           ...d.user.preferences,
           ...defined,
           appearance: { ...d.user.preferences.appearance, ...appearanceDefined },
+          // Same deep merge as the server: a patch names only what changed.
+          notifications: mergeNotifications(d.user.preferences.notifications, notifications ?? {}),
         },
       };
       return;

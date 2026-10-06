@@ -12,14 +12,20 @@ export interface Job {
  */
 export class JobRunner {
   private timer: NodeJS.Timeout | null = null;
+  private dueAt = Infinity;
   private started = false;
   private current: Promise<void> = Promise.resolve();
 
+  private readonly jobs: Job[] = [];
+
   constructor(
-    private readonly jobs: Job[],
     private readonly log: FastifyBaseLogger,
     private readonly intervalMs = 10_000,
   ) {}
+
+  add(...jobs: Job[]): void {
+    this.jobs.push(...jobs);
+  }
 
   start(): void {
     this.started = true;
@@ -33,9 +39,9 @@ export class JobRunner {
     await this.current;
   }
 
-  /** Run soon (e.g. after a write that created notifications). */
+  /** Run soon (e.g. after a write that created notifications). Never delays a sooner tick. */
   poke(): void {
-    if (this.started) this.schedule(200);
+    if (this.started && this.dueAt > Date.now() + 200) this.schedule(200);
   }
 
   /** Run every job once, after any tick already in progress. */
@@ -56,8 +62,10 @@ export class JobRunner {
 
   private schedule(delayMs: number): void {
     if (this.timer) clearTimeout(this.timer);
+    this.dueAt = Date.now() + delayMs;
     this.timer = setTimeout(() => {
       this.timer = null;
+      this.dueAt = Infinity;
       void this.tick().finally(() => {
         if (this.started && !this.timer) this.schedule(this.intervalMs);
       });

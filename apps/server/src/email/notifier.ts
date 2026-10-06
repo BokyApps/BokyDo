@@ -1,7 +1,8 @@
 import { and, count, eq, gt, isNotNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../db/client.js';
-import { auditLog, users } from '../db/schema.js';
+import { newId } from '../db/ids.js';
+import { auditLog, notifications, users } from '../db/schema.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import type { Mailer } from './mailer.js';
 
@@ -40,6 +41,9 @@ export interface RequestMeta {
  * never from request headers. Sending is best-effort and never blocks or fails the request.
  */
 export class Notifier {
+  /** Called after a security alert is recorded in-app (pokes clients, wakes push delivery). */
+  onAlert: (userId: string) => void = () => undefined;
+
   constructor(
     private readonly db: Database,
     private readonly settings: SettingsService,
@@ -57,11 +61,21 @@ export class Notifier {
     return token ? `${base}${path}#${token}` : `${base}${path}`;
   }
 
-  /** Fire-and-forget security notice to the user's verified address. */
+  /** Fire-and-forget security notice: in-app (and push, per preference) and by email. */
   security(userId: string, event: SecurityEvent, meta?: RequestMeta, toAddress?: string): void {
+    this.alert(userId, event);
     void this.sendSecurity(userId, event, meta, toAddress).catch((err: unknown) =>
       this.log.warn({ err, event }, 'security email failed'),
     );
+  }
+
+  /** The in-app copy of a security alert (email is sent separately, always). */
+  private alert(userId: string, event: SecurityEvent): void {
+    void this.db
+      .insert(notifications)
+      .values({ id: newId(), userId, type: 'security', data: { event, message: SUBJECTS[event] } })
+      .then(() => this.onAlert(userId))
+      .catch((err: unknown) => this.log.warn({ err, event }, 'security alert failed'));
   }
 
   private async sendSecurity(
@@ -116,27 +130,11 @@ export class Notifier {
           .where(and(prior, eq(auditLog.ip, ip))),
       ]);
       // The current login is already audited, so "1" means this is the only one from this IP.
-      if ((any?.n ?? 0) > 1 && (sameIp?.n ?? 0) <= 1)
+      if ((any?.n ?? 0) > 1 && (sameIp?.n ?? 0) <= 1) {
+        this.alert(userId, 'new_login');
         await this.sendSecurity(userId, 'new_login', meta);
+      }
     })().catch((err: unknown) => this.log.warn({ err }, 'login alert failed'));
-  }
-
-  /** Tell an invited user (by verified email, if mail is set up) that an invite is waiting. */
-  projectInvite(inviteeId: string, inviter: string, projectName: string): void {
-    void (async () => {
-      if (!this.canEmail) return;
-      const [user] = await this.db
-        .select({ email: users.email, verifiedAt: users.emailVerifiedAt })
-        .from(users)
-        .where(eq(users.id, inviteeId));
-      if (!user?.email || !user.verifiedAt) return;
-      const name = this.settings.get('instance.name');
-      await this.mailer.send({
-        to: user.email,
-        subject: `${name}: ${inviter} invited you to “${projectName}”`,
-        text: `${inviter} invited you to the project “${projectName}” on ${name}.\n\nAccept or decline it here:\n${this.link('/invitations')}\n`,
-      });
-    })().catch((err: unknown) => this.log.warn({ err }, 'project invite email failed'));
   }
 
   async sendLink(

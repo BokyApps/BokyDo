@@ -333,3 +333,18 @@ describe('workspace reducers', () => {
       expect(s.projects.get(id)).toMatchObject({ workspaceId: 'w1', visibility: 'restricted' });
   });
 });
+
+describe('preferences reducer', () => {
+  it('merges a one-field notifications patch without dropping the rest', async () => {
+    const { store } = await ready();
+    store.enqueue({
+      type: 'user_update_preferences',
+      uuid: uuid(),
+      args: { notifications: { channels: { reminder: { email: true } } } },
+    } as Command);
+    const n = store.state.user!.preferences.notifications;
+    expect(n.channels.reminder).toEqual({ email: true, push: true });
+    expect(n.channels.assigned).toEqual(DEFAULT_PREFERENCES.notifications.channels.assigned);
+    expect(n.digest).toEqual(DEFAULT_PREFERENCES.notifications.digest);
+  });
+});

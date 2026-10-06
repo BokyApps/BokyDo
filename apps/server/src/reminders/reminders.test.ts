@@ -246,6 +246,25 @@ describe.skipIf(!TEST_DATABASE_URL)('reminders: automatic', () => {
     ).toEqual([false]);
   });
 
+  it('replaces the automatic reminder when you add your own', async () => {
+    await alice.ok(cmd('user_update_preferences', { notifications: { autoReminder: 0 } }));
+    const task = id();
+    const mine = id();
+    // Quick add sends the task first, then its reminders.
+    await alice.ok(
+      cmd('task_add', {
+        id: task,
+        projectId: project,
+        content: 'Call',
+        due: due('2030-01-15', '09:00'),
+      }),
+      cmd('reminder_add', { id: mine, taskId: task, type: 'relative', minutesBefore: 15 }),
+    );
+    expect([...alice.reminders.keys()]).toEqual([mine]);
+    await alice.ok(cmd('task_update', { id: task, due: due('2030-01-15', '10:00') }));
+    expect([...alice.reminders.keys()]).toEqual([mine]);
+  });
+
   it('turns automatic reminders off and back on with the preference', async () => {
     await alice.ok(cmd('user_update_preferences', { notifications: { autoReminder: 10 } }));
     const task = id();
@@ -305,6 +324,38 @@ describe.skipIf(!TEST_DATABASE_URL)('reminders: delivery', () => {
     expect(await reminderNotes(alice.userId)).toHaveLength(1);
     await tick('2030-01-16T02:00:30Z');
     expect(await reminderNotes(alice.userId)).toHaveLength(2);
+  });
+
+  it('never fires reminders whose time had already passed when they were set', async () => {
+    const task = id();
+    const past = new Date(Date.now() - 3600_000).toISOString();
+    const local = { date: past.slice(0, 10), time: past.slice(11, 16) };
+    await alice.ok(cmd('user_update_preferences', { timezone: 'UTC' }));
+    await alice.ok(
+      cmd('task_add', {
+        id: task,
+        projectId: project,
+        content: 'Missed',
+        due: due(local.date, local.time),
+      }),
+      cmd('reminder_add', { id: id(), taskId: task, type: 'relative', minutesBefore: 0 }),
+      cmd('reminder_add', {
+        id: id(),
+        taskId: task,
+        type: 'absolute',
+        date: local.date,
+        time: local.time,
+      }),
+    );
+    await t.app.services.jobs.tick();
+    expect(await reminderNotes(alice.userId)).toHaveLength(0);
+    // Moving the task into the future arms it again.
+    const later = new Date(Date.now() + 3600_000).toISOString();
+    await alice.ok(
+      cmd('task_update', { id: task, due: due(later.slice(0, 10), later.slice(11, 16)) }),
+    );
+    await t.app.services.jobs.tick(new Date(Date.now() + 2 * 3600_000));
+    expect(await reminderNotes(alice.userId)).toHaveLength(1);
   });
 
   it('skips completed tasks, lost access and reminders missed by more than 12 hours', async () => {

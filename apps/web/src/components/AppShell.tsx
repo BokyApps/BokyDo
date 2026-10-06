@@ -2,6 +2,7 @@ import { NotificationBell } from './Notifications.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { resyncPush } from '../lib/push.js';
 import { api, clearCsrfToken } from '../lib/api.js';
 import { ConfirmProvider } from '../lib/confirm.js';
 import { sessionQuery } from '../lib/queries.js';
@@ -43,6 +44,20 @@ function Layout() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const pendingG = useRef(false);
+
+  // Push: re-attach this browser's subscription to the current session, and open what a
+  // clicked notification points at (same-origin paths only).
+  useEffect(() => {
+    void resyncPush().catch(() => undefined);
+    if (!('serviceWorker' in navigator)) return;
+    const onMessage = (e: MessageEvent<{ type?: string; url?: unknown }>) => {
+      const url = e.data?.url;
+      if (e.data?.type === 'bokydo:open' && typeof url === 'string' && /^\/(?!\/)/.test(url))
+        void navigate({ href: url });
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [navigate]);
 
   // Global keyboard shortcuts (Todoist-like). Ignored while typing or when a dialog is open.
   useEffect(() => {

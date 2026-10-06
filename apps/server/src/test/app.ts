@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildApp } from '../app.js';
+import type { OutgoingEmail } from '../email/mailer.js';
 import type { DbHandle } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { users } from '../db/schema.js';
@@ -118,10 +119,8 @@ function safeJson(body: string): Record<string, unknown> | null {
 }
 
 /** Capture outgoing mail instead of sending it, and make email look configured. */
-export async function captureMail(
-  app: FastifyInstance,
-): Promise<{ to: string; subject: string; text: string }[]> {
-  const sent: { to: string; subject: string; text: string }[] = [];
+export async function captureMail(app: FastifyInstance): Promise<OutgoingEmail[]> {
+  const sent: OutgoingEmail[] = [];
   app.services.mailer.send = async (mail) => {
     sent.push(mail);
   };

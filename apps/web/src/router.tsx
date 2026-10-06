@@ -29,6 +29,7 @@ import {
 } from './pages/PublicPages.js';
 import { SetupPage } from './pages/SetupPage.js';
 import { SetupPendingPage } from './pages/SetupPendingPage.js';
+import { UnsubscribePage } from './pages/UnsubscribePage.js';
 
 type Gate = '/login' | '/change-password' | '/account/security' | '/setup' | '/setup-pending';
 /** Screens that only make sense while signed out. */
@@ -127,6 +128,12 @@ const routeTree = rootRoute.addChildren([
     path: '/verify-email',
     component: VerifyEmailPage,
   }),
+  // Opened from an email; the signed link is enough (no sign-in).
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/unsubscribe',
+    component: UnsubscribePage,
+  }),
   page('/change-password', ChangePasswordPage),
   page('/setup', SetupPage),
   page('/setup-pending', SetupPendingPage),
@@ -138,7 +145,8 @@ const routeTree = rootRoute.addChildren([
     appPage('/upcoming', UpcomingPage),
     appPage('/filters-labels', FiltersLabelsPage),
     appPage('/archived', ArchivedPage),
-    appPage('/settings', SettingsPage),
+    appPage('/settings', () => <SettingsPage />),
+    appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
     appPage('/invitations', InvitationsPage),
     appPage('/join', JoinPage),
     projectRoute,
