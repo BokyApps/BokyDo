@@ -110,7 +110,39 @@ export interface Project {
   isFavorite: boolean;
   /** The current user's role in this project. */
   role: Role;
+  /** Team workspace (null: personal), its folder, and who in the workspace can see it. */
+  workspaceId: string | null;
+  folderId: string | null;
+  visibility: ProjectVisibility;
   updatedAt: string;
+}
+
+export const projectVisibilitySchema = z.enum(['restricted', 'workspace']);
+export type ProjectVisibility = z.infer<typeof projectVisibilitySchema>;
+
+export const workspaceRoleSchema = z.enum(['owner', 'admin', 'member', 'guest']);
+export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
+export const grantableWorkspaceRoleSchema = z.enum(['admin', 'member', 'guest']);
+export type GrantableWorkspaceRole = z.infer<typeof grantableWorkspaceRoleSchema>;
+
+export interface Workspace {
+  id: string;
+  name: string;
+  /** The current user's role. */
+  role: WorkspaceRole;
+}
+
+export interface WorkspaceMember {
+  workspaceId: string;
+  userId: string;
+  role: WorkspaceRole;
+}
+
+export interface Folder {
+  id: string;
+  workspaceId: string;
+  name: string;
+  childOrder: string;
 }
 
 export interface Section {
@@ -295,9 +327,21 @@ export const commandArgs = {
       name: projectFields.name,
       parentId: idSchema.nullable().optional(),
       childOrder: orderKeySchema.optional(),
+      workspaceId: idSchema.nullable().optional(),
+      folderId: idSchema.nullable().optional(),
+      visibility: projectVisibilitySchema.optional(),
     })
     .strict(),
-  project_update: z.object({ id: idSchema, ...partial(projectFields) }).strict(),
+  project_update: z
+    .object({
+      id: idSchema,
+      ...partial(projectFields),
+      folderId: idSchema.nullable().optional(),
+      visibility: projectVisibilitySchema.optional(),
+    })
+    .strict(),
+  /** Move a top-level project (and its sub-projects) into a workspace, or back to personal. */
+  project_move_workspace: z.object({ id: idSchema, workspaceId: idSchema.nullable() }).strict(),
   project_move: z
     .object({ id: idSchema, parentId: idSchema.nullable(), childOrder: orderKeySchema.optional() })
     .strict(),
@@ -390,6 +434,28 @@ export const commandArgs = {
   comment_delete: byId,
   reaction_toggle: z.object({ commentId: idSchema, emoji: reactionSchema }).strict(),
 
+  workspace_add: z.object({ id: idSchema, name: line(120) }).strict(),
+  workspace_update: z.object({ id: idSchema, name: line(120) }).strict(),
+  workspace_delete: byId,
+  workspace_member_update: z
+    .object({ workspaceId: idSchema, userId: idSchema, role: grantableWorkspaceRoleSchema })
+    .strict(),
+  /** Remove a member; removing yourself leaves (the owner must transfer first). */
+  workspace_member_remove: z.object({ workspaceId: idSchema, userId: idSchema }).strict(),
+  workspace_transfer: z.object({ workspaceId: idSchema, userId: idSchema }).strict(),
+  folder_add: z
+    .object({
+      id: idSchema,
+      workspaceId: idSchema,
+      name: line(120),
+      childOrder: orderKeySchema.optional(),
+    })
+    .strict(),
+  folder_update: z
+    .object({ id: idSchema, name: line(120).optional(), childOrder: orderKeySchema.optional() })
+    .strict(),
+  folder_delete: byId,
+
   /** Mark notifications read: the given ones, or all of them. */
   notifications_mark_read: z
     .object({ ids: z.array(idSchema).max(200).optional(), all: z.literal(true).optional() })
@@ -458,8 +524,11 @@ export interface SyncResponse {
   /** Always complete (not a delta): everyone you share a project with, and every membership. */
   collaborators: Collaborator[];
   members: ProjectMember[];
-  /** Direct project invitations waiting for this user. */
+  /** Direct invitations (to projects or workspaces) waiting for this user. */
   invitations: PendingInvite[];
+  workspaces: Workspace[];
+  workspaceMembers: WorkspaceMember[];
+  folders: Folder[];
   /** The latest notifications (always complete, newest first) and how many are unread. */
   notifications: AppNotification[];
   unreadNotifications: number;
@@ -485,13 +554,18 @@ export const createInviteSchema = z
     role: grantableRoleSchema,
   })
   .strict();
+export const createWorkspaceInviteSchema = createInviteSchema
+  .omit({ role: true })
+  .extend({ role: grantableWorkspaceRoleSchema })
+  .strict();
 export type CreateInvite = z.infer<typeof createInviteSchema>;
 
 /** A pending invite, as project admins see it (never with its token). */
 export interface ProjectInvite {
   id: string;
-  projectId: string;
-  role: GrantableRole;
+  /** The project or workspace it's for. */
+  targetId: string;
+  role: GrantableRole | GrantableWorkspaceRole;
   kind: 'user' | 'link';
   /** For direct invites: who was invited. */
   invitee: string | null;
@@ -503,9 +577,11 @@ export interface ProjectInvite {
 /** An invite waiting for the current user to accept or decline. */
 export interface PendingInvite {
   id: string;
-  projectId: string;
-  projectName: string;
-  role: GrantableRole;
+  kind: 'project' | 'workspace';
+  /** The project's or workspace's id and name. */
+  targetId: string;
+  name: string;
+  role: GrantableRole | GrantableWorkspaceRole;
   invitedBy: string | null;
   expiresAt: string;
 }

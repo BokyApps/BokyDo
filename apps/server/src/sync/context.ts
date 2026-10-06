@@ -32,7 +32,8 @@ type ChangeType =
   | 'user'
   | 'invitations'
   | 'comments'
-  | 'notifications';
+  | 'notifications'
+  | 'workspaces';
 interface ChangeRow {
   entityType: ChangeType;
   entityId: string;
@@ -90,4 +91,7 @@ export const LIMITS = {
   membersPerProject: 250,
   pendingInvitesPerProject: 100,
   commentsPerThread: 2000,
+  workspacesPerUser: 50,
+  membersPerWorkspace: 500,
+  foldersPerWorkspace: 200,
 } as const;

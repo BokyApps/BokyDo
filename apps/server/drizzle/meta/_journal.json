@@ -71,6 +71,13 @@
       "when": 1791186671772,
       "tag": "0009_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791187179880,
+      "tag": "0010_workspaces",
+      "breakpoints": true
     }
   ]
 }

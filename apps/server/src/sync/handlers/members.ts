@@ -2,6 +2,7 @@ import type { CommandArgs, GrantableRole, Role } from '@bokydo/shared';
 import { and, count, eq } from 'drizzle-orm';
 import { logActivity } from '../../activity/log.js';
 import { notify } from '../../notifications/notify.js';
+import { syncUserAccess } from '../../workspaces/access.js';
 import { projectMembers, projects, tasks } from '../../db/schema.js';
 import { fail, LIMITS, type ChangeRecorder, type CommandContext, type Tx } from '../context.js';
 import { projectAccess, requireProject } from '../policy.js';
@@ -49,7 +50,7 @@ export async function addMember(
     .values({ projectId, userId, role })
     .onConflictDoUpdate({
       target: [projectMembers.projectId, projectMembers.userId],
-      set: { role },
+      set: { role, source: 'direct' },
     });
   announce(changes, projectId, userId);
 }
@@ -71,9 +72,10 @@ export async function projectMemberUpdate(
       fail('forbidden', 'only the owner manages admins');
   }
   if (target === args.role) return;
+  // An explicit role is a direct share from now on (workspace changes no longer touch it).
   await ctx.tx
     .update(projectMembers)
-    .set({ role: args.role })
+    .set({ role: args.role, source: 'direct' })
     .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, args.userId)));
   announce(ctx.changes, project.id, args.userId);
   await notify(ctx.tx, ctx.changes, ctx.userId, {
@@ -108,6 +110,17 @@ export async function projectMemberRemove(
     if (target === 'admin' && access.role !== 'owner')
       fail('forbidden', 'only the owner removes admins');
   }
+  const [row] = await ctx.tx
+    .select({ source: projectMembers.source })
+    .from(projectMembers)
+    .where(
+      and(eq(projectMembers.projectId, args.projectId), eq(projectMembers.userId, args.userId)),
+    );
+  if (row?.source === 'workspace')
+    fail(
+      'forbidden',
+      'access comes from the workspace: make the project restricted or remove them from the workspace',
+    );
   await ctx.tx
     .delete(projectMembers)
     .where(
@@ -121,6 +134,9 @@ export async function projectMemberRemove(
     .returning({ id: tasks.id });
   for (const t of unassigned) ctx.changes.inProject('tasks', t.id, args.projectId);
   announce(ctx.changes, args.projectId, args.userId);
+  // A direct member of a workspace-visible project keeps the access the workspace gives.
+  if (access.project.workspaceId)
+    await syncUserAccess(ctx.tx, ctx.changes, access.project.workspaceId, args.userId);
   if (!leaving)
     // No project link: they can't open it any more, only see that they were removed.
     await notify(ctx.tx, ctx.changes, ctx.userId, {

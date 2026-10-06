@@ -248,8 +248,9 @@ describe.skipIf(!TEST_DATABASE_URL)('sharing: invitations (security gate)', () =
     await people.uma!.sync.run();
     expect(people.quinn!.sync.last.invitations).toEqual([
       expect.objectContaining({
-        projectId: project,
-        projectName: 'Launch',
+        kind: 'project',
+        targetId: project,
+        name: 'Launch',
         role: 'editor',
         invitedBy: 'olivia',
       }),
@@ -404,7 +405,8 @@ describe.skipIf(!TEST_DATABASE_URL)('sharing: invitations (security gate)', () =
       payload: { token: body.token },
     });
     expect(json(preview.body)).toEqual({
-      projectName: 'Launch',
+      kind: 'project',
+      name: 'Launch',
       role: 'editor',
       invitedBy: 'olivia',
       alreadyMember: false,

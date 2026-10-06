@@ -4,6 +4,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -131,10 +132,20 @@ export const projects = pgTable(
     childOrder: text('child_order').notNull(),
     isInbox: boolean('is_inbox').notNull().default(false),
     isArchived: boolean('is_archived').notNull().default(false),
+    /** Team workspace this project belongs to (null: personal). */
+    workspaceId: uuid('workspace_id').references((): AnyPgColumn => workspaces.id, {
+      onDelete: 'cascade',
+    }),
+    folderId: uuid('folder_id').references((): AnyPgColumn => folders.id, { onDelete: 'set null' }),
+    /** Workspace projects: 'workspace' = every workspace member (not guests) gets access. */
+    visibility: text('visibility', { enum: ['restricted', 'workspace'] })
+      .notNull()
+      .default('restricted'),
     ...softDelete,
   },
   (t) => [
     index('projects_owner_idx').on(t.ownerId),
+    index('projects_workspace_idx').on(t.workspaceId),
     // One live inbox per user.
     uniqueIndex('projects_one_inbox_idx')
       .on(t.ownerId)
@@ -154,6 +165,10 @@ export const projectMembers = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     role: text('role', { enum: ['owner', 'admin', 'editor', 'commenter', 'viewer'] }).notNull(),
     isFavorite: boolean('is_favorite').notNull().default(false),
+    /** 'workspace': granted by workspace membership (and withdrawn with it); 'direct': shared. */
+    source: text('source', { enum: ['direct', 'workspace'] })
+      .notNull()
+      .default('direct'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -283,6 +298,7 @@ export const changes = pgTable(
         'invitations',
         'comments',
         'notifications',
+        'workspaces',
       ],
     }).notNull(),
     entityId: uuid('entity_id').notNull(),
@@ -409,10 +425,15 @@ export const projectInvitations = pgTable(
   'project_invitations',
   {
     id: uuid('id').primaryKey(),
-    projectId: uuid('project_id')
-      .notNull()
-      .references(() => projects.id, { onDelete: 'cascade' }),
-    role: text('role', { enum: ['admin', 'editor', 'commenter', 'viewer'] }).notNull(),
+    /** Exactly one of projectId / workspaceId is set. */
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    workspaceId: uuid('workspace_id').references((): AnyPgColumn => workspaces.id, {
+      onDelete: 'cascade',
+    }),
+    /** A project role, or a workspace role (admin / member / guest). */
+    role: text('role', {
+      enum: ['admin', 'editor', 'commenter', 'viewer', 'member', 'guest'],
+    }).notNull(),
     inviteeId: uuid('invitee_id').references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').unique(),
     createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
@@ -423,6 +444,10 @@ export const projectInvitations = pgTable(
     closedAt: timestamp('closed_at', { withTimezone: true }),
   },
   (t) => [
+    check(
+      'project_invitations_one_target',
+      sql`(${t.projectId} is null) <> (${t.workspaceId} is null)`,
+    ),
     index('project_invitations_project_idx').on(t.projectId),
     index('project_invitations_invitee_idx').on(t.inviteeId),
   ],
@@ -530,4 +555,44 @@ export const notifications = pgTable(
     index('notifications_user_idx').on(t.userId, t.createdAt),
     index('notifications_actor_idx').on(t.actorId, t.createdAt),
   ],
+);
+
+/** Team workspaces: a group of people and the projects they share. */
+export const workspaces = pgTable('workspaces', {
+  id: uuid('id').primaryKey(),
+  name: text('name').notNull(),
+  ...softDelete,
+});
+
+export const workspaceMembers = pgTable(
+  'workspace_members',
+  {
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['owner', 'admin', 'member', 'guest'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.userId] }),
+    index('workspace_members_user_idx').on(t.userId),
+  ],
+);
+
+/** Folders group a workspace's projects in the sidebar. */
+export const folders = pgTable(
+  'folders',
+  {
+    id: uuid('id').primaryKey(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    childOrder: text('child_order').notNull(),
+    ...softDelete,
+  },
+  (t) => [index('folders_workspace_idx').on(t.workspaceId)],
 );

@@ -46,6 +46,7 @@ export type Term =
   | { t: 'assignedByName'; pattern: string }
   /** In a project with more than one member. */
   | { t: 'shared' }
+  | { t: 'workspace'; pattern: string }
   | { t: 'search'; text: string }
   | { t: 'subtask' };
 
@@ -312,7 +313,12 @@ export function recognize(raw: string, ctx: FilterContext): Term | string {
     return { t: 'assignedByName', pattern: raw };
   }
   if (lower === 'shared') return { t: 'shared' };
-  if (lower.startsWith('workspace:')) return `Workspaces arrive later in collaboration (W5)`;
+  if (lower.startsWith('workspace:')) {
+    const raw = text.slice('workspace:'.length).trim();
+    if (!raw) return 'Add a team name after “workspace:”';
+    if (raw.length > 200) return 'That team name is too long';
+    return { t: 'workspace', pattern: raw };
+  }
 
   for (const [prefix, field, op] of FIELD_PREFIXES) {
     if (!lower.startsWith(prefix)) continue;

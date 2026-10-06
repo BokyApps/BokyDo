@@ -23,10 +23,120 @@ export function applyCommand(d: Draft, command: Command, now: string): void {
         isArchived: false,
         isFavorite: a.isFavorite ?? false,
         role: 'owner',
+        workspaceId: a.parentId
+          ? (d.projects.get(a.parentId)?.workspaceId ?? null)
+          : (a.workspaceId ?? null),
+        folderId: a.folderId ?? null,
+        visibility: a.visibility ?? (a.workspaceId ? 'workspace' : 'restricted'),
         updatedAt: now,
       });
       return;
     }
+    case 'project_move_workspace': {
+      const ids = [command.args.id, ...descendants(d.projects, command.args.id, (p) => p.parentId)];
+      for (const id of ids)
+        patch(d.projects, id, {
+          workspaceId: command.args.workspaceId,
+          folderId: null,
+          visibility: 'restricted',
+          updatedAt: now,
+        });
+      return;
+    }
+    case 'workspace_add':
+      d.workspaces = [
+        ...d.workspaces,
+        { id: command.args.id, name: command.args.name, role: 'owner' },
+      ];
+      if (d.user)
+        d.workspaceMembers = [
+          ...d.workspaceMembers,
+          { workspaceId: command.args.id, userId: d.user.id, role: 'owner' },
+        ];
+      return;
+    case 'workspace_update':
+      d.workspaces = d.workspaces.map((w) =>
+        w.id === command.args.id ? { ...w, name: command.args.name } : w,
+      );
+      return;
+    case 'workspace_delete': {
+      const id = command.args.id;
+      d.workspaces = d.workspaces.filter((w) => w.id !== id);
+      d.workspaceMembers = d.workspaceMembers.filter((m) => m.workspaceId !== id);
+      d.folders = d.folders.filter((f) => f.workspaceId !== id);
+      for (const p of [...d.projects.values()]) if (p.workspaceId === id) d.projects.delete(p.id);
+      dropOrphans(d);
+      return;
+    }
+    case 'workspace_member_update': {
+      const a = command.args;
+      d.workspaceMembers = d.workspaceMembers.map((m) =>
+        m.workspaceId === a.workspaceId && m.userId === a.userId ? { ...m, role: a.role } : m,
+      );
+      return;
+    }
+    case 'workspace_member_remove': {
+      const a = command.args;
+      d.workspaceMembers = d.workspaceMembers.filter(
+        (m) => !(m.workspaceId === a.workspaceId && m.userId === a.userId),
+      );
+      if (a.userId === d.user?.id) {
+        d.workspaces = d.workspaces.filter((w) => w.id !== a.workspaceId);
+        for (const p of [...d.projects.values()])
+          if (p.workspaceId === a.workspaceId) d.projects.delete(p.id);
+        dropOrphans(d);
+      }
+      return;
+    }
+    case 'workspace_transfer': {
+      const a = command.args;
+      const me = d.user?.id;
+      d.workspaceMembers = d.workspaceMembers.map((m) =>
+        m.workspaceId !== a.workspaceId
+          ? m
+          : m.userId === a.userId
+            ? { ...m, role: 'owner' }
+            : m.userId === me
+              ? { ...m, role: 'admin' }
+              : m,
+      );
+      d.workspaces = d.workspaces.map((w) =>
+        w.id === a.workspaceId ? { ...w, role: 'admin' } : w,
+      );
+      return;
+    }
+    case 'folder_add': {
+      const a = command.args;
+      const siblings = d.folders.filter((f) => f.workspaceId === a.workspaceId);
+      d.folders = [
+        ...d.folders,
+        {
+          id: a.id,
+          workspaceId: a.workspaceId,
+          name: a.name,
+          childOrder: a.childOrder ?? after(siblings.map((f) => f.childOrder)),
+        },
+      ];
+      return;
+    }
+    case 'folder_update': {
+      const a = command.args;
+      d.folders = d.folders.map((f) =>
+        f.id === a.id
+          ? {
+              ...f,
+              ...(a.name !== undefined ? { name: a.name } : {}),
+              ...(a.childOrder !== undefined ? { childOrder: a.childOrder } : {}),
+            }
+          : f,
+      );
+      return;
+    }
+    case 'folder_delete':
+      d.folders = d.folders.filter((f) => f.id !== command.args.id);
+      for (const p of d.projects.values())
+        if (p.folderId === command.args.id) patch(d.projects, p.id, { folderId: null });
+      return;
     case 'project_update':
       return patch(d.projects, command.args.id, { ...without(command.args, 'id'), updatedAt: now });
     case 'project_move':

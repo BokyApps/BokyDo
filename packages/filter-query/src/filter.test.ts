@@ -78,6 +78,7 @@ describe('terms', () => {
     ['unassigned', { t: 'assignedTo', who: 'nobody' }],
     ['assigned by: me', { t: 'assignedBy', who: 'me' }],
     ['assigned to: Sam', { t: 'assignedToName', pattern: 'Sam' }],
+    ['workspace: Acme Co', { t: 'workspace', pattern: 'Acme Co' }],
     ['assigned by: s*', { t: 'assignedByName', pattern: 's*' }],
     ['shared', { t: 'shared' }],
     ['search: Meeting notes', { t: 'search', text: 'Meeting notes' }],
@@ -99,7 +100,7 @@ describe('terms', () => {
     ['#', /Add a project name/],
     ['@', /Add a label name/],
     ['assigned to:', /Add a name/],
-    ['workspace: Team', /W5/],
+    ['workspace:', /Add a team name/],
     ['constructor', /Unknown filter term/],
     ['__proto__', /Unknown filter term/],
     [`search: ${'x'.repeat(201)}`, /at most 200/],
@@ -171,9 +172,9 @@ describe('structure', () => {
 const CATALOG: Catalog = {
   projects: [
     { id: 'inbox', name: 'Inbox', parentId: null },
-    { id: 'work', name: 'Work', parentId: null },
-    { id: 'q4', name: 'Q4', parentId: 'work' },
-    { id: 'q4a', name: 'Q4 Ads', parentId: 'q4' },
+    { id: 'work', name: 'Work', parentId: null, workspaceId: 'acme' },
+    { id: 'q4', name: 'Q4', parentId: 'work', workspaceId: 'acme' },
+    { id: 'q4a', name: 'Q4 Ads', parentId: 'q4', workspaceId: 'acme' },
     { id: 'home', name: 'Home', parentId: null },
   ],
   sections: [
@@ -186,6 +187,7 @@ const CATALOG: Catalog = {
     { id: 'sam', username: 'Sam' },
   ],
   sharedProjectIds: new Set(['home']),
+  workspaces: [{ id: 'acme', name: 'Acme' }],
 };
 
 const task = (id: string, extra: Partial<FilterTask> = {}): FilterTask & { id: string } => ({
@@ -284,6 +286,9 @@ describe('evaluation', () => {
     ['assigned to: S*', ['theirs']],
     ['assigned by: Sam', ['mine']],
     ['shared', ['deadline', 'sub']],
+    ['workspace: acme', ['next-week', 'daily', 'nodate']],
+    ['workspace: A*', ['next-week', 'daily', 'nodate']],
+    ['workspace: My projects & no date', ['deadline', 'sub', 'mine', 'theirs', 'new']],
     ['created: today', ['new']],
     ['(today | overdue) & p1', ['today-late']],
   ])('%s', (query, expected) => {
@@ -308,6 +313,7 @@ describe('evaluation', () => {
       warnings: ['No project named “Wrok”', 'No section named “Nowhere”'],
     });
     expect(run('#Zz*').warnings).toEqual([]);
+    expect(run('workspace: Nope').warnings).toEqual(['No team named “Nope”']);
   });
 
   it('only resolves names against the catalog it was given', () => {

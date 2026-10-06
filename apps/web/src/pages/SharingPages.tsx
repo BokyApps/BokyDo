@@ -6,7 +6,7 @@ import { Alert, Button, Card, Spinner } from '../components/ui.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { api } from '../lib/api.js';
 import { useStore, useSyncState } from '../lib/sync.js';
-import type { GrantableRole } from '@bokydo/shared';
+import type { GrantableRole, GrantableWorkspaceRole, PendingInvite } from '@bokydo/shared';
 
 const JOIN_KEY = 'bokydo.join';
 
@@ -42,12 +42,15 @@ export function InvitationsPage() {
   const store = useStore();
   const navigate = useNavigate();
   const [busy, setBusy] = useState<string | null>(null);
-  const respond = async (id: string, action: 'accept' | 'decline', projectId: string) => {
+  const respond = async (id: string, action: 'accept' | 'decline', invite: PendingInvite) => {
     setBusy(id);
     try {
       await api('POST', `/api/v1/invites/${id}/${action}`);
       await store.pull();
-      if (action === 'accept') void navigate({ to: '/project/$projectId', params: { projectId } });
+      if (action !== 'accept') return;
+      if (invite.kind === 'project')
+        void navigate({ to: '/project/$projectId', params: { projectId: invite.targetId } });
+      else void navigate({ to: '/' });
     } finally {
       setBusy(null);
     }
@@ -61,7 +64,10 @@ export function InvitationsPage() {
           <li key={i.id}>
             <Card className="flex flex-wrap items-center gap-3 !p-4">
               <div className="min-w-0 flex-1">
-                <p className="font-medium">{i.projectName}</p>
+                <p className="font-medium">
+                  {i.kind === 'workspace' ? 'Team: ' : ''}
+                  {i.name}
+                </p>
                 <p className="text-sm text-muted">
                   {i.invitedBy ?? 'Someone'} invited you as {ROLE_LABEL[i.role].toLowerCase()} ·
                   expires {new Date(i.expiresAt).toLocaleDateString()}
@@ -70,15 +76,12 @@ export function InvitationsPage() {
               <Button
                 variant="secondary"
                 busy={busy === i.id}
-                onClick={() => void respond(i.id, 'decline', i.projectId)}
+                onClick={() => void respond(i.id, 'decline', i)}
               >
                 Decline
               </Button>
-              <Button
-                busy={busy === i.id}
-                onClick={() => void respond(i.id, 'accept', i.projectId)}
-              >
-                Join project
+              <Button busy={busy === i.id} onClick={() => void respond(i.id, 'accept', i)}>
+                {i.kind === 'workspace' ? 'Join team' : 'Join project'}
               </Button>
             </Card>
           </li>
@@ -101,18 +104,24 @@ export function JoinPage() {
     retry: false,
     queryFn: () =>
       api<{
-        projectName: string;
-        role: GrantableRole;
+        kind: 'project' | 'workspace';
+        name: string;
+        role: GrantableRole | GrantableWorkspaceRole;
         invitedBy: string | null;
         alreadyMember: boolean;
       }>('POST', '/api/v1/invites/link/preview', { token }),
   });
   const join = useMutation({
-    mutationFn: () => api<{ projectId: string }>('POST', '/api/v1/invites/link/accept', { token }),
+    mutationFn: () =>
+      api<{ projectId?: string; workspaceId?: string }>('POST', '/api/v1/invites/link/accept', {
+        token,
+      }),
     onSuccess: async ({ projectId }) => {
       clearJoinToken();
       await store.pull();
-      void navigate({ to: '/project/$projectId', params: { projectId }, replace: true });
+      if (projectId)
+        void navigate({ to: '/project/$projectId', params: { projectId }, replace: true });
+      else void navigate({ to: '/', replace: true });
     },
   });
   // Keep the token out of history and screenshots once it's read.
@@ -122,7 +131,7 @@ export function JoinPage() {
 
   return (
     <Page>
-      <ViewHeader title="Join a project" />
+      <ViewHeader title={preview.data?.kind === 'workspace' ? 'Join a team' : 'Join a project'} />
       {!token && <Alert tone="error">This invite link is incomplete. Ask for a new one.</Alert>}
       {preview.isLoading && <Spinner />}
       {(preview.isError || join.isError) && (
@@ -134,8 +143,7 @@ export function JoinPage() {
         <Card className="space-y-3">
           <p>
             <strong>{preview.data.invitedBy ?? 'Someone'}</strong> invited you to{' '}
-            <strong>{preview.data.projectName}</strong> as{' '}
-            {ROLE_LABEL[preview.data.role].toLowerCase()}.
+            <strong>{preview.data.name}</strong> as {ROLE_LABEL[preview.data.role].toLowerCase()}.
           </p>
           {preview.data.alreadyMember && (
             <p className="text-sm text-muted">
@@ -153,7 +161,7 @@ export function JoinPage() {
               Not now
             </Button>
             <Button busy={join.isPending} onClick={() => join.mutate()}>
-              Join project
+              {preview.data.kind === 'workspace' ? 'Join team' : 'Join project'}
             </Button>
           </div>
         </Card>

@@ -27,6 +27,9 @@ const INBOX = {
   isArchived: false,
   isFavorite: false,
   role: 'owner' as const,
+  workspaceId: null,
+  folderId: null,
+  visibility: 'restricted' as const,
   updatedAt: '',
 };
 let n = 0;
@@ -54,6 +57,9 @@ function response(partial: Partial<SyncResponse> = {}): SyncResponse {
     invitations: [],
     notifications: [],
     unreadNotifications: 0,
+    workspaces: [],
+    workspaceMembers: [],
+    folders: [],
     results: {},
     ...partial,
   };
@@ -253,5 +259,67 @@ describe('SyncStore', () => {
     store.subscribe(listener);
     store.enqueue(addTask('t1', 'x'));
     expect(listener).toHaveBeenCalled();
+  });
+});
+
+describe('workspace reducers', () => {
+  const run = async (...commands: Omit<Command, 'uuid'>[]) => {
+    const { store } = await ready();
+    for (const c of commands) store.enqueue({ ...c, uuid: uuid() } as Command);
+    return store.state;
+  };
+
+  it('creates a workspace with me as owner, and its projects inherit it', async () => {
+    const s = await run(
+      { type: 'workspace_add', args: { id: 'w1', name: 'Acme' } },
+      { type: 'folder_add', args: { id: 'f1', workspaceId: 'w1', name: 'Ops' } },
+      {
+        type: 'project_add',
+        args: { id: 'p1', name: 'Roadmap', workspaceId: 'w1', folderId: 'f1' },
+      },
+      { type: 'project_add', args: { id: 'p2', name: 'Sub', parentId: 'p1' } },
+    );
+    expect(s.workspaces).toEqual([{ id: 'w1', name: 'Acme', role: 'owner' }]);
+    expect(s.workspaceMembers).toEqual([{ workspaceId: 'w1', userId: 'u1', role: 'owner' }]);
+    expect(s.projects.get('p1')).toMatchObject({
+      workspaceId: 'w1',
+      folderId: 'f1',
+      visibility: 'workspace',
+    });
+    expect(s.projects.get('p2')).toMatchObject({ workspaceId: 'w1' });
+  });
+
+  it('unfiles projects when their folder goes, and drops everything with the workspace', async () => {
+    const s = await run(
+      { type: 'workspace_add', args: { id: 'w1', name: 'Acme' } },
+      { type: 'folder_add', args: { id: 'f1', workspaceId: 'w1', name: 'Ops' } },
+      {
+        type: 'project_add',
+        args: { id: 'p1', name: 'Roadmap', workspaceId: 'w1', folderId: 'f1' },
+      },
+      { type: 'folder_delete', args: { id: 'f1' } },
+    );
+    expect(s.folders).toEqual([]);
+    expect(s.projects.get('p1')?.folderId).toBeNull();
+    const gone = await run(
+      { type: 'workspace_add', args: { id: 'w1', name: 'Acme' } },
+      { type: 'project_add', args: { id: 'p1', name: 'Roadmap', workspaceId: 'w1' } },
+      { type: 'task_add', args: { id: 't1', content: 'x', projectId: 'p1' } },
+      { type: 'workspace_delete', args: { id: 'w1' } },
+    );
+    expect(gone.workspaces).toEqual([]);
+    expect(gone.projects.has('p1')).toBe(false);
+    expect(gone.tasks.has('t1')).toBe(false);
+  });
+
+  it('moves a project and its sub-projects between workspaces as restricted', async () => {
+    const s = await run(
+      { type: 'workspace_add', args: { id: 'w1', name: 'Acme' } },
+      { type: 'project_add', args: { id: 'p1', name: 'Side' } },
+      { type: 'project_add', args: { id: 'p2', name: 'Sub', parentId: 'p1' } },
+      { type: 'project_move_workspace', args: { id: 'p1', workspaceId: 'w1' } },
+    );
+    for (const id of ['p1', 'p2'])
+      expect(s.projects.get(id)).toMatchObject({ workspaceId: 'w1', visibility: 'restricted' });
   });
 });

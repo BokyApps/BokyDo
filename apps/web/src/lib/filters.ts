@@ -34,6 +34,7 @@ export function runFilterLocally(
     sections: [...state.sections.values()],
     users: [...state.collaborators.values()],
     sharedProjectIds: new Set([...perProject].filter(([, n]) => n > 1).map(([id]) => id)),
+    workspaces: state.workspaces,
   });
   const open = liveTasks(state).filter(isOpen);
   const userId = state.user?.id ?? '';

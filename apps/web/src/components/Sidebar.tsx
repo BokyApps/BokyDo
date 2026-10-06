@@ -1,4 +1,4 @@
-import type { Filter } from '@bokydo/shared';
+import type { Filter, Workspace } from '@bokydo/shared';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { todayIn } from '../lib/dates.js';
@@ -18,6 +18,14 @@ import {
 } from './icons.js';
 import { ProjectDot } from './pickers.js';
 import { ProjectDialog } from './ProjectDialog.js';
+import {
+  atLeast,
+  FolderMenu,
+  NameDialog,
+  NewWorkspaceDialog,
+  WorkspaceDialog,
+} from './Workspaces.js';
+import { newId, useSend } from '../lib/sync.js';
 
 const item = 'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fg hover:bg-surface-alt';
 const active = { className: 'bg-accent/10 font-medium text-accent hover:bg-accent/15' };
@@ -38,7 +46,11 @@ export function Sidebar({
   const count = (projectId: string) => open.filter((t) => t.projectId === projectId).length;
   const t = todayTasks(state, today);
   const inboxId = state.user?.inboxProjectId;
-  const tree = projectTree(state);
+  const all = projectTree(state);
+  const teamIds = new Set(state.workspaces.map((w) => w.id));
+  // Personal projects, plus team projects shared with you directly from a team you're not in.
+  const tree = all.filter((n) => !n.project.workspaceId || !teamIds.has(n.project.workspaceId));
+  const [addingTeam, setAddingTeam] = useState(false);
   const favorites = [...state.projects.values()].filter(
     (p) => p.isFavorite && !p.isArchived && !p.isInbox,
   );
@@ -161,8 +173,156 @@ export function Sidebar({
           </Link>
         )}
       </div>
+      {state.workspaces.map((w) => (
+        <WorkspaceSection
+          key={w.id}
+          workspace={w}
+          nodes={all.filter((n) => n.project.workspaceId === w.id)}
+          count={count}
+        />
+      ))}
+      <button
+        type="button"
+        className={`${item} w-full text-muted`}
+        onClick={() => setAddingTeam(true)}
+      >
+        <PlusIcon /> Add team
+      </button>
       <ProjectDialog open={addingProject} onClose={() => setAddingProject(false)} />
+      <NewWorkspaceDialog open={addingTeam} onClose={() => setAddingTeam(false)} />
     </nav>
+  );
+}
+
+function WorkspaceSection({
+  workspace,
+  nodes,
+  count,
+}: {
+  workspace: Workspace;
+  nodes: ProjectNode[];
+  count: (id: string) => number;
+}) {
+  const state = useSyncState();
+  const send = useSend();
+  const [open, setOpen] = useState(true);
+  const [settings, setSettings] = useState(false);
+  const [adding, setAdding] = useState<{ folderId: string | null } | null>(null);
+  const [addingFolder, setAddingFolder] = useState(false);
+  const folders = state.folders
+    .filter((f) => f.workspaceId === workspace.id)
+    .sort((a, b) => (a.childOrder < b.childOrder ? -1 : a.childOrder > b.childOrder ? 1 : 0));
+  const folderIds = new Set(folders.map((f) => f.id));
+  const unfiled = nodes.filter((n) => !n.project.folderId || !folderIds.has(n.project.folderId));
+  const admin = atLeast(workspace, 'admin');
+  const iconButton = 'rounded p-0.5 text-muted hover:bg-surface-alt hover:text-fg';
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center justify-between gap-1 px-2">
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-1 text-xs font-semibold text-muted"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          <span className="truncate">{workspace.name}</span> <ChevronIcon open={open} />
+        </button>
+        <span className="flex shrink-0 items-center">
+          {admin && (
+            <button
+              type="button"
+              aria-label={`Add folder to ${workspace.name}`}
+              title="Add folder"
+              className={`${iconButton} text-xs`}
+              onClick={() => setAddingFolder(true)}
+            >
+              ▤
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label={`Settings for ${workspace.name}`}
+            title="Team settings"
+            className={`${iconButton} text-xs`}
+            onClick={() => setSettings(true)}
+          >
+            ⚙
+          </button>
+          {atLeast(workspace, 'member') && (
+            <button
+              type="button"
+              aria-label={`Add project to ${workspace.name}`}
+              className={iconButton}
+              onClick={() => setAdding({ folderId: null })}
+            >
+              <PlusIcon />
+            </button>
+          )}
+        </span>
+      </div>
+      {open && (
+        <>
+          {folders.map((f) => {
+            const inFolder = nodes.filter((n) => n.project.folderId === f.id);
+            return (
+              <FolderGroup key={f.id} name={f.name} empty={inFolder.length === 0}>
+                {admin && <FolderMenu folder={f} />}
+                <ProjectNodes nodes={inFolder} count={count} depth={1} />
+              </FolderGroup>
+            );
+          })}
+          <ProjectNodes nodes={unfiled} count={count} />
+          {nodes.length === 0 && folders.length === 0 && (
+            <p className="px-2 py-1 text-xs text-muted">No team projects yet.</p>
+          )}
+        </>
+      )}
+      <WorkspaceDialog workspace={workspace} open={settings} onClose={() => setSettings(false)} />
+      <ProjectDialog
+        open={adding !== null}
+        onClose={() => setAdding(null)}
+        workspaceId={workspace.id}
+        folderId={adding?.folderId ?? null}
+      />
+      <NameDialog
+        open={addingFolder}
+        title={`Add folder to ${workspace.name}`}
+        label="Folder name"
+        submitLabel="Add"
+        onClose={() => setAddingFolder(false)}
+        onSubmit={(name) => send('folder_add', { id: newId(), workspaceId: workspace.id, name })}
+      />
+    </div>
+  );
+}
+
+function FolderGroup({
+  name,
+  empty,
+  children,
+}: {
+  name: string;
+  empty: boolean;
+  children: [React.ReactNode, React.ReactNode];
+}) {
+  const [open, setOpen] = useState(true);
+  const [menu, list] = children;
+  return (
+    <div>
+      <div className="group flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          <ChevronIcon open={open} /> <span className="truncate">{name}</span>
+        </button>
+        {menu}
+      </div>
+      {open && list}
+      {open && empty && <p className="py-0.5 pl-8 text-xs text-muted">Empty folder</p>}
+    </div>
   );
 }
 

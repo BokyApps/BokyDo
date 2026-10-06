@@ -17,6 +17,9 @@ export const projectToWire = (
   isArchived: p.isArchived,
   isFavorite: member.isFavorite,
   role: member.role,
+  workspaceId: p.workspaceId,
+  folderId: p.folderId,
+  visibility: p.visibility,
   updatedAt: p.updatedAt.toISOString(),
 });
 

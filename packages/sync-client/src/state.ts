@@ -1,6 +1,9 @@
 import type {
   AppNotification,
   Collaborator,
+  Folder,
+  Workspace,
+  WorkspaceMember,
   Comment,
   Filter,
   Label,
@@ -21,6 +24,9 @@ export interface SyncState {
   invitations: readonly PendingInvite[];
   notifications: readonly AppNotification[];
   unreadNotifications: number;
+  workspaces: readonly Workspace[];
+  workspaceMembers: readonly WorkspaceMember[];
+  folders: readonly Folder[];
   projects: ReadonlyMap<string, Project>;
   sections: ReadonlyMap<string, Section>;
   tasks: ReadonlyMap<string, Task>;
@@ -37,6 +43,9 @@ export interface Draft {
   invitations: readonly PendingInvite[];
   notifications: readonly AppNotification[];
   unreadNotifications: number;
+  workspaces: readonly Workspace[];
+  workspaceMembers: readonly WorkspaceMember[];
+  folders: readonly Folder[];
   projects: Map<string, Project>;
   sections: Map<string, Section>;
   tasks: Map<string, Task>;
@@ -52,6 +61,9 @@ export const emptyState = (): SyncState => ({
   invitations: [],
   notifications: [],
   unreadNotifications: 0,
+  workspaces: [],
+  workspaceMembers: [],
+  folders: [],
   projects: new Map(),
   sections: new Map(),
   tasks: new Map(),
@@ -68,6 +80,9 @@ export function draftOf(state: SyncState): Draft {
     invitations: state.invitations,
     notifications: state.notifications,
     unreadNotifications: state.unreadNotifications,
+    workspaces: state.workspaces,
+    workspaceMembers: state.workspaceMembers,
+    folders: state.folders,
     projects: new Map(state.projects),
     sections: new Map(state.sections),
     tasks: new Map(state.tasks),
@@ -86,6 +101,9 @@ export function applyServerResponse(state: SyncState, res: SyncResponse): SyncSt
   d.invitations = res.invitations;
   d.notifications = res.notifications;
   d.unreadNotifications = res.unreadNotifications;
+  d.workspaces = res.workspaces;
+  d.workspaceMembers = res.workspaceMembers;
+  d.folders = res.folders;
   for (const p of res.projects) d.projects.set(p.id, p);
   for (const s of res.sections) d.sections.set(s.id, s);
   for (const t of res.tasks) d.tasks.set(t.id, t);

@@ -14,6 +14,9 @@ const project = (id: string, name: string, extra: Partial<Project> = {}): Projec
   isArchived: false,
   isFavorite: false,
   role: 'owner',
+  workspaceId: null,
+  folderId: null,
+  visibility: 'restricted',
   updatedAt: '',
   ...extra,
 });

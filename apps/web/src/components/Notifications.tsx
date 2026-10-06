@@ -8,7 +8,12 @@ import { Button, Popover } from './ui.js';
 const text = (n: AppNotification, actor: string): string => {
   const d = n.data;
   const title = typeof d.title === 'string' ? `“${d.title}”` : 'a task';
-  const project = typeof d.projectName === 'string' ? `“${d.projectName}”` : 'a project';
+  const project =
+    typeof d.workspaceName === 'string'
+      ? `the team “${d.workspaceName}”`
+      : typeof d.projectName === 'string'
+        ? `“${d.projectName}”`
+        : 'a project';
   switch (n.type) {
     case 'assigned':
       return `${actor} assigned ${title} to you`;

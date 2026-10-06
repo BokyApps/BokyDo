@@ -1,4 +1,11 @@
-import type { GrantableRole, Project, ProjectInvite, Role, Task } from '@bokydo/shared';
+import type {
+  GrantableRole,
+  Project,
+  ProjectInvite,
+  Role,
+  Task,
+  WorkspaceRole,
+} from '@bokydo/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../lib/api.js';
@@ -7,12 +14,14 @@ import { useConfirm } from '../lib/confirm.js';
 import { useSend, useSyncState } from '../lib/sync.js';
 import { Alert, Button, Dialog, inputClass, Popover } from './ui.js';
 
-export const ROLE_LABEL: Record<Role, string> = {
+export const ROLE_LABEL: Record<Role | WorkspaceRole, string> = {
   owner: 'Owner',
   admin: 'Admin',
   editor: 'Editor',
   commenter: 'Commenter',
   viewer: 'Viewer',
+  member: 'Member',
+  guest: 'Guest',
 };
 const ROLE_HINT: Record<GrantableRole, string> = {
   admin: 'Manage members and the project',
@@ -83,7 +92,8 @@ function ShareBody({ project, onClose }: { project: Project; onClose: () => void
   const [error, setError] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const invites = useQuery({
-    queryKey: ['invites', project.id],
+    // Someone joining (from anywhere) closes their invite: refetch when membership changes.
+    queryKey: ['invites', project.id, members.length],
     queryFn: () =>
       api<{ invites: ProjectInvite[] }>('GET', `/api/v1/projects/${project.id}/invites`),
     enabled: manage,

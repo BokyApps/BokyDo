@@ -10,7 +10,15 @@ import { localNow, type LocalNow } from '@bokydo/nlp';
 import { resolvePreferences, type Task } from '@bokydo/shared';
 import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { Tx } from '../sync/context.js';
-import { projectMembers, projects, sections, tasks, users } from '../db/schema.js';
+import {
+  projectMembers,
+  projects,
+  sections,
+  tasks,
+  users,
+  workspaceMembers,
+  workspaces,
+} from '../db/schema.js';
 import { visibleProjects } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
 
@@ -132,6 +140,7 @@ export async function runFilter(
           id: projects.id,
           name: projects.name,
           parentId: projects.parentId,
+          workspaceId: projects.workspaceId,
           isArchived: projects.isArchived,
         })
         .from(projects)
@@ -179,6 +188,11 @@ export async function runFilter(
       ).values(),
     ],
     sharedProjectIds: new Set([...perProject].filter(([, n]) => n > 1).map(([id]) => id)),
+    workspaces: await tx
+      .select({ id: workspaces.id, name: workspaces.name })
+      .from(workspaceMembers)
+      .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+      .where(and(eq(workspaceMembers.userId, userId), isNull(workspaces.deletedAt))),
   });
 
   const lists = [];

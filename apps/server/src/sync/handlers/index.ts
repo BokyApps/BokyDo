@@ -6,3 +6,4 @@ export * from './preferences.js';
 export * from './members.js';
 export * from './comments.js';
 export * from './notifications.js';
+export * from './workspaces.js';

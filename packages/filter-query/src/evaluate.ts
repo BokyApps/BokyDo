@@ -13,6 +13,7 @@ export type ResolvedTerm =
       | { t: 'project' }
       | { t: 'section' }
       | { t: 'shared' }
+      | { t: 'workspace' }
       | { t: 'assignedToName' }
       | { t: 'assignedByName' }
     >
@@ -33,13 +34,23 @@ export interface ResolvedQuery {
 }
 
 export interface Catalog {
-  projects: readonly { id: string; name: string; parentId: string | null }[];
+  projects: readonly {
+    id: string;
+    name: string;
+    parentId: string | null;
+    workspaceId?: string | null;
+  }[];
   sections: readonly { id: string; name: string; projectId: string }[];
   /** People the user shares projects with (for `assigned to: name`). */
   users?: readonly { id: string; username: string }[];
   /** Projects with more than one member (for `shared`). */
   sharedProjectIds?: ReadonlySet<string>;
+  /** Teams the user belongs to (for `workspace:`). */
+  workspaces?: readonly { id: string; name: string }[];
 }
+
+/** What `workspace:` calls projects outside any team. */
+export const PERSONAL_WORKSPACE = 'My Projects';
 
 export interface Resolution {
   queries: ResolvedQuery[];
@@ -88,6 +99,23 @@ export function resolveFilter(queries: readonly FilterQuery[], catalog: Catalog)
     }
     if (term.t === 'shared')
       return { t: 'projectIds', ids: new Set(catalog.sharedProjectIds ?? []) };
+    if (term.t === 'workspace') {
+      const teams = new Set(
+        (catalog.workspaces ?? []).filter((w) => globMatch(term.pattern, w.name)).map((w) => w.id),
+      );
+      const personal = globMatch(term.pattern, PERSONAL_WORKSPACE);
+      if (teams.size === 0 && !personal && !hasWildcard(term.pattern))
+        warnings.add(`No team named “${term.pattern}”`);
+      // Only teams you belong to: a project shared from another team isn't found by its name.
+      return {
+        t: 'projectIds',
+        ids: new Set(
+          catalog.projects
+            .filter((p) => (p.workspaceId ? teams.has(p.workspaceId) : personal))
+            .map((p) => p.id),
+        ),
+      };
+    }
     if (term.t === 'assignedToName' || term.t === 'assignedByName') {
       const ids = new Set(
         (catalog.users ?? []).filter((u) => globMatch(term.pattern, u.username)).map((u) => u.id),

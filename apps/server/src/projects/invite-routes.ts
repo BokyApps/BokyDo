@@ -1,6 +1,12 @@
-import { createInviteSchema, type GrantableRole, type ProjectInvite } from '@bokydo/shared';
+import {
+  createInviteSchema,
+  createWorkspaceInviteSchema,
+  type GrantableRole,
+  type GrantableWorkspaceRole,
+  type ProjectInvite,
+} from '@bokydo/shared';
 import { and, count, eq, isNull, or, sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { logActivity } from '../activity/log.js';
 import { audit } from '../audit.js';
@@ -8,17 +14,24 @@ import { RateLimiter } from '../auth/rate-limiter.js';
 import { newToken, tokenId } from '../auth/tokens.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { projectInvitations, projectMembers, projects, users } from '../db/schema.js';
+import { projectInvitations, projectMembers, projects, users, workspaces } from '../db/schema.js';
 import type { Notifier } from '../email/notifier.js';
 import { requireSession } from '../http/access.js';
-import { CommandFailure, LIMITS, type Tx } from '../sync/context.js';
+import { CommandFailure, LIMITS, type ChangeRecorder, type Tx } from '../sync/context.js';
 import { addMember } from '../sync/handlers/members.js';
+import { joinWorkspace } from '../sync/handlers/workspaces.js';
 import { requireProject } from '../sync/policy.js';
 import type { SyncService } from '../sync/sync-service.js';
-import { openInvite, pendingInvites } from './invites.js';
+import { requireWorkspace, workspaceRole } from '../workspaces/access.js';
+import { creatorName, openInvite, pendingInvites, targetName } from './invites.js';
 
 export const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
-const RANK: Record<GrantableRole, number> = { viewer: 0, commenter: 1, editor: 2, admin: 3 };
+const PROJECT_RANK: Record<GrantableRole, number> = {
+  viewer: 0,
+  commenter: 1,
+  editor: 2,
+  admin: 3,
+};
 
 const idParams = z.object({ id: z.uuid() }).strict();
 const inviteParams = z.object({ id: z.uuid(), inviteId: z.uuid() }).strict();
@@ -30,8 +43,6 @@ interface Deps {
   notifier: Notifier;
   sessionKey: Buffer;
 }
-
-const open = openInvite;
 
 /** A response decided inside a transaction, sent only after it commits. */
 type Out = { status: number; body?: unknown };
@@ -53,12 +64,18 @@ function failureReply(reply: FastifyReply, err: unknown) {
   throw err;
 }
 
+/** What an invitation is for, once the caller is known to manage it. */
+type Target = { kind: 'project' | 'workspace'; id: string; name: string };
+
+const targetColumn = (kind: Target['kind']) =>
+  kind === 'project' ? projectInvitations.projectId : projectInvitations.workspaceId;
+
 /**
- * Project invitations. Two kinds:
- * - direct: name a username or email; the person accepts from their inbox. The response is the
- *   same whether or not that account exists, so this can't be used to discover users;
+ * Invitations to projects and workspaces. Two kinds:
+ * - direct: name a username or verified email; the person accepts from their inbox. The
+ *   response is the same whether or not that account exists, so this can't discover users;
  * - link: a one-time link (token shown once, stored as an HMAC, expires in 7 days).
- * The role is fixed when the invite is made, and admins can only invite below admin.
+ * The role is fixed when the invite is made; only owners can invite admins.
  */
 export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
   const user = { config: { access: 'user' } } as const;
@@ -70,18 +87,47 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
     maxBackoffMs: 15 * 60_000,
   });
 
-  /** Caller may manage members of the project, and may grant this role. */
-  async function managed(tx: Tx, userId: string, projectId: string, role?: GrantableRole) {
-    const project = await requireProject(tx, userId, projectId, 'manage');
+  /** The project the caller may manage members of (and may grant `role` in). */
+  async function managedProject(
+    tx: Tx,
+    userId: string,
+    id: string,
+    role?: GrantableRole,
+  ): Promise<Target> {
+    const project = await requireProject(tx, userId, id, 'manage');
     if (project.isInbox) throw new CommandFailure('invalid', 'the inbox cannot be shared');
-    if (role && RANK[role] >= RANK.admin && project.role !== 'owner')
+    if (role && PROJECT_RANK[role] >= PROJECT_RANK.admin && project.role !== 'owner')
       throw new CommandFailure('forbidden', 'only the owner can invite admins');
-    return project;
+    return { kind: 'project', id: project.id, name: project.name };
   }
 
-  app.post('/api/v1/projects/:id/invites', user, async (req, reply) => {
+  /** The workspace the caller administers (and may grant `role` in). */
+  async function managedWorkspace(
+    tx: Tx,
+    userId: string,
+    id: string,
+    role?: GrantableWorkspaceRole,
+  ): Promise<Target> {
+    const ws = await requireWorkspace(tx, userId, id, 'admin');
+    if (role === 'admin' && ws.role !== 'owner')
+      throw new CommandFailure('forbidden', 'only the owner can invite admins');
+    return { kind: 'workspace', id: ws.id, name: ws.name };
+  }
+
+  async function isMember(tx: Pick<Tx, 'select'>, target: Target, userId: string) {
+    if (target.kind === 'workspace') return (await workspaceRole(tx, target.id, userId)) !== null;
+    const [row] = await tx
+      .select({ role: projectMembers.role })
+      .from(projectMembers)
+      .where(and(eq(projectMembers.projectId, target.id), eq(projectMembers.userId, userId)));
+    return Boolean(row);
+  }
+
+  async function createInvite(req: FastifyRequest, reply: FastifyReply, kind: Target['kind']) {
     const params = idParams.safeParse(req.params);
-    const body = createInviteSchema.safeParse(req.body);
+    const body = (kind === 'project' ? createInviteSchema : createWorkspaceInviteSchema).safeParse(
+      req.body,
+    );
     if (!params.success || !body.success)
       return reply.status(400).send({ error: 'validation_failed' });
     const me = requireSession(req).user;
@@ -95,32 +141,37 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
       return send(
         reply,
         await deps.sync.write(async (tx, changes): Promise<Out> => {
-          const project = await managed(tx, me.id, params.data.id, role);
+          const target =
+            kind === 'project'
+              ? await managedProject(tx, me.id, params.data.id, role as GrantableRole)
+              : await managedWorkspace(tx, me.id, params.data.id, role as GrantableWorkspaceRole);
+          const column = targetColumn(kind);
           const [pending] = await tx
             .select({ n: count() })
             .from(projectInvitations)
-            .where(and(eq(projectInvitations.projectId, project.id), open()));
+            .where(and(eq(column, target.id), openInvite()));
           if ((pending?.n ?? 0) >= LIMITS.pendingInvitesPerProject)
             throw new CommandFailure('limit_exceeded', 'too many open invitations');
           const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+          const where = kind === 'project' ? { projectId: target.id } : { workspaceId: target.id };
 
           if (identifier === undefined) {
             const token = newToken();
             const id = newId();
             await tx.insert(projectInvitations).values({
               id,
-              projectId: project.id,
+              ...where,
               role,
               tokenHash: hash(token),
               createdById: me.id,
               expiresAt,
             });
             await audit(tx, {
-              action: 'project.invite_link',
+              action: `${kind}.invite_link`,
               actorType: 'user',
               actorUserId: me.id,
-              targetType: 'project',
-              targetId: project.id,
+              targetType: kind,
+              targetId: target.id,
               ip: req.ip,
               meta: { role },
             });
@@ -129,7 +180,7 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
 
           // Direct invite. Only verified emails count, so an address can't be claimed to intercept.
           const needle = identifier.toLowerCase();
-          const [target] = await tx
+          const [invitee] = await tx
             .select({ id: users.id })
             .from(users)
             .where(
@@ -144,35 +195,29 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
                 ),
               ),
             );
-          if (target && target.id !== me.id) {
-            const [member] = await tx
-              .select({ role: projectMembers.role })
-              .from(projectMembers)
-              .where(
-                and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, target.id)),
-              );
+          if (invitee && invitee.id !== me.id && !(await isMember(tx, target, invitee.id))) {
             const [existing] = await tx
               .select({ id: projectInvitations.id })
               .from(projectInvitations)
               .where(
                 and(
-                  eq(projectInvitations.projectId, project.id),
-                  eq(projectInvitations.inviteeId, target.id),
-                  open(),
+                  eq(column, target.id),
+                  eq(projectInvitations.inviteeId, invitee.id),
+                  openInvite(),
                 ),
               );
-            if (!member && !existing) {
+            if (!existing) {
               await tx.insert(projectInvitations).values({
                 id: newId(),
-                projectId: project.id,
+                ...where,
                 role,
-                inviteeId: target.id,
+                inviteeId: invitee.id,
                 createdById: me.id,
                 expiresAt,
               });
               // Pokes the invitee's open clients so the invitation shows up straight away.
-              changes.forUser('invitations', project.id, target.id);
-              deps.notifier.projectInvite(target.id, me.username, project.name);
+              changes.forUser('invitations', target.id, invitee.id);
+              deps.notifier.projectInvite(invitee.id, me.username, target.name);
             }
           }
           return out(202, { sent: true });
@@ -181,28 +226,28 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
     } catch (err) {
       return failureReply(reply, err);
     }
-  });
+  }
 
-  app.get('/api/v1/projects/:id/invites', user, async (req, reply) => {
+  async function listInvites(req: FastifyRequest, reply: FastifyReply, kind: Target['kind']) {
     const params = idParams.safeParse(req.params);
     if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
     const me = requireSession(req).user;
     try {
       return await deps.db.transaction(async (tx) => {
-        const project = await managed(tx, me.id, params.data.id);
+        const target =
+          kind === 'project'
+            ? await managedProject(tx, me.id, params.data.id)
+            : await managedWorkspace(tx, me.id, params.data.id);
         const invitee = sql<
           string | null
-        >`(select username from users u where u.id = ${projectInvitations.inviteeId})`;
-        const creator = sql<
-          string | null
-        >`(select username from users u where u.id = ${projectInvitations.createdById})`;
+        >`(select u.username from users u where u.id = "project_invitations"."invitee_id")`;
         const rows = await tx
-          .select({ invite: projectInvitations, invitee, creator })
+          .select({ invite: projectInvitations, invitee, creator: creatorName })
           .from(projectInvitations)
-          .where(and(eq(projectInvitations.projectId, project.id), open()));
+          .where(and(eq(targetColumn(kind), target.id), openInvite()));
         const invites: ProjectInvite[] = rows.map(({ invite, invitee, creator }) => ({
           id: invite.id,
-          projectId: invite.projectId,
+          targetId: target.id,
           role: invite.role,
           kind: invite.inviteeId ? 'user' : 'link',
           invitee,
@@ -215,9 +260,9 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
     } catch (err) {
       return failureReply(reply, err);
     }
-  });
+  }
 
-  app.delete('/api/v1/projects/:id/invites/:inviteId', user, async (req, reply) => {
+  async function revokeInvite(req: FastifyRequest, reply: FastifyReply, kind: Target['kind']) {
     const params = inviteParams.safeParse(req.params);
     if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
     const me = requireSession(req).user;
@@ -225,15 +270,18 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
       return send(
         reply,
         await deps.db.transaction(async (tx): Promise<Out> => {
-          await managed(tx, me.id, params.data.id);
+          const target =
+            kind === 'project'
+              ? await managedProject(tx, me.id, params.data.id)
+              : await managedWorkspace(tx, me.id, params.data.id);
           const closed = await tx
             .update(projectInvitations)
             .set({ closedAt: new Date() })
             .where(
               and(
                 eq(projectInvitations.id, params.data.inviteId),
-                eq(projectInvitations.projectId, params.data.id),
-                open(),
+                eq(targetColumn(kind), target.id),
+                openInvite(),
               ),
             )
             .returning({ id: projectInvitations.id });
@@ -244,7 +292,15 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
     } catch (err) {
       return failureReply(reply, err);
     }
-  });
+  }
+
+  for (const kind of ['project', 'workspace'] as const) {
+    const base =
+      kind === 'project' ? '/api/v1/projects/:id/invites' : '/api/v1/workspaces/:id/invites';
+    app.post(base, user, (req, reply) => createInvite(req, reply, kind));
+    app.get(base, user, (req, reply) => listInvites(req, reply, kind));
+    app.delete(`${base}/:inviteId`, user, (req, reply) => revokeInvite(req, reply, kind));
+  }
 
   /** Invitations waiting for me. */
   app.get('/api/v1/invites', user, async (req) => ({
@@ -273,24 +329,24 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
                 and(
                   eq(projectInvitations.id, params.data.id),
                   eq(projectInvitations.inviteeId, me.id),
-                  open(),
+                  openInvite(),
                 ),
               )
               .returning();
             if (!invite) return out(404, { error: 'not_found' });
-            changes.forUser('invitations', invite.projectId, me.id);
+            changes.forUser('invitations', invite.id, me.id);
             if (action === 'decline') return out(204);
-            await joinProject(tx, changes, invite.projectId, me.id, invite.role);
+            const joined = await join(tx, changes, invite, me.id);
             await audit(tx, {
-              action: 'project.invite_accepted',
+              action: 'invite_accepted',
               actorType: 'user',
               actorUserId: me.id,
-              targetType: 'project',
-              targetId: invite.projectId,
+              targetType: invite.workspaceId ? 'workspace' : 'project',
+              targetId: invite.workspaceId ?? invite.projectId ?? invite.id,
               ip: req.ip,
               meta: { role: invite.role, kind: 'user' },
             });
-            return out(200, { projectId: invite.projectId });
+            return out(200, joined);
           }),
         );
       } catch (err) {
@@ -306,35 +362,23 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
     const me = requireSession(req).user;
     const key = `link:${req.ip}`;
     if (!limiter.attempt(key).allowed) return reply.status(429).send({ error: 'rate_limited' });
-    const creator = sql<
-      string | null
-    >`(select username from users u where u.id = ${projectInvitations.createdById})`;
     const [row] = await deps.db
-      .select({ invite: projectInvitations, projectName: projects.name, creator })
+      .select({ invite: projectInvitations, name: targetName, creator: creatorName })
       .from(projectInvitations)
-      .innerJoin(projects, eq(projects.id, projectInvitations.projectId))
-      .where(
-        and(
-          eq(projectInvitations.tokenHash, hash(body.data.token)),
-          open(),
-          isNull(projects.deletedAt),
-        ),
-      );
-    if (!row) {
+      .where(and(eq(projectInvitations.tokenHash, hash(body.data.token)), openInvite()));
+    if (!row || row.name === null) {
       limiter.failure(key);
       return reply.status(404).send({ error: 'not_found' });
     }
-    const [member] = await deps.db
-      .select({ role: projectMembers.role })
-      .from(projectMembers)
-      .where(
-        and(eq(projectMembers.projectId, row.invite.projectId), eq(projectMembers.userId, me.id)),
-      );
+    const target: Target = row.invite.workspaceId
+      ? { kind: 'workspace', id: row.invite.workspaceId, name: row.name }
+      : { kind: 'project', id: row.invite.projectId as string, name: row.name };
     return {
-      projectName: row.projectName,
+      kind: target.kind,
+      name: row.name,
       role: row.invite.role,
       invitedBy: row.creator,
-      alreadyMember: Boolean(member),
+      alreadyMember: await isMember(deps.db, target, me.id),
     };
   });
 
@@ -351,23 +395,23 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
           const [invite] = await tx
             .update(projectInvitations)
             .set({ acceptedAt: new Date(), acceptedById: me.id })
-            .where(and(eq(projectInvitations.tokenHash, hash(body.data.token)), open()))
+            .where(and(eq(projectInvitations.tokenHash, hash(body.data.token)), openInvite()))
             .returning();
           if (!invite) {
             limiter.failure(key);
             return out(404, { error: 'not_found' });
           }
-          await joinProject(tx, changes, invite.projectId, me.id, invite.role);
+          const joined = await join(tx, changes, invite, me.id);
           await audit(tx, {
-            action: 'project.invite_accepted',
+            action: 'invite_accepted',
             actorType: 'user',
             actorUserId: me.id,
-            targetType: 'project',
-            targetId: invite.projectId,
+            targetType: invite.workspaceId ? 'workspace' : 'project',
+            targetId: invite.workspaceId ?? invite.projectId ?? invite.id,
             ip: req.ip,
             meta: { role: invite.role, kind: 'link' },
           });
-          return out(200, { projectId: invite.projectId });
+          return out(200, joined);
         }),
       );
     } catch (err) {
@@ -376,24 +420,39 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
   });
 }
 
-/** Join with the invite's role, never lowering a role the user already has. */
-async function joinProject(
+/** Join the invite's project or workspace with its role, never lowering an existing role. */
+async function join(
   tx: Tx,
-  changes: Parameters<typeof addMember>[1],
-  projectId: string,
+  changes: ChangeRecorder,
+  invite: typeof projectInvitations.$inferSelect,
   userId: string,
-  role: GrantableRole,
-) {
+): Promise<{ projectId?: string; workspaceId?: string }> {
+  if (invite.workspaceId) {
+    const [ws] = await tx
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(and(eq(workspaces.id, invite.workspaceId), isNull(workspaces.deletedAt)));
+    if (!ws) throw new CommandFailure('not_found', 'workspace');
+    await joinWorkspace(tx, changes, ws.id, userId, invite.role as GrantableWorkspaceRole);
+    return { workspaceId: ws.id };
+  }
+  const projectId = invite.projectId as string;
   const [project] = await tx
     .select({ id: projects.id })
     .from(projects)
     .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)));
   if (!project) throw new CommandFailure('not_found', 'project');
+  const role = invite.role as GrantableRole;
   const [member] = await tx
     .select({ role: projectMembers.role })
     .from(projectMembers)
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
-  if (member && (member.role === 'owner' || RANK[member.role] >= RANK[role])) return;
+  if (
+    member &&
+    (member.role === 'owner' || PROJECT_RANK[member.role as GrantableRole] >= PROJECT_RANK[role])
+  )
+    return { projectId };
   await addMember(tx, changes, projectId, userId, role);
   await logActivity(tx, userId, { projectId, type: 'member_joined', data: { userId, role } });
+  return { projectId };
 }

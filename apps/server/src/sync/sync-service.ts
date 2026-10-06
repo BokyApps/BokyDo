@@ -17,6 +17,7 @@ import {
   commentReactions,
   comments,
   filters,
+  folders,
   labels,
   processedCommands,
   projectMembers,
@@ -24,6 +25,8 @@ import {
   sections,
   tasks,
   users,
+  workspaceMembers,
+  workspaces,
 } from '../db/schema.js';
 import {
   ChangeRecorder,
@@ -45,6 +48,9 @@ import {
   sectionToWire,
   taskToWire,
 } from './serialize.js';
+
+/** Change markers for data sent whole in every response (they only poke clients). */
+const PER_RESPONSE = new Set(['user', 'invitations', 'notifications', 'workspaces']);
 
 /** Completed tasks older than this are left out of a full sync (fetched on demand instead). */
 const COMPLETED_WINDOW_DAYS = 7;
@@ -84,6 +90,16 @@ const HANDLERS: Record<CommandType, Handler> = {
   comment_delete: h.commentDelete,
   reaction_toggle: h.reactionToggle,
   notifications_mark_read: h.notificationsMarkRead,
+  workspace_add: h.workspaceAdd,
+  workspace_update: h.workspaceUpdate,
+  workspace_delete: h.workspaceDelete,
+  workspace_member_update: h.workspaceMemberUpdate,
+  workspace_member_remove: h.workspaceMemberRemove,
+  workspace_transfer: h.workspaceTransfer,
+  folder_add: h.folderAdd,
+  folder_update: h.folderUpdate,
+  folder_delete: h.folderDelete,
+  project_move_workspace: h.projectMoveWorkspace,
 };
 
 export interface Affected {
@@ -256,24 +272,76 @@ export class SyncService {
   }
 
   /** Memberships of every visible project, and the people behind them (always complete). */
+  /**
+   * People, memberships, workspaces, folders, invitations and notifications: small, and sent
+   * whole with every response. Workspace guests see only themselves in a workspace's member list.
+   */
   private async team(tx: Tx, userId: string, projectIds: string[]) {
     const invitations = await pendingInvites(tx, userId);
     const inbox = await latestNotifications(tx, userId);
-    if (projectIds.length === 0) return { collaborators: [], members: [], invitations, ...inbox };
-    const rows = await tx
-      .select({
-        projectId: projectMembers.projectId,
-        userId: projectMembers.userId,
-        role: projectMembers.role,
-        username: users.username,
-      })
-      .from(projectMembers)
-      .innerJoin(users, eq(users.id, projectMembers.userId))
-      .where(inArray(projectMembers.projectId, projectIds));
-    const people = new Map(rows.map((r) => [r.userId, { id: r.userId, username: r.username }]));
+    const mine = await tx
+      .select({ id: workspaces.id, name: workspaces.name, role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+      .where(and(eq(workspaceMembers.userId, userId), isNull(workspaces.deletedAt)));
+    const full = mine.filter((w) => w.role !== 'guest').map((w) => w.id);
+    const wsRows = full.length
+      ? await tx
+          .select({
+            workspaceId: workspaceMembers.workspaceId,
+            userId: workspaceMembers.userId,
+            role: workspaceMembers.role,
+            username: users.username,
+          })
+          .from(workspaceMembers)
+          .innerJoin(users, eq(users.id, workspaceMembers.userId))
+          .where(inArray(workspaceMembers.workspaceId, full))
+      : [];
+    const folderRows = mine.length
+      ? await tx
+          .select()
+          .from(folders)
+          .where(
+            and(
+              inArray(
+                folders.workspaceId,
+                mine.map((w) => w.id),
+              ),
+              isNull(folders.deletedAt),
+            ),
+          )
+      : [];
+    const rows = projectIds.length
+      ? await tx
+          .select({
+            projectId: projectMembers.projectId,
+            userId: projectMembers.userId,
+            role: projectMembers.role,
+            username: users.username,
+          })
+          .from(projectMembers)
+          .innerJoin(users, eq(users.id, projectMembers.userId))
+          .where(inArray(projectMembers.projectId, projectIds))
+      : [];
+    const people = new Map(
+      [...rows, ...wsRows].map((r) => [r.userId, { id: r.userId, username: r.username }]),
+    );
     return {
       collaborators: [...people.values()],
       members: rows.map(({ projectId, userId, role }) => ({ projectId, userId, role })),
+      workspaces: mine,
+      workspaceMembers: [
+        ...wsRows.map(({ workspaceId, userId, role }) => ({ workspaceId, userId, role })),
+        ...mine
+          .filter((w) => w.role === 'guest')
+          .map((w) => ({ workspaceId: w.id, userId, role: w.role })),
+      ],
+      folders: folderRows.map((f) => ({
+        id: f.id,
+        workspaceId: f.workspaceId,
+        name: f.name,
+        childOrder: f.childOrder,
+      })),
       invitations,
       ...inbox,
     };
@@ -357,8 +425,7 @@ export class SyncService {
     for (const m of marked) {
       if (m.type === 'project_access') granted.push(m.id);
       // The user row, memberships, invitations and notifications are in every response.
-      else if (m.type !== 'user' && m.type !== 'invitations' && m.type !== 'notifications')
-        ids[m.type].add(m.id);
+      else if (!PER_RESPONSE.has(m.type)) ids[m.type as EntityType].add(m.id);
     }
 
     const isVisible = (projectId: string) => visible.has(projectId);
