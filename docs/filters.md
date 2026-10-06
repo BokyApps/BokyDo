@@ -30,6 +30,9 @@ many tasks match.
 | `search: invoice`                                                       | Task name contains the text (case-insensitive)               |
 | `assigned to: me`, `assigned to: others`, `assigned`, `unassigned`      | By assignee                                                  |
 | `assigned by: me`, `assigned by: others`                                | By who assigned it                                           |
+| `assigned to: Sam`, `assigned by: Sam` (wildcards work)                 | By a person you share projects with                          |
+| `shared`                                                                | Projects with more than one member                           |
+| `workspace: Acme`, `workspace: My Projects`                             | Projects in a team you belong to, or outside any team        |
 | `subtask`                                                               | Sub-tasks only (`!subtask`: top-level only)                  |
 | `all` (`view all`)                                                      | Every open task                                              |
 
@@ -53,7 +56,6 @@ Limits: 1,024 characters, 64 terms, 10 lists, 16 levels of nesting.
 
 ## Not yet
 
-`shared`, `workspace:` and assignee names (`assigned to: Sam`) arrive with collaboration (W5).
 Completed tasks aren't searched by filters; use search for those.
 
 ## API

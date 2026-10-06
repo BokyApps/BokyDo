@@ -10,11 +10,13 @@ C=(docker compose -p "$PROJECT" -f compose.yml -f docker/compose.smoke.yml)
 BASE="http://127.0.0.1:$PORT"
 MAILPIT="http://127.0.0.1:${MAILPIT_PORT:-18025}"
 JAR=$(mktemp)
+ADMIN_JAR=$JAR
+SAM_JAR=$(mktemp)
 fail=0
 
 cd "$(dirname "$0")/.."
 cleanup() {
-  rm -f "$JAR"
+  rm -f "$ADMIN_JAR" "$SAM_JAR"
   [[ "${KEEP:-}" == 1 ]] || "${C[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -201,11 +203,76 @@ r=$(api POST /api/v1/auth/mfa/totp "{\"code\":\"$(totp "$SECRET" 1)\"}")
 check "TOTP completes sign-in" bash -c "[[ \"$(body_of "$r" | jq -r .authMethod)\" == password+totp ]]"
 CSRF=$(body_of "$r" | jq -r .csrfToken)
 
+echo "== collaboration (W5)"
+uuid() { cat /proc/sys/kernel/random/uuid; }
+sync_cmds() { api POST /api/v1/sync "{\"commands\":[$1]}"; } # sync_cmds <comma-separated commands>
+cmd() { echo "{\"type\":\"$1\",\"uuid\":\"$(uuid)\",\"args\":$2}"; }
+ADMIN_CSRF=$CSRF
+as_admin() { JAR=$ADMIN_JAR; CSRF=$ADMIN_CSRF; }
+as_sam() { JAR=$SAM_JAR; CSRF=$SAM_CSRF; }
+r=$(api POST /api/v1/admin/users '{"username":"sam"}')
+check "admin creates a second user" test "$(status_of "$r")" = 200
+SAM_PASS=$(body_of "$r" | jq -r .passphrase)
+JAR=$SAM_JAR; CSRF=""
+r=$(api POST /api/v1/auth/login "{\"username\":\"sam\",\"password\":\"$SAM_PASS\"}")
+CSRF=$(body_of "$r" | jq -r .csrfToken)
+r=$(api POST /api/v1/auth/password "{\"currentPassword\":\"$SAM_PASS\",\"newPassword\":\"lagoon-thistle-copper-banjo-smoke\"}")
+SAM_CSRF=$(body_of "$r" | jq -r .csrfToken)
+check "second user signs in" test "$(status_of "$r")" = 200
+as_admin
+PROJ=$(uuid); SHARED_TASK=$(uuid)
+sync_cmds "$(cmd project_add "{\"id\":\"$PROJ\",\"name\":\"Smoke team\"}"),$(cmd task_add "{\"id\":\"$SHARED_TASK\",\"projectId\":\"$PROJ\",\"content\":\"Shared smoke\"}")" >/dev/null
+r=$(api POST "/api/v1/projects/$PROJ/invites" '{"role":"owner"}')
+check "invite role can't be owner" test "$(status_of "$r")" = 400
+r=$(api POST "/api/v1/projects/$PROJ/invites" '{"role":"editor"}')
+LINK=$(body_of "$r" | jq -r .token)
+check "one-time invite link created" test "${#LINK}" -ge 43
+as_sam
+check "invite link joins the project" \
+  bash -c "jq -e '.projectId == \"$PROJ\"' <<<'$(body_of "$(api POST /api/v1/invites/link/accept "{\"token\":\"$LINK\"}")")'"
+check "invite link is single-use" test "$(status_of "$(api POST /api/v1/invites/link/accept "{\"token\":\"$LINK\"}")")" = 404
+check "member syncs the shared project as editor" \
+  bash -c "jq -e '.projects[] | select(.id==\"$PROJ\") | .role == \"editor\"' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
+as_admin
+UP=$(curl -s -b "$JAR" -H "Origin: $BASE" -H "x-csrf-token: $CSRF" -H 'content-type: application/octet-stream' \
+  -H 'x-filename: evil.html' --data-binary '<html><script>alert(1)</script></html>' "$BASE/api/v1/projects/$PROJ/attachments")
+ATT=$(jq -r .id <<<"$UP")
+check "upload type is sniffed, not taken from the name" bash -c "jq -e '.contentType != \"text/html\"' <<<'$UP'"
+r=$(sync_cmds "$(cmd comment_add "{\"id\":\"$(uuid)\",\"taskId\":\"$SHARED_TASK\",\"content\":\"See file @sam\",\"attachmentIds\":[\"$ATT\"]}")")
+check "comment with attachment and mention saved" bash -c "jq -e '[.results[]] | all(.ok)' <<<'$(body_of "$r")'"
+as_sam
+check "mention notifies the member" \
+  bash -c "jq -e 'any(.notifications[]; .type == \"mentioned\")' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
+HDRS=$(curl -s -D - -o /dev/null -b "$JAR" "$BASE/api/v1/attachments/$ATT?inline=1")
+check "member downloads the attachment" grep -q '^HTTP/1.1 200' <<<"$HDRS"
+check "attachment served sandboxed and nosniff" \
+  bash -c "grep -qi \"^content-security-policy: default-src 'none'; sandbox\" <<<\"\$0\" && grep -qi '^x-content-type-options: nosniff' <<<\"\$0\"" "$HDRS"
+check "non-image attachment is never inline" grep -qi '^content-disposition: attachment' <<<"$HDRS"
+as_admin
+SAM_ID=$(body_of "$(api POST /api/v1/sync '{"cursor":null}')" | jq -r '.collaborators[] | select(.username=="sam") | .id')
+sync_cmds "$(cmd project_member_remove "{\"projectId\":\"$PROJ\",\"userId\":\"$SAM_ID\"}")" >/dev/null
+as_sam
+check "removed member loses the attachment" test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/api/v1/attachments/$ATT")" = 404
+check "removed member's sync drops the project" \
+  bash -c "jq -e 'all(.projects[]; .id != \"$PROJ\")' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
+as_admin
+WS=$(uuid); WS_PROJ=$(uuid)
+sync_cmds "$(cmd workspace_add "{\"id\":\"$WS\",\"name\":\"Smoke Co\"}"),$(cmd project_add "{\"id\":\"$WS_PROJ\",\"name\":\"Team plans\",\"workspaceId\":\"$WS\"}")" >/dev/null
+check "team invite by username" test "$(status_of "$(api POST "/api/v1/workspaces/$WS/invites" '{"identifier":"sam","role":"member"}')")" = 202
+as_sam
+INV=$(body_of "$(api GET /api/v1/invites)" | jq -r '.invites[] | select(.kind=="workspace") | .id')
+check "member accepts the team invite" test "$(status_of "$(api POST "/api/v1/invites/$INV/accept")")" = 200
+check "team member gets team-visible projects" \
+  bash -c "jq -e '.projects[] | select(.id==\"$WS_PROJ\") | .role == \"editor\"' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
+check "team member can't invite (admins only)" \
+  test "$(status_of "$(api POST "/api/v1/workspaces/$WS/invites" '{"role":"member"}')")" = 403
+as_admin
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5
 check "restart creates no second admin" \
-  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc 'select count(*) from users')" = 1
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc 'select count(*) from users where is_admin')" = 1
 "${C[@]}" restart >/dev/null 2>&1
 for _ in $(seq 60); do
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
