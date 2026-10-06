@@ -85,6 +85,13 @@
       "when": 1791248617885,
       "tag": "0011_reminders_and_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791265688160,
+      "tag": "0012_calendar_feeds",
+      "breakpoints": true
     }
   ]
 }

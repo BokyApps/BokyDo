@@ -91,6 +91,12 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/activity': 'user/after',
   'POST /api/v1/projects/:id/attachments': 'user/after',
   'GET /api/v1/attachments/:id': 'user/after',
+  // Calendar feeds: managed by the owner, fetched with the secret in the URL
+  'GET /api/v1/calendar-feeds': 'user/after',
+  'POST /api/v1/calendar-feeds': 'user/after',
+  'POST /api/v1/calendar-feeds/:id/rotate': 'user/after',
+  'DELETE /api/v1/calendar-feeds/:id': 'user/after',
+  'GET /api/v1/calendar/:file': 'public/after',
 };
 
 /** Streaming routes never finish on success; only their status line is checked. */

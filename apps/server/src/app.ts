@@ -32,6 +32,7 @@ import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
 import { Delivery } from './delivery/delivery.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
+import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
@@ -220,6 +221,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     vapid,
     sessionKey: deps.secrets.sessionKey,
   });
+  registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

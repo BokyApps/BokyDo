@@ -625,6 +625,38 @@ export const pushSubscriptions = pgTable(
   (t) => [index('push_subscriptions_user_idx').on(t.userId)],
 );
 
+/**
+ * Secret calendar feed URLs (iCal), one per project or saved filter. The URL is the credential:
+ * only an HMAC of the token is stored, so the database never holds a usable link, and deleting
+ * the row (or rotating the token) kills the URL at once. Access to the target is re-checked on
+ * every fetch, so a feed never outlives the owner's access.
+ */
+export const calendarFeeds = pgTable(
+  'calendar_feeds',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** HMAC(session.key, 'calendar-feed:' + token). */
+    tokenId: text('token_id').notNull().unique(),
+    kind: text('kind', { enum: ['project', 'filter'] }).notNull(),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+    filterId: uuid('filter_id').references(() => filters.id, { onDelete: 'cascade' }),
+    /** Task descriptions leave BokyDo (to calendar apps and their servers) only when asked for. */
+    showDescriptions: boolean('show_descriptions').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('calendar_feeds_user_idx').on(t.userId),
+    check(
+      'calendar_feeds_target_check',
+      sql`(kind = 'project' and project_id is not null and filter_id is null) or (kind = 'filter' and filter_id is not null and project_id is null)`,
+    ),
+  ],
+);
+
 /** Team workspaces: a group of people and the projects they share. */
 export const workspaces = pgTable('workspaces', {
   id: uuid('id').primaryKey(),

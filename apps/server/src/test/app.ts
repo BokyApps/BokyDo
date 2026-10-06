@@ -22,7 +22,11 @@ export interface TestApp {
 }
 
 export async function testApp(
-  opts: { webRoot?: string; fetchImpl?: typeof fetch } = {},
+  opts: {
+    webRoot?: string;
+    fetchImpl?: typeof fetch;
+    logger?: Parameters<typeof buildApp>[0]['logger'];
+  } = {},
 ): Promise<TestApp> {
   const db = await freshDb();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'bokydo-test-'));
@@ -33,6 +37,7 @@ export async function testApp(
     dataDir,
     webRoot: opts.webRoot ?? null,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.logger ? { logger: opts.logger } : {}),
   });
   return {
     app,
@@ -102,6 +107,9 @@ export class Client {
   }
   patch(url: string, payload?: unknown) {
     return this.request({ method: 'PATCH', url, payload: payload as never });
+  }
+  delete(url: string) {
+    return this.request({ method: 'DELETE', url });
   }
 
   async login(username: string, password: string): Promise<LightMyRequestResponse> {
