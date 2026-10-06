@@ -1,4 +1,5 @@
 export * from './auth.js';
+export * from './csv.js';
 export * from './errors.js';
 export * from './instance.js';
 export * from './markdown.js';
@@ -6,4 +7,5 @@ export * from './model.js';
 export * from './ordering.js';
 export * from './preferences.js';
 export * from './settings.js';
+export * from './template.js';
 export * from './timezones.js';

@@ -182,3 +182,17 @@ export const ActivityIcon = () => (
     <path d="M3 12h4l3-8 4 16 3-8h4" />
   </Icon>
 );
+export const TemplateIcon = () => (
+  <Icon>
+    <path d="M8 3h10a2 2 0 0 1 2 2v12" />
+    <rect x="4" y="7" width="12" height="14" rx="2" />
+    <path d="M8 12h4M8 16h4" />
+  </Icon>
+);
+export const DownloadIcon = () => (
+  <Icon>
+    <path d="M12 4v11" />
+    <path d="m7 11 5 5 5-5" />
+    <path d="M5 20h14" />
+  </Icon>
+);

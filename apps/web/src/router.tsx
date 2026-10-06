@@ -16,6 +16,7 @@ import { AdminUsersPage } from './pages/AdminUsersPage.js';
 import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
 import { CompletedPage } from './pages/CompletedPage.js';
 import { ArchivedPage, FilterPage, FiltersLabelsPage, LabelPage } from './pages/LabelsPages.js';
+import { TemplatesPage } from './pages/TemplatesPage.js';
 import { InboxPage, ProjectView } from './pages/ProjectPage.js';
 import { HomeRedirect, TaskLinkPage } from './pages/RoutePages.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -146,6 +147,7 @@ const routeTree = rootRoute.addChildren([
     appPage('/upcoming', UpcomingPage),
     appPage('/completed', CompletedPage),
     appPage('/filters-labels', FiltersLabelsPage),
+    appPage('/templates', TemplatesPage),
     appPage('/archived', ArchivedPage),
     appPage('/settings', () => <SettingsPage />),
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),

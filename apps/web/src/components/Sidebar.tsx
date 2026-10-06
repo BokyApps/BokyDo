@@ -10,6 +10,7 @@ import {
   ArchiveIcon,
   CheckIcon,
   ChevronIcon,
+  TemplateIcon,
   InboxIcon,
   PlusIcon,
   SearchIcon,
@@ -113,6 +114,12 @@ export function Sidebar({
             <TagIcon />
           </span>{' '}
           Filters &amp; Labels
+        </Link>
+        <Link to="/templates" className={item} activeProps={active}>
+          <span className="text-muted">
+            <TemplateIcon />
+          </span>{' '}
+          Templates
         </Link>
       </div>
 
