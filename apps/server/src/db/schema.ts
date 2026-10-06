@@ -43,6 +43,8 @@ export const users = pgTable(
     preferences: jsonb('preferences').notNull().default({}),
     /** The user's local date of the last daily digest sent (so it goes out once a day). */
     lastDigestOn: date('last_digest_on'),
+    /** The user's own AI routing (feature → their credential + model; @bokydo/shared aiRoutingSchema). */
+    aiRouting: jsonb('ai_routing').notNull().default({}),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),
     ...timestamps,
   },
@@ -663,4 +665,63 @@ export const folders = pgTable(
     ...softDelete,
   },
   (t) => [index('folders_workspace_idx').on(t.workspaceId)],
+);
+
+/**
+ * AI provider credentials. `ownerUserId` null = instance credential (admin-managed); otherwise
+ * the user's own. The key and any custom headers are envelope-encrypted together in `secret`,
+ * bound to the row id and owner; they are never returned by the API.
+ */
+export const aiCredentials = pgTable(
+  'ai_credentials',
+  {
+    id: uuid('id').primaryKey(),
+    ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    label: text('label').notNull(),
+    baseUrl: text('base_url'),
+    /** EncryptedValue of JSON { apiKey?: string, headers?: Record<string, string> }. */
+    secret: jsonb('secret'),
+    hasKey: boolean('has_key').notNull().default(false),
+    headerNames: jsonb('header_names').$type<string[]>().notNull().default([]),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index('ai_credentials_owner_idx').on(t.ownerUserId)],
+);
+
+/**
+ * One row per AI call: metering for everyone, and the budget ledger for calls on instance
+ * credentials. A call first inserts a `reserved` row holding its worst-case cost (under a
+ * per-user lock), then settles it to `done`/`failed` with what it actually used.
+ */
+export const aiUsage = pgTable(
+  'ai_usage',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    credentialId: uuid('credential_id').references(() => aiCredentials.id, {
+      onDelete: 'set null',
+    }),
+    billing: text('billing', { enum: ['own', 'instance'] }).notNull(),
+    feature: text('feature').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    status: text('status', { enum: ['reserved', 'done', 'failed'] }).notNull(),
+    reservedTokens: integer('reserved_tokens').notNull().default(0),
+    reservedAudioSeconds: integer('reserved_audio_seconds').notNull().default(0),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    audioSeconds: integer('audio_seconds').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('ai_usage_user_started_idx').on(t.userId, t.startedAt),
+    check('ai_usage_billing_check', sql`billing in ('own', 'instance')`),
+    check('ai_usage_status_check', sql`status in ('reserved', 'done', 'failed')`),
+  ],
 );

@@ -31,6 +31,10 @@ import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
 import { Delivery } from './delivery/delivery.js';
+import { AiCredentialStore } from './ai/credentials.js';
+import { registerAiRoutes } from './ai/routes.js';
+import { AiService } from './ai/service.js';
+import type { Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { fireDueReminders } from './reminders/reminders.js';
@@ -45,6 +49,8 @@ export interface AppDeps {
   logger?: FastifyServerOptions['logger'];
   /** Outbound fetch (breached-password check); injectable for tests. */
   fetchImpl?: typeof fetch;
+  /** DNS for the SSRF-safe outbound client; injectable for tests. */
+  resolver?: Resolver;
 }
 
 export interface AppServices {
@@ -58,6 +64,7 @@ export interface AppServices {
   /** Reminders, notification delivery and digests (started by main; tests call `tick`). */
   jobs: JobRunner;
   delivery: Delivery;
+  ai: AiService;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -135,6 +142,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     },
     { name: 'digests', run: (now) => delivery.digests(now) },
   );
+  const aiCredentials = new AiCredentialStore(db, deps.secrets.masterKey);
+  const ai = new AiService({
+    db,
+    settings,
+    credentials: aiCredentials,
+    ...(deps.resolver ? { resolver: deps.resolver } : {}),
+  });
   const services: AppServices = {
     settings,
     sessions,
@@ -145,6 +159,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     tokens,
     jobs,
     delivery,
+    ai,
   };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
@@ -220,6 +235,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     vapid,
     sessionKey: deps.secrets.sessionKey,
   });
+  registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { aiRoutingSchema, privateAllowlistEntrySchema } from './ai.js';
 import { timeZoneSchema } from './preferences.js';
 
 /**
@@ -124,6 +125,38 @@ export const settingDefinitions = {
   },
   'email.fromAddress': { schema: z.email().max(254).nullable(), default: null, secret: false },
   'email.fromName': { schema: headerSafe(80), default: 'BokyDo', secret: false },
+
+  /** Users may add their own provider keys (their usage is metered but not budgeted). */
+  'ai.userKeys': { schema: z.boolean(), default: true, secret: false },
+  /** Who may use the instance's routing and keys, which count against the budgets below. */
+  'ai.instanceAccess': {
+    schema: z.enum(['off', 'admins', 'everyone']),
+    default: 'admins',
+    secret: false,
+  },
+  /** Per-user monthly (UTC) token budget on instance keys; null = unlimited. */
+  'ai.monthlyTokenBudget': {
+    schema: z.number().int().min(0).max(10_000_000_000).nullable(),
+    default: 1_000_000,
+    secret: false,
+  },
+  /** Per-user monthly (UTC) speech-to-text minutes on instance keys; null = unlimited. */
+  'ai.monthlyAudioMinutes': {
+    schema: z.number().int().min(0).max(1_000_000).nullable(),
+    default: 300,
+    secret: false,
+  },
+  /** Feature → instance credential + model. */
+  'ai.routing': { schema: aiRoutingSchema, default: {}, secret: false },
+  /**
+   * Private networks that instance AI credentials (e.g. a local Ollama) may reach. Users' own
+   * credentials only ever reach the public internet.
+   */
+  'network.privateAllowlist': {
+    schema: z.array(privateAllowlistEntrySchema).max(20),
+    default: [],
+    secret: false,
+  },
 } as const satisfies Record<string, { schema: z.ZodType; default: unknown; secret: boolean }>;
 
 export type SettingKey = keyof typeof settingDefinitions;

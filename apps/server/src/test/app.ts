@@ -8,6 +8,7 @@ import type { DbHandle } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
+import type { Resolver } from '../net/outbound.js';
 import { hashPassword } from '../security/password.js';
 import { freshDb } from './db.js';
 
@@ -22,7 +23,7 @@ export interface TestApp {
 }
 
 export async function testApp(
-  opts: { webRoot?: string; fetchImpl?: typeof fetch } = {},
+  opts: { webRoot?: string; fetchImpl?: typeof fetch; resolver?: Resolver } = {},
 ): Promise<TestApp> {
   const db = await freshDb();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'bokydo-test-'));
@@ -33,6 +34,7 @@ export async function testApp(
     dataDir,
     webRoot: opts.webRoot ?? null,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.resolver ? { resolver: opts.resolver } : {}),
   });
   return {
     app,

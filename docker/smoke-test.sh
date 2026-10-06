@@ -298,6 +298,27 @@ check "signed unsubscribe link turns that email off" \
 check "unsubscribe changed only that preference" \
   bash -c "jq -e '.user.preferences.notifications.channels | (.reminder.email == false) and (.assigned.email == true)' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
 
+echo "== AI provider layer (W7a)"
+r=$(api POST /api/v1/admin/ai/credentials '{"provider":"openai-compatible","label":"Mailpit as a model server","baseUrl":"http://mailpit:8025/api/v1","apiKey":"smoke-ai-secret-key"}')
+check "instance AI credential saved" test "$(status_of "$r")" = 201
+check "AI key is write-only" bash -c "! grep -q smoke-ai-secret <<<'$(body_of "$r")'"
+AI_CRED=$(body_of "$r" | jq -r .id)
+check "AI key encrypted at rest" \
+  bash -c "! docker exec ${PROJECT}-db-1 psql -U bokydo -d bokydo -Atc \"select secret::text from ai_credentials\" | grep -q smoke-ai-secret"
+check "private network unreachable until allow-listed (SSRF)" \
+  bash -c "jq -e '.error == \"blocked_address\"' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
+api PATCH /api/v1/admin/settings '{"network.privateAllowlist":["mailpit"]}' >/dev/null
+check "allow-listed private host is reached (and answers 404)" \
+  bash -c "jq -e '.error == \"unexpected_status\" and .status == 404' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
+check "metadata address refused even for admins" \
+  test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://169.254.169.254/latest"}')")" = 400
+r=$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"Mine","baseUrl":"https://mailpit:8025/v1"}')
+check "own credentials can't reach allow-listed private hosts" \
+  bash -c "jq -e '.error == \"blocked_address\"' <<<'$(body_of "$(api POST "/api/v1/ai/credentials/$(body_of "$r" | jq -r .id)/test")")'"
+check "own credentials need https" \
+  test "$(status_of "$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://models.example.com/v1"}')")" = 400
+check "AI key never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q smoke-ai-secret"
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5

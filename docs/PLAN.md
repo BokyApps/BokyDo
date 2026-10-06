@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ (2026-10-06) · **Next: W7.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ (2026-10-06) · **Next: rest of W7 (W7b–W7d).** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -426,6 +426,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - `packages/ai`: provider registry per §5.2, capability model, router (feature → provider/model), streaming, retries, budgets & usage metering, "test connection" button, live model list fetch.
 - Admin + user credential management UIs; OAuth flows: **ChatGPT sign-in** (experimental) and **SuperGrok device flow** (experimental); token refresh jobs.
 - **Security gate:** SSRF via custom/Ollama base URL (private IPs, DNS rebinding, redirects, IPv6 tricks, metadata endpoints); keys never in logs/errors/responses; per-user keys inaccessible to admins via UI; budget enforcement can't be bypassed by parallel requests.
+- *W7a done 2026-10-06 (see ADR 0006): SSRF-safe outbound client (`apps/server/src/net/outbound.ts`, reusable by webhooks and imports), shared IP classification, provider catalog and capability model, owner-bound encrypted credentials (instance and per user), feature routing with per-call ownership/capability checks, usage ledger with lock-serialised monthly budgets, "test connection" / live model list for the OpenAI, Anthropic and Gemini dialects, and the REST routes (`/api/v1/ai/*`, `/api/v1/admin/ai/*`). Admin settings: `ai.userKeys`, `ai.instanceAccess`, `ai.monthlyTokenBudget`, `ai.monthlyAudioMinutes`, `ai.routing`, `network.privateAllowlist`. Deviation: no `packages/ai` (catalog in `packages/shared/src/ai.ts`, key-handling code server-only). For W7b: adapters implement calls through `AiService.run(user, { feature, estimate, run(ctx) })` and must use `ctx.fetch` only; report usage (or throw `AiCallError` with partial usage).*
 
 #### W8 — Ramble · L
 - Mic capture UI (waveform), chunked and live pipelines, live draft list with edit ops, review panel, commit as one batch command, language selection, push-to-talk + keyboard shortcut, Web Speech fallback.
@@ -531,11 +532,11 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 ## 12. Status & handoff (for the next contributor)
 
-*Updated 2026-10-06, after W6.* Everything needed to pick up where work stopped.
+*Updated 2026-10-06, after W7a.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T80); design decisions are in `docs/adr/0001`–`0005`.
+**Done:** F1–F4, W1–W6, W7a (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T87); design decisions are in `docs/adr/0001`–`0006`.
 
-**Next, in order:** W7 (AI provider layer, BYOK) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
+**Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
 **Open items:**
 - F-029: add a pnpm override `source-map-js: ^1.2.2` once 1.2.2 passes the 7-day release-age gate (on/after 2026-10-07 14:08 UTC), re-run osv-scanner, mark F-029 fixed.
@@ -554,7 +555,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | R2 | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | Release-age gate: not before 2026-10-07 14:08 UTC | Everything |
 | R3 ✅ | Completed-tasks paging skips tasks that share a completion timestamp (parent + sub-tasks, ms-truncated cursor): use a `(completed_at, id)` cursor, scoped to visible projects, plus a test | Sonnet | **Done 2026-10-06** (F-034): opaque `<completed_at>_<id>` cursor, strict validation, regression + mutation-checked tests | Everything |
 | R4 | Verify Web Push in a real browser on an HTTPS install (enable, test push, click-through, sign-out removes it) | Sonnet (guided) | Needs an HTTPS deployment and a person with a real browser | Everything |
-| W7a | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | None | W10a, W11b–W11e, W12a |
+| W7a ✅ | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | **Done 2026-10-06** (ADR 0006; catalog lives in `packages/shared/src/ai.ts`, not a new package) | W10a, W11b–W11e, W12a |
 | W7b | Provider adapters on top of W7a (OpenAI-compatible, Anthropic, Gemini, Ollama, …), streaming, retries, live model list, "test connection" | Sonnet | W7a interfaces | W10, W11 |
 | W7c | Admin + user AI settings UI | DeepSeek (Sonnet review) | W7a/W7b API shapes | Anything server-side |
 | W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | W7a; current provider docs and test accounts from the owner; ToS check | W10, W11 |
@@ -584,7 +585,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
-- Now: **W7a** (Opus) starts; **R2** (DeepSeek) on/after 2026-10-07. (R1 and R3 are done.)
+- Now: **W10a** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3 and W7a are done; W11 is in progress on branch `w11-sonnet`.)
 - **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
 - **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
 - **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).
