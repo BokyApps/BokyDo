@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ (2026-10-05) · W4 ✅ (2026-10-05)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ (2026-10-06) · **Next: W7.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -526,6 +526,34 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | Prompt injection via shared content | Unintended actions | Read-only by default, confirmations, least-privilege tools (§5.5) |
 | Android background limits (OEM battery killers) | Missed reminders | Exact alarms + "dontkillmyapp" guidance screen + reliability self-test |
 | Self-hosters on plain HTTP | Passkeys/push silently fail | Setup wizard detection + Caddy profile |
+
+---
+
+## 12. Status & handoff (for the next contributor)
+
+*Updated 2026-10-06, after W6.* Everything needed to pick up where work stopped.
+
+**Done:** F1–F4, W1–W6 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T80); design decisions are in `docs/adr/0001`–`0005`.
+
+**Next, in order:** W7 (AI provider layer, BYOK) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
+
+**Open items:**
+- F-029: add a pnpm override `source-map-js: ^1.2.2` once 1.2.2 passes the 7-day release-age gate (on/after 2026-10-07 14:08 UTC), re-run osv-scanner, mark F-029 fixed.
+- Push delivery was verified by tests (RFC 8291 vector, real decryption) but not in a real browser (the dev browser blocks notification permission). Check on a real HTTPS install.
+- Push only goes to the browser vendors' push services; UnifiedPush/self-hosted push needs an admin allow-list (Android phase, ADR 0005).
+- Multi-replica would need LISTEN/NOTIFY pokes and shared rate limiters (ADR 0003); jobs already use `SKIP LOCKED`.
+
+**How to work (the process used so far):**
+- Toolchain: Node 22, pnpm 12, Docker. `pnpm install`, then `pnpm check` (format, lint, typecheck, all tests) must pass. Server integration tests need a throwaway Postgres 17 container and `BOKYDO_TEST_DATABASE_URL` pointing at it (the tests skip without it).
+- Run Prettier only from the repo root (`pnpm format`): run inside a sub-package it ignores the root `.prettierignore` and rewrites generated files.
+- Scripted text edits must assert their anchor exists (Prettier re-pads tables and reflows code; see F-024). Insert table rows by row prefix, then grep for them.
+- Per deliverable: build in slices (one commit each), then a gate: smoke checks in `docker/smoke-test.sh` (use `PORT=… MAILPIT_PORT=…` to avoid clashes), Semgrep, gitleaks, osv-scanner and Trivy with the pinned images from `.github/workflows/security.yml`, a browser walkthrough on a throwaway compose project, then docs: §8 *Done* note, threat-model rows, findings + gate-log row, ASVS, and an ADR for significant design choices.
+- New `/api` routes must declare `config.access` and be added to `apps/server/src/authz-matrix.test.ts`. Replies from routes that write must be sent after the transaction commits (F-028). Writes that aren't sync commands go through `SyncService.write`.
+- Mutation-check new tests (break the code, confirm a test fails) for security-relevant logic.
+- Before every push: gitleaks over git history; no `.claude`, `.env`, keys or secret dirs tracked; commits use the GitHub no-reply address; no local paths, personal emails or test passwords in tracked files. Never commit walkthrough credentials.
+- Upgrading a running instance: dump the database first, `docker compose up -d --build`, check health and that data is intact; remove dangling BokyDo images afterwards (repeat, since each removal exposes parent layers).
+
+**Code map (where things live):** `packages/shared` (model, command schemas, preferences, settings), `packages/nlp` (quick add, dates, recurrence, `zonedInstant`), `packages/filter-query`, `packages/sync-client` (optimistic reducers, state), `packages/themes`; `apps/server/src` — `sync/` (engine, handlers, policy), `workspaces/`, `projects/` (invites), `attachments/`, `notifications/`, `reminders/`, `delivery/` (outbox, email, Web Push, digest), `jobs/` (runner), `auth/`, `admin/`, `settings/`, `http/` (access control, headers); `apps/web/src` — `pages/`, `components/`, `lib/`; `apps/web/public/sw.js` (push service worker).
 
 ---
 
