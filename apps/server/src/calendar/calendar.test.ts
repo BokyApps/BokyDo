@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { Writable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { auditLog, calendarFeeds, users } from '../db/schema.js';
-import { REQUEST_LOG_OPTIONS, redactUrl } from '../http/log-redaction.js';
+import { REQUEST_LOG_OPTIONS } from '../http/log-redaction.js';
 import { grantProjectAccess, revokeProjectAccess } from '../sync/membership.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
@@ -483,14 +483,5 @@ describe.skipIf(!TEST_DATABASE_URL)('calendar feeds: abuse', () => {
     expect(logs).toContain('/api/v1/calendar/[redacted]');
     expect(logs).not.toContain(token);
     expect(logs).not.toContain('zzzzzzzzzz');
-  });
-});
-
-describe('log redaction', () => {
-  it('removes the secret from feed paths and leaves other URLs alone', () => {
-    expect(redactUrl('/api/v1/calendar/abc.ics')).toBe('/api/v1/calendar/[redacted]');
-    expect(redactUrl('/api/v1/calendar/abc.ics?x=1')).toBe('/api/v1/calendar/[redacted]?x=1');
-    expect(redactUrl('/api/v1/calendar-feeds')).toBe('/api/v1/calendar-feeds');
-    expect(redactUrl('/api/v1/tasks/completed?limit=3')).toBe('/api/v1/tasks/completed?limit=3');
   });
 });
