@@ -533,7 +533,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 *Updated 2026-10-06, after W6.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88); design decisions are in `docs/adr/0001`–`0006`.
+**Done:** F1–F4, W1–W6 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T94); design decisions are in `docs/adr/0001`–`0007`.
 
 **Next, in order:** W7 (AI provider layer, BYOK) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
@@ -564,7 +564,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W10b | REST v1 + OpenAPI docs, scope matrix tests | Sonnet | W10a scopes | W7, W11 |
 | W10c | MCP server and webhooks (signed, SSRF-safe delivery) | Opus | W10a; webhooks reuse W7a's outbound client | W11, W12 |
 | W11a | Granular Todoist import (API token or backup/CSV, preview, per-item choices, dry run, background job, re-runnable) | Opus (untrusted input, token handling) + Sonnet (UI) | None (uses the W6 job runner) | W7, W10, W12 |
-| W11b | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | None | Everything |
+| W11b ✅ | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | **Done 2026-10-06** (ADR 0007, T89–T94): Todoist-format CSV import (preview, new or existing project) and export, nine-template gallery; import is ordinary sync commands | Everything |
 | W11c | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | None | Everything |
 | W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0006, T82–T88): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
 | W11e | Export everything, scheduled encrypted backups + restore, account deletion | Opus | None | W7b–c, W11b–d, W12 |
@@ -600,7 +600,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 - Before every push: gitleaks over git history; no `.claude`, `.env`, keys or secret dirs tracked; commits use the GitHub no-reply address; no local paths, personal emails or test passwords in tracked files. Never commit walkthrough credentials.
 - Upgrading a running instance: dump the database first, `docker compose up -d --build`, check health and that data is intact; remove dangling BokyDo images afterwards (repeat, since each removal exposes parent layers).
 
-**Code map (where things live):** `packages/shared` (model, command schemas, preferences, settings), `packages/nlp` (quick add, dates, recurrence, `zonedInstant`), `packages/filter-query`, `packages/sync-client` (optimistic reducers, state), `packages/themes`; `apps/server/src` — `sync/` (engine, handlers, policy), `workspaces/`, `projects/` (invites), `attachments/`, `notifications/`, `reminders/`, `delivery/` (outbox, email, Web Push, digest), `jobs/` (runner), `calendar/` (iCal writer, feed routes), `auth/`, `admin/`, `settings/`, `http/` (access control, headers); `apps/web/src` — `pages/`, `components/`, `lib/`; `apps/web/public/sw.js` (push service worker).
+**Code map (where things live):** `packages/shared` (model, command schemas, preferences, settings, `csv.ts` and `template.ts`: CSV and Todoist-format templates), `packages/nlp` (quick add, dates, recurrence, `zonedInstant`), `packages/filter-query`, `packages/sync-client` (optimistic reducers, state), `packages/themes`; `apps/server/src` — `sync/` (engine, handlers, policy), `workspaces/`, `projects/` (invites), `attachments/`, `notifications/`, `reminders/`, `delivery/` (outbox, email, Web Push, digest), `jobs/` (runner), `calendar/` (iCal writer, feed routes), `auth/`, `admin/`, `settings/`, `http/` (access control, headers); `apps/web/src` — `pages/`, `components/`, `lib/` (`lib/templates/`: import planner, exporter, gallery); `apps/web/public/sw.js` (push service worker).
 
 ---
 

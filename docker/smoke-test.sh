@@ -316,6 +316,52 @@ check "feed link stays out of the logs" \
 check "revoking a feed kills its link at once" \
   bash -c "[[ $(status_of "$(api DELETE /api/v1/calendar-feeds/$FEED_ID)") == 204 && $(http_code "$BASE$FEED_PATH") == 404 ]]"
 
+echo "== templates (W11b)"
+# Importing a template is just ordinary sync commands, so the server vets every row of it like any
+# other write: validation, nesting limits and who may write where. Each refusal below is paired
+# with the same command succeeding without the one thing under test, so it can't pass by accident.
+as_admin
+all_ok() { jq -e '[.results[]?.ok] | all' <<<"$1"; }
+result_is() { jq -e --arg u "$2" --argjson want "$3" '.results[$u].ok == $want' <<<"$1"; } # result_is <body> <uuid> <true|false>
+refused_because() { jq -e --arg u "$2" --arg why "$3" '.results[$u] | (.ok == false) and (((.error // "") + " " + (.message // "")) | test($why))' <<<"$1"; }
+accepted_count() { jq '[.results[] | select(.ok)] | length' <<<"$1"; }
+IMP=$(uuid); IMP_SEC=$(uuid); IMP_T1=$(uuid); IMP_T2=$(uuid)
+r=$(sync_cmds "$(cmd project_add "{\"id\":\"$IMP\",\"name\":\"Imported template\"}"),$(cmd section_add "{\"id\":\"$IMP_SEC\",\"projectId\":\"$IMP\",\"name\":\"Section\",\"sectionOrder\":\"a0\"}"),$(cmd task_add "{\"id\":\"$IMP_T1\",\"projectId\":\"$IMP\",\"sectionId\":\"$IMP_SEC\",\"childOrder\":\"a0\",\"content\":\"=SUM(A1)\",\"description\":\"<img src=x onerror=alert(1)>\\nline two\"}"),$(cmd task_add "{\"id\":\"$IMP_T2\",\"projectId\":\"$IMP\",\"parentId\":\"$IMP_T1\",\"childOrder\":\"a0\",\"content\":\"Sub-task\"}"),$(cmd comment_add "{\"id\":\"$(uuid)\",\"taskId\":\"$IMP_T1\",\"content\":\"[x](javascript:alert(1))\"}")")
+check "a template-shaped batch (project, section, sub-task, comment) is accepted" all_ok "$(body_of "$r")"
+stored_literally() { jq -e --arg id "$IMP_T1" '.tasks[] | select(.id == $id) | (.content == "=SUM(A1)") and (.description | startswith("<img src=x"))' <<<"$1"; }
+check "imported text is stored as plain text" stored_literally "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+
+# Control characters: the same task is fine with a clean title and refused with a control character.
+ROW_OK=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a1\",\"content\":\"clean title\"}")
+ROW_BAD=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a2\",\"content\":\"bad\\u0007title\"}")
+r=$(sync_cmds "$ROW_OK,$ROW_BAD")
+check "a clean title is accepted" result_is "$(body_of "$r")" "$(jq -r .uuid <<<"$ROW_OK")" true
+check "a control character in a title is refused for that reason" \
+  refused_because "$(body_of "$r")" "$(jq -r .uuid <<<"$ROW_BAD")" "single line"
+
+# Nesting: five levels are fine, the sixth is refused for being too deep (every key here is valid).
+CHAIN=""; PREV=""
+for i in 1 2 3 4 5 6; do
+  ID=$(uuid); PARENT=""; [[ -n "$PREV" ]] && PARENT=",\"parentId\":\"$PREV\""
+  ROW=$(cmd task_add "{\"id\":\"$ID\",\"projectId\":\"$IMP\",\"childOrder\":\"a0\",\"content\":\"Level $i\"$PARENT}")
+  CHAIN="${CHAIN:+$CHAIN,}$ROW"; PREV=$ID; DEEPEST=$(jq -r .uuid <<<"$ROW")
+done
+r=$(sync_cmds "$CHAIN")
+check "nesting is accepted down to the depth limit" test "$(accepted_count "$(body_of "$r")")" = 5
+check "the task nested too deeply is refused for that reason" \
+  refused_because "$(body_of "$r")" "$DEEPEST" "too deeply nested"
+
+# Permissions: the same row is accepted from the project's owner and refused from someone else.
+SAM_ROW=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a3\",\"content\":\"Added by the owner\"}")
+check "the owner can add to the imported project" \
+  result_is "$(body_of "$(sync_cmds "$SAM_ROW")")" "$(jq -r .uuid <<<"$SAM_ROW")" true
+as_sam
+SAM_ROW=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a4\",\"content\":\"Not mine\"}")
+check "an import can't write into a project the user can't edit" \
+  refused_because "$(body_of "$(sync_cmds "$SAM_ROW")")" "$(jq -r .uuid <<<"$SAM_ROW")" "not_found"
+as_admin
+check "the Templates page is served by the web app" test "$(http_code -H 'accept: text/html' "$BASE/templates")" = 200
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5
