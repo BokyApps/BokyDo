@@ -179,6 +179,16 @@ class SqliteStore(context: Context) : LocalStore {
         }
     }
 
+    /** Every synced entity of a type (e.g. all reminders), as stored. */
+    fun all(type: String): List<JsonObject> {
+        require(type in ENTITY_TYPES)
+        return helper.readableDatabase.rawQuery("select json from entities where type = ?", arrayOf(type)).use {
+            buildList {
+                while (it.moveToNext()) (Json.parseToJsonElement(it.getString(0)) as? JsonObject)?.let(::add)
+            }
+        }
+    }
+
     fun snapshot(name: String): JsonElement =
         helper.readableDatabase.rawQuery("select json from snapshots where name = ?", arrayOf(name)).use {
             if (it.moveToFirst()) Json.parseToJsonElement(it.getString(0)) else JsonNull

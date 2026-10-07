@@ -15,6 +15,7 @@ const USER = {
   isAdmin: false,
   inboxProjectId: 'inbox',
   preferences: DEFAULT_PREFERENCES,
+  timeZone: 'UTC',
 };
 const INBOX = {
   id: 'inbox',

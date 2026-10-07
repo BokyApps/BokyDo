@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ (2026-10-07) · **Next: W7c, W7d, W8 UI/live, W9, W10b, W10d, A2, A3.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ (2026-10-07) · **Next: W7c, W7d, W8 UI/live, W9, W10b, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -501,6 +501,7 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 - **Reminders scheduled locally** with exact alarms (`SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` justification), re-armed on boot/timezone change/sync — works offline and without any push service.
 - Live events (assignments, mentions): **UnifiedPush** (ntfy etc.) + WebSocket while open; FCM via optional relay as a later "Play" flavour.
 - Notification actions: complete, snooze, reschedule, reply to comment.
+- *Done 2026-10-07 (see ADR 0015): reminders computed on the device with the server's rules (`:core` `Reminders`, DST tested against the server) and set as one exact alarm for the next one, re-armed after sync, boot, clock/zone changes and updates; actions Complete (queued `task_complete`) and Snooze 15 min / 1 h. UnifiedPush spoken directly (AND_3, no library): distributor choice on the home screen, RFC 8291 decryption on the device (`:core` `WebPush`, tested against the RFC example), token-checked receiver. Server: push routes accept the app's `sync` token, registrations bound to the OAuth grant (migration 0016) and removed with it; the synced user carries `timeZone`. Verified on an API 36 emulator: offline reminder on time, Complete while offline then synced, registration through a test distributor, a server-encrypted message shown, spoofed and tampered messages dropped, snooze, reboot re-arm, sign-out cleanup. Deferred to A2: reschedule and reply-to-comment actions (need task screens); WebSocket while open is the existing SSE live sync.*
 
 #### A4 — Homescreen widgets & system integration · L
 - **Task list widget** (resizable; configurable to Inbox/Today/Upcoming/any project/filter; tap-to-complete checkboxes; scroll; add button; transparency; uses the user's theme from §4a or a per-widget theme override).
@@ -585,7 +586,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
 | A1 ✅ | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | **Done 2026-10-07** (ADR 0010; SQLite instead of Room) | Web W11–W12 |
 | A2 | Android core screens, themes, time-zone picker, quick add (QuickJS spike vs server `/parse`) | Sonnet (Opus for the parser spike decision) | A1 | A4 later screens, web work |
-| A3 | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | A1; M1 | A2, A4 |
+| A3 ✅ | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | **Done 2026-10-07** (ADR 0015, migration 0016) | A2, A4 |
 | A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A1–A2 | A3, A5 |
 | A5 | Ramble on Android | Sonnet | W8, A1 | A4 |
 | A6 | Android security hardening (MobSF, MASVS) | Opus | A1–A5 | — |

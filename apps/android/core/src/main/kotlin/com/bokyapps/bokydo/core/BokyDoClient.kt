@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -133,6 +134,39 @@ class BokyDoClient(
                     val json = Json.parseToJsonElement(it.bodyText()) as? JsonObject
                         ?: throw ProtocolException("not an object")
                     return SyncResponse.fromJson(json)
+                }
+            }
+        }
+        throw ServerException(401, "invalid_access_token")
+    }
+
+    /**
+     * Another API call with the session's token (e.g. push registration), retried once with a
+     * refreshed token if refused. `path` is relative to the server ("/api/v1/push/key"), so a
+     * call can only ever go to the server the user signed in to. Returns the JSON body, or null
+     * for an empty one.
+     */
+    suspend fun call(method: String, path: String, body: JsonObject? = null): JsonElement? {
+        require(path.startsWith("/api/") && !path.contains("..") && !path.contains("//"))
+        val session = sessions.load() ?: throw SignedOutException()
+        val requestBody = body?.let { Json.encodeToString(JsonObject.serializer(), it).toRequestBody(JSON) }
+        var token = accessToken()
+        for (attempt in 0..1) {
+            val res = withContext(Dispatchers.IO) {
+                http.newCall(
+                    Request.Builder().url(session.discovery.publicUrl.trimEnd('/') + path)
+                        .header("Authorization", "Bearer $token")
+                        .method(method, requestBody)
+                        .build(),
+                ).execute()
+            }
+            res.use {
+                if (it.code == 401 && attempt == 0) {
+                    token = accessToken(rejected = token)
+                } else {
+                    if (!it.isSuccessful) throw ServerException(it.code, errorOf(it))
+                    val text = it.bodyText()
+                    return if (text.isBlank()) null else Json.parseToJsonElement(text)
                 }
             }
         }
