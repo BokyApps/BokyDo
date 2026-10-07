@@ -35,6 +35,7 @@ import { SetupPendingPage } from './pages/SetupPendingPage.js';
 import { UnsubscribePage } from './pages/UnsubscribePage.js';
 import { stashOAuthRequest } from './lib/oauth.js';
 import { ConsentPage } from './pages/ConsentPage.js';
+import { AdminBackupsPage } from './pages/AdminBackupsPage.js';
 
 type Gate = '/login' | '/change-password' | '/account/security' | '/setup' | '/setup-pending';
 /** Screens that only make sense while signed out. */
@@ -183,6 +184,7 @@ const routeTree = rootRoute.addChildren([
     appPage('/account/security', AccountSecurityPage),
     appPage('/admin/settings', AdminSettingsPage, { adminOnly: true }),
     appPage('/admin/users', AdminUsersPage, { adminOnly: true }),
+    appPage('/admin/backups', AdminBackupsPage, { adminOnly: true }),
   ]),
 ]);
 

@@ -460,6 +460,48 @@ check "Android app is a first-party OAuth client" \
   bash -c "[[ \$(curl -s -o /dev/null -w '%{redirect_url}' '$BASE/oauth/authorize?response_type=code&client_id=bkdc_bokydo-android-app-001&redirect_uri=com.bokyapps.bokydo%3A%2Foauth2redirect&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=sync') == $BASE/oauth/consent#* ]]"
 check "asset links empty until fingerprints are configured" test "$(curl -s "$BASE/.well-known/assetlinks.json")" = "[]"
 
+echo "== export, account deletion and backups (W11e)"
+as_admin
+api POST /api/v1/auth/reauth "{\"password\":\"$NEWPW2\"}" >/dev/null
+EXPORT_ZIP=$(mktemp)
+curl -s -b "$JAR" -o "$EXPORT_ZIP" "$BASE/api/v1/account/export"
+check "export is a valid ZIP with everything in it" \
+  python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; n=z.namelist(); assert 'export.json' in n and 'tasks.csv' in n; assert b'Smoke task' in z.read('export.json')" "$EXPORT_ZIP"
+LEAVER=$(body_of "$(api POST /api/v1/admin/users '{"username":"leaver","email":"leaver@example.com"}')" | jq -r .id)
+check "admin deletes an account (username confirmed)" \
+  test "$(status_of "$(api POST "/api/v1/admin/users/$LEAVER/delete" '{"confirm":"leaver"}')")" = 204
+check "deleted account is gone" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from users where username='leaver'")" = 0
+api PATCH /api/v1/admin/settings '{"backups.passphrase":"smoke-backup-passphrase"}' >/dev/null
+r=$(api POST /api/v1/admin/backups)
+BK=$(body_of "$r" | jq -r .name)
+check "backup created" test "$(status_of "$r")" = 201
+BK_STATE="$(volume app-data stat -c '%a' "/v/backups/$BK") $(volume app-data grep -c 'Smoke task' "/v/backups/$BK" || true)"
+check "backup file is 0600 and encrypted at rest" test "$BK_STATE" = "600 0"
+AFTER=$(uuid)
+sync_cmds "$(cmd project_add "{\"id\":\"$AFTER\",\"name\":\"Made after the backup\"}")" >/dev/null
+check "wrong passphrase refused, nothing changed" \
+  test "$(body_of "$(api POST "/api/v1/admin/backups/$BK/restore" '{"passphrase":"not-the-passphrase","confirm":"RESTORE"}')" | jq -r .error)" = backup_passphrase_or_damaged
+check "restore accepted" \
+  test "$(status_of "$(api POST "/api/v1/admin/backups/$BK/restore" '{"passphrase":"smoke-backup-passphrase","confirm":"RESTORE"}')")" = 200
+sleep 3
+for _ in $(seq 60); do
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
+  sleep 2
+done
+check "server restarted after the restore" test "$(curl -s "$BASE/api/v1/instance" | jq -r .setupComplete)" = true
+check "everyone was signed out" test "$(status_of "$(api GET /api/v1/auth/session)")" = 401
+# The admin has TOTP (enrolled above): password, then a fresh code (the restored database still
+# knows the last step used, minutes ago).
+api POST /api/v1/auth/login "{\"username\":\"admin\",\"password\":\"$NEWPW2\"}" >/dev/null
+r=$(api POST /api/v1/auth/mfa/totp "{\"code\":\"$(totp "$SECRET" 1)\"}")
+CSRF=$(body_of "$r" | jq -r .csrfToken)
+ADMIN_CSRF=$CSRF
+r=$(api POST /api/v1/sync '{"cursor":null}')
+check "restored data is back and later changes are gone" \
+  bash -c "jq -e '(any(.tasks[]; .content == \"Smoke task\")) and (all(.projects[]; .id != \"$AFTER\"))' <<<'$(body_of "$r")' >/dev/null"
+check "a pre-restore backup was kept" test "$(volume app-data ls /v/backups | grep -c '^pre-restore-')" -ge 1
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5

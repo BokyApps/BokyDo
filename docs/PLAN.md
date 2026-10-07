@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W12b ✅ A1 ✅ (2026-10-07) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ (2026-10-07) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -457,6 +457,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Productivity: karma-style points, daily/weekly goals, streaks, vacation mode, productivity view.
 - iCal feed per project/filter (secret-tokenised URL, revocable); Google/CalDAV calendar sync as stretch.
 - Export everything (JSON/CSV), scheduled encrypted backups + restore (admin), account deletion (GDPR).
+  - *W11e done 2026-10-07 (see ADR 0013): Settings → Your data (export ZIP with JSON + formula-guarded CSV + files; account deletion with blockers listed), admin delete in Users, Admin → Backups (schedule, retention, write-only passphrase, back up now, upload, download, delete, restore). Backups: argon2id + AES-256-GCM STREAM chunks; DB snapshot via COPY, instance keys and attachments; sign-in state excluded. Restore: authenticated pass first, automatic pre-restore backup, one transaction that rebuilds the schema at the backup's version, loads data with deferred FKs and applies newer migrations (older backups are upgraded), then keys/files swapped and the process restarts. Migration 0015: `tasks.created_by_id` set null on user deletion (was cascade). Verified by a real Docker restore drill in the smoke test. Not done: audit/activity log retention; restore from the setup wizard UI (the API works before setup).*
 - Email-to-project address (stretch, needs inbound mail).
 - **Security gate:** import file parsing (zip bombs, CSV injection on export → prefix `=+-@`), Todoist token handling (used for the import session only, never logged, encrypted if kept for re-runs, revocable), imported content treated as untrusted (same validation and limits as sync commands, attachments re-sniffed), import can't write into projects the user can't edit, iCal token entropy/revocation, backup encryption & restore integrity, account deletion completeness.
 
@@ -537,7 +538,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 *Updated 2026-10-07, after A1.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W12b, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T124); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0012`.
+**Done:** F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W11e, W12b, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T124, T140–T146 (W10b holds T125+)); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0013`.
 
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
@@ -572,7 +573,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W11b ✅ | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | **Done 2026-10-06** (ADR 0012, T115–T120): Todoist-format CSV import (preview, new or existing project) and export, nine-template gallery; import is ordinary sync commands | Everything |
 | W11c | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | None | Everything |
 | W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0011, T108–T114): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
-| W11e | Export everything, scheduled encrypted backups + restore, account deletion | Opus | None | W7b–c, W11b–d, W12 |
+| W11e ✅ | Export everything, scheduled encrypted backups + restore, account deletion | Opus | **Done 2026-10-07** (ADR 0013, migration 0015) | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
 | W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Best after UI churn from W7–W11 settles; caching must not break the push service worker | W10, W11 |
 | W12b ✅ | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | **Done 2026-10-07** ([docs/accessibility.md](accessibility.md)): axe and keyboard audit passes (`docker/a11y-audit.mjs`, repeat after big UI changes); real screen-reader testing still open for W13 | Everything |
@@ -589,7 +590,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
-- Now: **W11e backups/export** or **W11a Todoist import** (Opus) ‖ **A2 Android screens** (Sonnet) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a, W10c, W11b, W11d, W12b and A1 are done and on main.)
+- Now: **W11a Todoist import** (Opus) ‖ **A2 Android screens** (Sonnet) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a, W10c, W11b, W11d, W11e, W12b and A1 are done and on main.)
 - **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
 - **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
 - **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).

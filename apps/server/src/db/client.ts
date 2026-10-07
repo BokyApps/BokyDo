@@ -51,7 +51,10 @@ export async function waitForDb(sql: Sql, attempts = 30, delayMs = 1000): Promis
   }
 }
 
-const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle');
+export const MIGRATIONS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../drizzle',
+);
 
 export async function runMigrations(db: Database): Promise<void> {
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });

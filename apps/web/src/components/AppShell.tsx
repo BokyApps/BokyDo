@@ -178,7 +178,7 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
     },
   });
   const go = (
-    to: '/settings' | '/account/security' | '/admin/users' | '/admin/settings',
+    to: '/settings' | '/account/security' | '/admin/users' | '/admin/settings' | '/admin/backups',
     close: () => void,
   ) => {
     close();
@@ -214,6 +214,7 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
             <>
               <MenuItem onClick={() => go('/admin/users', close)}>Admin: users</MenuItem>
               <MenuItem onClick={() => go('/admin/settings', close)}>Admin: settings</MenuItem>
+              <MenuItem onClick={() => go('/admin/backups', close)}>Admin: backups</MenuItem>
             </>
           )}
           <MenuItem

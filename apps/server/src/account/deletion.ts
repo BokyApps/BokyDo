@@ -143,7 +143,9 @@ export async function deleteAccount(
       .where(
         and(
           eq(workspaceMembers.userId, userId),
-          sql`not exists (select 1 from workspace_members o where o.workspace_id = ${workspaceMembers.workspaceId} and o.user_id <> ${userId})`,
+          // Fully qualified on purpose: drizzle renders columns unqualified inside sql``, which
+          // inside this subquery would compare `o` with itself.
+          sql`not exists (select 1 from workspace_members o where o.workspace_id = "workspace_members"."workspace_id" and o.user_id <> ${userId})`,
         ),
       );
     if (soleTeams.length)

@@ -153,6 +153,22 @@ export const settingDefinitions = {
   /** The MCP endpoint (`/mcp`) for AI assistants such as Claude and ChatGPT. */
   'api.mcpEnabled': { schema: z.boolean(), default: true, secret: false },
 
+  /** Automatic encrypted backups (Admin → Backups). Off until a passphrase is set and this is on. */
+  'backups.schedule': { schema: z.enum(['off', 'daily', 'weekly']), default: 'off', secret: false },
+  /** Hour of the day (instance time zone) scheduled backups run after. */
+  'backups.hour': { schema: z.number().int().min(0).max(23), default: 3, secret: false },
+  /** How many scheduled/manual backups to keep. */
+  'backups.retention': { schema: z.number().int().min(1).max(90), default: 7, secret: false },
+  /**
+   * Encrypts every backup (argon2id → AES-256-GCM). Without it a backup can't be restored, and
+   * it is not stored in backups: keep it somewhere safe, apart from the server.
+   */
+  'backups.passphrase': {
+    schema: z.string().min(12, 'Use at least 12 characters').max(1024).nullable(),
+    default: null,
+    secret: true,
+  },
+
   /** Users may add their own provider keys (their usage is metered but not budgeted). */
   'ai.userKeys': { schema: z.boolean(), default: true, secret: false },
   /** Who may use the instance's routing and keys, which count against the budgets below. */

@@ -170,10 +170,16 @@ async function axePass({ browser, project, filter, csrfOf }) {
       ['/settings/notifications', 'Settings: notifications'],
       ['/settings/calendar', 'Settings: calendar'],
       ['/settings/apps', 'Settings: apps & tokens'],
+      ['/settings/data', 'Settings: your data'],
     ]) {
       await page.goto(BASE + url);
       await scan(page, tag(name));
     }
+    // The delete-account dialog (opened, scanned, cancelled: nothing is deleted).
+    await page.goto(`${BASE}/settings/data`);
+    await page.getByRole('button', { name: 'Delete my account…' }).click();
+    await scan(page, tag('Dialog: delete account'));
+    await page.keyboard.press('Escape');
     await page.goto(`${BASE}/settings`);
     await page.getByRole('tab', { name: 'general' }).click();
     await scan(page, tag('Settings: general'));
@@ -234,6 +240,7 @@ async function axePass({ browser, project, filter, csrfOf }) {
     ['/upcoming', 'Upcoming'],
     ['/templates', 'Templates'],
     ['/settings/calendar', 'Settings: calendar'],
+    ['/settings/data', 'Settings: your data'],
   ]) {
     await pp.goto(BASE + url);
     await scan(pp, `${name} [phone]`);
@@ -249,6 +256,7 @@ async function axePass({ browser, project, filter, csrfOf }) {
     for (const [url, name] of [
       ['/admin/users', 'Admin: users'],
       ['/admin/settings', 'Admin: settings'],
+      ['/admin/backups', 'Admin: backups'],
     ]) {
       await ap.goto(BASE + url);
       await scan(ap, name);

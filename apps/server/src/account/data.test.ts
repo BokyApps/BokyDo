@@ -15,6 +15,7 @@ import {
   tasks,
   users,
   workspaceMembers,
+  workspaces,
 } from '../db/schema.js';
 import { grantProjectAccess } from '../sync/membership.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
@@ -207,6 +208,15 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
       cmd('comment_add', { id: comment, taskId: bobTask, content: 'on it' }),
     );
     await bob.sync.ok(cmd('task_update', { id: bobTask, assigneeId: alice.id }));
+    // A team only Alice is in goes with her; Bob's busy team is untouched.
+    const solo = id();
+    await alice.sync.ok(cmd('workspace_add', { id: solo, name: 'Solo' }));
+    const busy = id();
+    await bob.sync.ok(cmd('workspace_add', { id: busy, name: 'Busy' }));
+    const carol = await createUser(t.db, { username: 'carol', password: PASSWORD });
+    await t.db.db
+      .insert(workspaceMembers)
+      .values({ workspaceId: busy, userId: carol, role: 'member' });
     await alice.http.post('/api/v1/account/tokens', {
       name: 'x',
       scopes: ['sync'],
@@ -227,6 +237,10 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
     // Bob's devices learn that the assignment lapsed.
     const delta = await t.app.services.sync.sync(bob.id, { cursor: bobCursor });
     expect(delta.tasks.find((x) => x.id === bobTask)?.assigneeId).toBeNull();
+    const teams = (await t.db.db.select({ name: workspaces.name }).from(workspaces)).map(
+      (w) => w.name,
+    );
+    expect(teams).toEqual(['Busy']);
     // Signed out everywhere.
     expect((await alice.http.get('/api/v1/auth/session')).statusCode).toBe(401);
     const [entry] = await t.db.db
