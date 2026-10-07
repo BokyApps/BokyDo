@@ -1,6 +1,7 @@
 import { normalizePublicUrl, type PublicSettings, type SettingsPatch } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { AiAdminSettings } from '../components/AiSettings.js';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Alert, Button, Card, Checkbox, SelectField, TextField } from '../components/ui.js';
@@ -22,6 +23,9 @@ export function AdminSettingsPage() {
       </Section>
       <Section title="Email">
         <EmailSettingsForm settings={settings} />
+      </Section>
+      <Section title="AI">
+        <AiAdminSettings />
       </Section>
     </div>
   );
