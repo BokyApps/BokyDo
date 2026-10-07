@@ -95,6 +95,13 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/tasks/completed': 'user/after',
   'GET /api/v1/search': 'user/after',
   'GET /api/v1/tasks/filter': 'user/after',
+  // REST v1 (W10b): resource-oriented reads for integrations, reachable with a bearer token.
+  'GET /api/v1/tasks': 'user/after',
+  'GET /api/v1/tasks/:id': 'user/after',
+  'GET /api/v1/projects': 'user/after',
+  'GET /api/v1/projects/:id': 'user/after',
+  'GET /api/docs': 'public/after',
+  'GET /api/docs/openapi.json': 'public/after',
   // Sharing
   'POST /api/v1/projects/:id/invites': 'user/after',
   'GET /api/v1/projects/:id/invites': 'user/after',
@@ -133,6 +140,10 @@ const PASSWORD = 'violin-pancake-orbit-meadow';
 const TOKEN_SCOPES: Record<string, string> = {
   'POST /api/v1/sync': 'sync',
   'GET /api/v1/sync/events': 'sync',
+  'GET /api/v1/tasks': 'tasks:read',
+  'GET /api/v1/tasks/:id': 'tasks:read',
+  'GET /api/v1/projects': 'projects:read',
+  'GET /api/v1/projects/:id': 'projects:read',
 };
 
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {
@@ -253,6 +264,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', () => {
   });
 
   for (const setupComplete of [false, true]) {
+    // One request per route per principal (500+ injects), so it grows with the API surface.
     it(`enforces declarations ${setupComplete ? 'after' : 'before'} setup`, async () => {
       if (setupComplete) {
         await app.services.settings.markSetupComplete({ userId: null, ip: null });
@@ -267,7 +279,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', () => {
         }
       }
       expect(mismatches).toEqual([]);
-    });
+    }, 30_000);
   }
 
   it('lists every route that accepts bearer tokens, with its scopes', () => {
@@ -296,7 +308,9 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', () => {
     });
     const narrow = await app.services.apiTokens.createPat(admin!.id, {
       name: 'narrow',
-      scopes: ['tasks:read'],
+      // Deliberately a scope that no /api route requires, so this token is refused everywhere
+      // below. It must not hold `tasks:read`/`projects:read`: those now unlock the REST reads.
+      scopes: ['ai:use'],
       expiresInDays: 1,
     });
     const bearerClient = (token: string) => {
