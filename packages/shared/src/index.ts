@@ -9,6 +9,7 @@ export * from './markdown.js';
 export * from './model.js';
 export * from './ordering.js';
 export * from './preferences.js';
+export * from './productivity.js';
 export * from './push.js';
 export * from './ramble.js';
 export * from './settings.js';

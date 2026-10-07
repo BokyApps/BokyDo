@@ -69,8 +69,15 @@ export function summariseProductivity(input: ProductivityInput): ProductivitySum
 
   const dailyGoal = prefs.dailyGoal;
   const goalsOn = dailyGoal > 0;
+  const vacationFrom = prefs.vacationFrom;
   const vacationUntil = prefs.vacationUntil;
-  const onVacation = (date: string) => vacationUntil !== null && date <= vacationUntil;
+  // Both ends required: with only an end date every earlier day satisfies `date <= until`, which
+  // would make the streak walk below run for ever.
+  const onVacation = (date: string) =>
+    vacationFrom !== null &&
+    vacationUntil !== null &&
+    date >= vacationFrom &&
+    date <= vacationUntil;
 
   const weekStartDate = startOfWeek(today, weekStart);
   let weekCompleted = 0;
@@ -87,6 +94,7 @@ export function summariseProductivity(input: ProductivityInput): ProductivitySum
       completed,
       goal: dailyGoal,
       met: onVacation(date) || (goalsOn && completed >= dailyGoal),
+      vacation: onVacation(date),
     });
   }
 
@@ -124,7 +132,7 @@ export function summariseProductivity(input: ProductivityInput): ProductivitySum
       met: onVacation(today) || (prefs.weeklyGoal > 0 && weekCompleted >= prefs.weeklyGoal),
     },
     streak: { current: streak },
-    vacation: { until: vacationUntil, active: onVacation(today) },
+    vacation: { from: vacationFrom, until: vacationUntil, active: onVacation(today) },
     days: series,
   };
 }

@@ -25,9 +25,12 @@ export const productivityPrefsSchema = z
     /** Completions per week that count as a good week. 0 switches weekly goals off. */
     weeklyGoal: z.number().int().min(0).max(700),
     /**
-     * Last day of vacation, inclusive. While it covers today, goals are not missed and the streak
-     * holds: the point of vacation mode is that nobody should be punished for not working.
+     * Vacation, inclusive at both ends. Days inside it count as met days that neither break nor
+     * extend the streak: the point of vacation mode is that nobody is punished for not working.
+     * A range rather than a single end date, because "until" alone cannot say when it started —
+     * and a streak walk that treats every past day as vacation never ends.
      */
+    vacationFrom: z.iso.date().nullable(),
     vacationUntil: z.iso.date().nullable(),
   })
   .strict();
@@ -36,6 +39,7 @@ export type ProductivityPrefs = z.infer<typeof productivityPrefsSchema>;
 export const DEFAULT_PRODUCTIVITY_PREFS: ProductivityPrefs = {
   dailyGoal: 5,
   weeklyGoal: 30,
+  vacationFrom: null,
   vacationUntil: null,
 };
 
@@ -44,7 +48,9 @@ export interface ProductivityDay {
   date: string;
   completed: number;
   goal: number;
+  /** Goal reached, or a vacation day. */
   met: boolean;
+  vacation: boolean;
 }
 
 export interface ProductivitySummary {
@@ -60,9 +66,8 @@ export interface ProductivitySummary {
   };
   today: ProductivityDay;
   week: { start: string; completed: number; goal: number; met: boolean };
-  streak: { current: number; best: number };
-  vacation: { until: string | null; active: boolean };
+  streak: { current: number };
+  vacation: { from: string | null; until: string | null; active: boolean };
   /** Oldest first, ending today. */
   days: ProductivityDay[];
-  totals: { completed: number };
 }
