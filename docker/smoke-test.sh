@@ -20,6 +20,8 @@ cleanup() {
   [[ "${KEEP:-}" == 1 ]] || "${C[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+# set -e stops on any failing command outside check(); say which, or CI only shows "exit code N".
+trap 'rc=$?; echo "== ABORTED (exit $rc) at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 check() { # check <description> <command...>
   local desc=$1; shift
@@ -552,8 +554,13 @@ for _ in $(seq 30); do
   sleep 1
 done
 NEW_PW=$(volume db-secret cat /v/password)
-printf "%s\n" "ALTER ROLE bokydo WITH PASSWORD :'pw';" \
-  | "${C[@]}" exec -T db psql -U bokydo -d bokydo -v pw="$NEW_PW" >/dev/null 2>&1
+# Postgres may still be starting (psql exits 2 until it accepts connections): retry.
+for _ in $(seq 30); do
+  printf "%s\n" "ALTER ROLE bokydo WITH PASSWORD :'pw';" \
+    | "${C[@]}" exec -T db psql -U bokydo -d bokydo -v ON_ERROR_STOP=1 -v pw="$NEW_PW" \
+      >/dev/null 2>&1 && break
+  sleep 1
+done
 for _ in $(seq 60); do
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
   sleep 2
