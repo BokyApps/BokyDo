@@ -41,17 +41,23 @@ Nearly every task touches these, so they are where merges go wrong.
 
 - `pnpm check` (needs `BOKYDO_TEST_DATABASE_URL` for the integration tests; they skip without it).
   Docker and web changes also want `docker/smoke-test.sh`.
+- **The test database is shared and every test file drops the schema**, so two server test runs at
+  once used to destroy each other (`42P01 relation "users" does not exist` — which looks exactly
+  like a real failure). The server suite now takes a Postgres advisory lock for its whole run:
+  if you see `Waiting for the shared test database (another test run is using it)…`, another agent
+  is testing and yours is queued. Let it wait — it is released automatically if a run dies.
 - Keep `main`'s history clean: one slice, one commit, no unrelated reformatting.
 - A worktree outside the session workspace is not writable in this environment — branches in the
   shared checkout are how work is isolated here.
 
-## Snapshot (2026-10-07)
+## Where to look
 
-Live state is the board and `git branch`; this is just orientation.
+Deliberately no snapshot table here: the one this file started with was wrong within hours. The
+live state lives in two commands, not a document.
 
-| Branch           | State                                                                                                 |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| `main`           | `13832db` — F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W12b, A1                                       |
-| `w11e`           | created, no work yet (export/backup/restore/account deletion)                                         |
-| `w10b-rest`      | W10b REST v1, slice 1 of 3 pushed; touches `app.ts`, `authz-matrix.test.ts`, `threat-model.md` (T121) |
-| `a1-android-wip` | preservation of the pre-commit A1 tree; superseded by `fa6033c`, safe to delete                       |
+- `git branch -vv` — what exists and what tracks what. Unpushed work is invisible to everyone else,
+  so push early.
+- `gh pr list` — what is waiting for review.
+
+One branch nobody owns: `a1-android-wip` is a preservation copy of the pre-commit A1 tree, since
+superseded by the real A1 work. Safe to delete whenever someone with the branch confirms it.

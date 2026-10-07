@@ -17,5 +17,8 @@ export default defineConfig({
   test: {
     // DB integration tests share one database; keep files sequential.
     fileParallelism: false,
+    // …and take a lock for the whole run, so two runs (several agents share this checkout) cannot
+    // drop each other's schema. See src/test/global-setup.ts.
+    globalSetup: ['./src/test/global-setup.ts'],
   },
 });
