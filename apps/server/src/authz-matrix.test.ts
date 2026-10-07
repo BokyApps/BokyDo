@@ -69,6 +69,7 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/admin/ai/credentials/:id': 'admin/after',
   'DELETE /api/v1/admin/ai/credentials/:id': 'admin/after',
   'POST /api/v1/admin/ai/credentials/:id/test': 'admin/after',
+  'POST /api/v1/admin/ai/credentials/:id/try': 'admin/after',
   'PUT /api/v1/admin/ai/routing': 'admin/after',
   'GET /api/v1/admin/ai/usage': 'admin/after',
   // OAuth consent, authorized apps, personal access tokens
@@ -86,6 +87,7 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/ai/credentials/:id': 'user/after',
   'DELETE /api/v1/ai/credentials/:id': 'user/after',
   'POST /api/v1/ai/credentials/:id/test': 'user/after',
+  'POST /api/v1/ai/credentials/:id/try': 'user/after',
   'GET /api/v1/ai/routing': 'user/after',
   'PUT /api/v1/ai/routing': 'user/after',
   'GET /api/v1/ai/usage': 'user/after',
