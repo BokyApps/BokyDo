@@ -536,7 +536,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 *Updated 2026-10-06, after W10c (MCP).* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6, W7a, W10a, W10c (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T107; the W11 branch's T82–T94 must be renumbered on merge); design decisions are in `docs/adr/0001`–`0006`, `0008` and `0009` (the W11 branch has `0006`–`0007` too: renumber on merge).
+**Done:** F1–F4, W1–W6, W7a, W10a, W10c (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (main: T1–T88, T95–T107); design decisions are in `docs/adr/0001`–`0006`, `0008` and `0009`. The `w11-sonnet` branch is already reconciled with main — it merged it, renumbered its ADRs to `0011`/`0012` and adds threat rows T108–T120, so nothing needs renumbering and it merges cleanly (`git merge-tree main w11-sonnet` reports no conflicts).
 
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
