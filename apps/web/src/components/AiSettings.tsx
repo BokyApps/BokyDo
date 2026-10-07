@@ -67,6 +67,60 @@ interface InstanceUsage {
   }[];
 }
 
+/** What each feature does, in words (the keys are internal names). */
+const FEATURE_LABELS: Record<AiFeature, string> = {
+  'ramble.extract': 'Ramble: turn what you say into tasks',
+  'ramble.transcribe': 'Ramble: speech to text',
+  'ramble.live': 'Ramble: live voice',
+  'assist.task': 'Task Assist',
+  'assist.filter': 'Filter Assist',
+  'smart-add': 'Smart add',
+  reports: 'Reports and summaries',
+  ask: 'Ask your tasks',
+  embeddings: 'Similar tasks (embeddings)',
+  decision: 'Quick decisions (triage, labels)',
+};
+
+/** Why a test or try failed, from the server's error code (never the provider's own words). */
+function aiFailure(code: string | undefined, status?: number): string {
+  switch (code) {
+    case 'unauthorized':
+      return 'The provider refused the key.';
+    case 'blocked_address':
+      return "This server can't reach that address. Private networks need an administrator's allow-list.";
+    case 'insecure_url':
+      return 'Use an https address.';
+    case 'dns_failed':
+      return "That address doesn't resolve.";
+    case 'timeout':
+      return 'The provider took too long to answer.';
+    case 'redirect':
+      return 'The address redirects somewhere else. Use the final address.';
+    case 'not_found':
+      return 'Not found. Check the address and the model name.';
+    case 'rate_limited':
+      return 'The provider is rate-limiting this key. Try again later.';
+    case 'unavailable':
+      return 'The provider is unavailable right now.';
+    case 'bad_request':
+      return 'The provider refused the request. Check the model name.';
+    case 'invalid_response':
+      return "The answer didn't look like this kind of provider.";
+    case 'unsupported':
+      return "This key's provider can't do that.";
+    default:
+      return `It didn't work (${code ?? 'error'}${status ? `, ${status}` : ''}).`;
+  }
+}
+
+interface TryResult {
+  ok: boolean;
+  error?: string;
+  status?: number;
+  latencyMs?: number;
+  reply?: string;
+}
+
 const n = (value: number) => value.toLocaleString();
 const minutes = (seconds: number) => `${Math.round((seconds / 60) * 10) / 10} min`;
 const budget = (used: number, limit: number | null, fmt: (v: number) => string) =>
@@ -224,7 +278,10 @@ function CredentialsPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean
   });
   const test = useMutation({
     mutationFn: (id: string) =>
-      api<{ ok: boolean; models?: string[] }>('POST', `${ENDPOINTS[scope].credentials}/${id}/test`),
+      api<{ ok: boolean; models?: string[]; error?: string; status?: number }>(
+        'POST',
+        `${ENDPOINTS[scope].credentials}/${id}/test`,
+      ),
   });
   const credentials = list.data?.credentials ?? [];
   const own = scope === 'user';
@@ -263,12 +320,18 @@ function CredentialsPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean
                 {c.headerNames.length > 0 && ` · headers: ${c.headerNames.join(', ')}`}
                 {c.lastUsedAt && ` · last used ${new Date(c.lastUsedAt).toLocaleDateString()}`}
               </p>
-              {test.isSuccess && test.variables === c.id && (
-                <p className="text-xs text-success">
-                  Reachable
-                  {test.data?.models?.length ? ` · ${test.data.models.length} models` : ''}.
-                </p>
-              )}
+              {test.isSuccess &&
+                test.variables === c.id &&
+                (test.data.ok ? (
+                  <p className="text-xs text-success">
+                    Works
+                    {test.data.models?.length ? ` · ${test.data.models.length} models` : ''}.
+                  </p>
+                ) : (
+                  <p className="text-xs text-danger">
+                    {aiFailure(test.data.error, test.data.status)}
+                  </p>
+                ))}
               {test.isError && test.variables === c.id && (
                 <p className="text-xs text-danger">{errorMessage(test.error)}</p>
               )}
@@ -474,6 +537,24 @@ function RoutingPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean }) 
   });
   const [draft, setDraft] = useState<AiRouting | null>(null);
   const [issues, setIssues] = useState<{ path: string; message: string }[] | null>(null);
+  // A real (tiny) call with the chosen key and model, before or after saving.
+  const tryIt = useMutation({
+    mutationFn: ({
+      route,
+      feature,
+    }: {
+      route: { credentialId: string; model: string };
+      feature: AiFeature;
+    }) => {
+      const capability = AI_FEATURES[feature];
+      const kind =
+        capability === 'stt.batch' ? 'transcribe' : capability === 'embeddings' ? 'embed' : 'chat';
+      return api<TryResult>('POST', `${ENDPOINTS[scope].credentials}/${route.credentialId}/try`, {
+        model: route.model.trim(),
+        kind,
+      });
+    },
+  });
   const current = draft ?? routing.data?.routing ?? {};
   const list = credentials.data?.credentials ?? [];
   const own = scope === 'user';
@@ -518,11 +599,21 @@ function RoutingPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean }) 
             return (
               <div key={feature} className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr] sm:items-end">
                 <div>
-                  <p className="text-sm font-medium">{feature}</p>
+                  <p className="text-sm font-medium">{FEATURE_LABELS[feature]}</p>
                   <p className="text-xs text-muted">needs {capability}</p>
+                  {tryIt.variables?.feature === feature &&
+                    (tryIt.isError ? (
+                      <p className="text-xs text-danger">{errorMessage(tryIt.error)}</p>
+                    ) : tryIt.data?.ok ? (
+                      <p className="text-xs text-success">Works · {tryIt.data.latencyMs} ms</p>
+                    ) : tryIt.data ? (
+                      <p className="text-xs text-danger">
+                        {aiFailure(tryIt.data.error, tryIt.data.status)}
+                      </p>
+                    ) : null)}
                 </div>
                 <SelectField
-                  label="Key"
+                  label={`Key for ${FEATURE_LABELS[feature]}`}
                   hideLabel
                   disabled={!canWrite}
                   value={route?.credentialId ?? ''}
@@ -539,17 +630,32 @@ function RoutingPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean }) 
                     ...usable.map((c) => ({ value: c.id, label: `${c.label} (${c.provider})` })),
                   ]}
                 />
-                <TextField
-                  label="Model"
-                  hideLabel
-                  disabled={!canWrite || !route}
-                  placeholder="gpt-4o-mini"
-                  value={route?.model ?? ''}
-                  onChange={(e) =>
-                    route &&
-                    set(feature, { credentialId: route.credentialId, model: e.target.value })
-                  }
-                />
+                <div className="flex items-end gap-2">
+                  <div className="min-w-0 flex-1">
+                    <TextField
+                      label={`Model for ${FEATURE_LABELS[feature]}`}
+                      hideLabel
+                      disabled={!canWrite || !route}
+                      placeholder="gpt-4o-mini"
+                      value={route?.model ?? ''}
+                      onChange={(e) =>
+                        route &&
+                        set(feature, { credentialId: route.credentialId, model: e.target.value })
+                      }
+                    />
+                  </div>
+                  {capability !== 'audio.realtime' && (
+                    <Button
+                      variant="ghost"
+                      aria-label={`Try ${FEATURE_LABELS[feature]}`}
+                      disabled={!canWrite || !route?.model.trim()}
+                      busy={tryIt.isPending && tryIt.variables?.feature === feature}
+                      onClick={() => route && tryIt.mutate({ route, feature })}
+                    >
+                      Try
+                    </Button>
+                  )}
+                </div>
               </div>
             );
           })}
