@@ -328,12 +328,16 @@ describe.skipIf(!TEST_DATABASE_URL)('delivery: new notification sources', () => 
       currentPassword: PASSWORD,
       newPassword: 'quartz-lantern-gravel-ribbon',
     });
-    await new Promise((r) => setTimeout(r, 50));
-    await alice.sync.run();
-    expect(alice.sync.last.notifications[0]).toMatchObject({
-      type: 'security',
-      data: { event: 'password_changed', message: 'Your password was changed' },
-    });
+    // The in-app alert is recorded in the background: wait for it, not for a fixed time.
+    await expect
+      .poll(async () => {
+        await alice.sync.run();
+        return alice.sync.last.notifications[0];
+      })
+      .toMatchObject({
+        type: 'security',
+        data: { event: 'password_changed', message: 'Your password was changed' },
+      });
     const before = mail.length;
     await deliver();
     expect(mail.length).toBe(before);

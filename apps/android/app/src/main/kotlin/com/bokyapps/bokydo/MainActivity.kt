@@ -1,6 +1,13 @@
 package com.bokyapps.bokydo
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -170,8 +178,75 @@ private fun HomeScreen() {
             Button(onClick = { scope.launch { runCatching { app.sync() } } }) { Text("Sync now") }
             OutlinedButton(onClick = { scope.launch { app.signOut() } }) { Text("Sign out") }
         }
+        NotificationsSection()
         Text("Task lists, quick add and widgets arrive in the next releases.", style = MaterialTheme.typography.bodySmall)
     }
+}
+
+/** Notification permission, exact reminders and instant notifications (UnifiedPush). */
+@Composable
+private fun NotificationsSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var refresh by remember { mutableStateOf(0) }
+    val allowed = remember(refresh) { Notifier.allowed(context) }
+    val exact = remember(refresh) { ReminderAlarms.canScheduleExact(context) }
+    val distributors = remember(refresh) { UnifiedPush.distributors(context) }
+    val push by UnifiedPush.state.collectAsState()
+    var note by remember { mutableStateOf<String?>(null) }
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
+    // Coming back from system settings: look again.
+    LaunchedEffect(Unit) { refresh++ }
+
+    Text("Notifications", style = MaterialTheme.typography.titleMedium)
+    if (!allowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Text("Allow notifications to get your reminders.")
+        Button(onClick = { askPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("Allow notifications") }
+    }
+    if (!exact && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Text("Reminders may arrive a few minutes late until you allow exact alarms.")
+        OutlinedButton(onClick = {
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")),
+            )
+        }) { Text("Allow exact reminders") }
+    }
+    Text("Reminders are set on this phone and work offline.", style = MaterialTheme.typography.bodySmall)
+    when (val p = push) {
+        is PushState.On -> Text("Instant notifications via ${p.distributor} (${p.host}).")
+        is PushState.Registering -> Text("Connecting to ${p.distributor}…")
+        is PushState.HostNotAllowed -> Text(
+            "This server doesn't allow ${p.host} yet. Ask its admin to add it under Admin → Settings → Push services.",
+            color = MaterialTheme.colorScheme.error,
+        )
+        is PushState.Failed -> Text(p.reason, color = MaterialTheme.colorScheme.error)
+        PushState.Off -> if (distributors.isEmpty()) {
+            Text(
+                "For instant assignments, mentions and comments, install a UnifiedPush app such as ntfy.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (push == PushState.Off || push is PushState.Failed) {
+            for (d in distributors.take(3)) {
+                OutlinedButton(onClick = { scope.launch { UnifiedPush.register(context, d) } }) {
+                    Text("Use ${UnifiedPush.label(context, d)}")
+                }
+            }
+        } else {
+            OutlinedButton(onClick = { scope.launch { UnifiedPush.unregister(context) } }) { Text("Turn off") }
+        }
+        if (push is PushState.On) {
+            OutlinedButton(onClick = {
+                scope.launch {
+                    note = runCatching { context.app.client.call("POST", "/api/v1/push/test") }
+                        .fold({ "Test sent." }, { "Couldn't send a test." })
+                }
+            }) { Text("Test") }
+        }
+    }
+    note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 }
 
 private data class Summary(

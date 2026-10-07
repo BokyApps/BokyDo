@@ -11,7 +11,7 @@ import type { SessionUserRow } from '../auth/sessions.js';
 import { newToken, tokenId } from '../auth/tokens.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { apiTokens, oauthClients, oauthGrants, users } from '../db/schema.js';
+import { apiTokens, oauthClients, oauthGrants, pushSubscriptions, users } from '../db/schema.js';
 import type { SettingsService } from '../settings/settings-service.js';
 
 /**
@@ -422,8 +422,17 @@ const activePats = (userId: string) =>
   );
 
 /** Every personal access token and app authorization of a user (usable inside a transaction). */
-export async function revokeApiAccess(db: Pick<Database, 'update'>, userId: string): Promise<void> {
+export async function revokeApiAccess(
+  db: Pick<Database, 'update' | 'delete'>,
+  userId: string,
+): Promise<void> {
   const now = new Date();
+  // Apps' push registrations go with their grants; browsers' (sessions) are handled elsewhere.
+  await db
+    .delete(pushSubscriptions)
+    .where(
+      and(eq(pushSubscriptions.userId, userId), sql`${pushSubscriptions.grantId} is not null`),
+    );
   await db
     .update(oauthGrants)
     .set({ revokedAt: now, revokedReason: 'account_reset' })
@@ -436,6 +445,7 @@ export async function revokeApiAccess(db: Pick<Database, 'update'>, userId: stri
 
 export async function revokeGrant(tx: Tx, grantId: string, reason: string): Promise<void> {
   const now = new Date();
+  await tx.delete(pushSubscriptions).where(eq(pushSubscriptions.grantId, grantId));
   await tx
     .update(oauthGrants)
     .set({ revokedAt: now, revokedReason: reason })

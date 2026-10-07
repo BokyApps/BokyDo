@@ -3,11 +3,20 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Reminders are exact alarms set on the device; the user can deny this, then they may be late. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Alarms don't survive a reboot: re-arm them. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- To find a browser that supports Custom Tabs (Android 11+ package visibility). -->
     <queries>
         <intent>
             <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+        <!-- To list installed UnifiedPush distributors (ntfy, …). -->
+        <intent>
+            <action android:name="org.unifiedpush.android.distributor.REGISTER" />
         </intent>
     </queries>
 
@@ -58,5 +67,39 @@
                 <data android:scheme="com.bokyapps.bokydo" />
             </intent-filter>
         </activity>
+
+        <receiver android:name=".ReminderAlarmReceiver" android:exported="false" />
+        <receiver android:name=".NotificationActionReceiver" android:exported="false" />
+
+        <!--
+          Boot, clock and time-zone changes, app updates, exact-alarm permission changes: all
+          protected broadcasts that only the system can send. The receiver only re-arms alarms.
+        -->
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (system broadcasts only; it just re-arms alarms) -->
+        <receiver android:name=".SystemEventsReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          UnifiedPush: the distributor is another app, so this must be exported. Every message
+          must carry our secret registration token, and push content is end-to-end encrypted to a
+          key only this device has.
+        -->
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (UnifiedPush distributors must reach it; token-checked, payload authenticated) -->
+        <receiver android:name=".UnifiedPushReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+                <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+                <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+                <action android:name="org.unifiedpush.android.connector.TEMP_UNAVAILABLE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

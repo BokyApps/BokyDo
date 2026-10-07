@@ -3,6 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { aiCredentials, aiUsage, auditLog, users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
@@ -636,4 +637,284 @@ describe('listModels', () => {
       error: 'invalid_response',
     });
   });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)('AI calls through the service', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  const lanIp = Object.values(networkInterfaces())
+    .flat()
+    .find(
+      (i) => i && i.family === 'IPv4' && !i.internal && /^(10|172|192)\./.test(i.address),
+    )?.address;
+
+  /** A scripted OpenAI-compatible model server on a private address. */
+  async function modelServer(
+    handle: (path: string, body: string, res: http.ServerResponse) => void,
+  ) {
+    const seen: { path: string; auth?: string; body: string }[] = [];
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        seen.push({
+          path: req.url ?? '',
+          ...(req.headers.authorization ? { auth: req.headers.authorization } : {}),
+          body,
+        });
+        handle(req.url ?? '', body, res);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, lanIp, r));
+    const port = (server.address() as AddressInfo).port;
+    dns['models.lan'] = [lanIp!];
+    await settings({ 'network.privateAllowlist': ['models.lan'] });
+    const cred = (
+      await admin.http.post('/api/v1/admin/ai/credentials', {
+        provider: 'openai-compatible',
+        label: 'LAN',
+        baseUrl: `http://models.lan:${port}/v1`,
+        apiKey: KEY,
+      })
+    ).json();
+    const close = async () => {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    };
+    return { cred: cred.id as string, seen, close };
+  }
+
+  const json = (res: http.ServerResponse, body: unknown, status = 200) => {
+    res.statusCode = status;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(body));
+  };
+  const reply = (content: string, prompt = 20, completion = 5) => ({
+    choices: [{ message: { content }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: prompt, completion_tokens: completion },
+  });
+
+  async function ledger() {
+    return t.db.db
+      .select({
+        status: aiUsage.status,
+        feature: aiUsage.feature,
+        input: aiUsage.inputTokens,
+        output: aiUsage.outputTokens,
+        audio: aiUsage.audioSeconds,
+      })
+      .from(aiUsage);
+  }
+
+  it.skipIf(!lanIp)('streams a chat and meters what the provider reported', async () => {
+    const m = await modelServer((_path, _body, res) => {
+      res.setHeader('content-type', 'text/event-stream');
+      for (const e of [
+        { choices: [{ delta: { content: 'Plan: ' } }] },
+        { choices: [{ delta: { content: 'pack' } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }] },
+        { choices: [], usage: { prompt_tokens: 30, completion_tokens: 7 } },
+      ])
+        res.write(`data: ${JSON.stringify(e)}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    try {
+      await settings({
+        'ai.instanceAccess': 'everyone',
+        'ai.routing': { 'assist.task': { credentialId: m.cred, model: 'llama' } },
+      });
+      const pieces: string[] = [];
+      const r = await t.app.services.ai.chat(
+        userOf(alice),
+        'assist.task',
+        { messages: [{ role: 'user', content: 'Trip' }], maxOutputTokens: 200 },
+        { onText: (d) => pieces.push(d) },
+      );
+      expect(pieces).toEqual(['Plan: ', 'pack']);
+      expect(r.text).toBe('Plan: pack');
+      expect(m.seen[0]).toMatchObject({ path: '/v1/chat/completions', auth: `Bearer ${KEY}` });
+      expect(JSON.parse(m.seen[0]!.body)).toMatchObject({
+        model: 'llama',
+        stream: true,
+        max_tokens: 200,
+      });
+      expect(await ledger()).toEqual([
+        { status: 'done', feature: 'assist.task', input: 30, output: 7, audio: 0 },
+      ]);
+    } finally {
+      await m.close();
+    }
+  });
+
+  it.skipIf(!lanIp)('validates structured replies with one correction round', async () => {
+    const replies = ['not json', '```json\n{"subtasks":["Book","Pack"]}\n```'];
+    const m = await modelServer((_p, _b, res) => {
+      const next = replies.shift();
+      if (next === 'HTTP 401') json(res, { error: 'no' }, 401);
+      else json(res, reply(next ?? '{}'));
+    });
+    try {
+      await settings({
+        'ai.instanceAccess': 'everyone',
+        'ai.routing': { 'assist.task': { credentialId: m.cred, model: 'llama' } },
+      });
+      const schema = z.object({ subtasks: z.array(z.string()).max(10) }).strict();
+      const { value } = await t.app.services.ai.chatJson(userOf(alice), 'assist.task', {
+        messages: [{ role: 'user', content: 'Break down: trip' }],
+        maxOutputTokens: 100,
+        schema,
+        name: 'subtasks',
+      });
+      expect(value).toEqual({ subtasks: ['Book', 'Pack'] });
+      const second = JSON.parse(m.seen[1]!.body);
+      expect(second.messages.at(-2)).toEqual({ role: 'assistant', content: 'not json' });
+      expect(second.messages.at(-1).content).toContain("doesn't match");
+      expect(second.response_format.json_schema.schema.required).toEqual(['subtasks']);
+      // Both rounds are metered on the one ledger row.
+      expect(await ledger()).toEqual([
+        { status: 'done', feature: 'assist.task', input: 40, output: 10, audio: 0 },
+      ]);
+
+      // Still wrong after the correction: the call fails and is metered as failed.
+      replies.push('{"subtasks":1}', '{"subtasks":2}');
+      await expect(
+        t.app.services.ai.chatJson(userOf(alice), 'assist.task', {
+          messages: [{ role: 'user', content: 'x' }],
+          maxOutputTokens: 100,
+          schema,
+          name: 'subtasks',
+        }),
+      ).rejects.toMatchObject({ code: 'output_invalid' });
+      expect((await ledger()).filter((r) => r.status === 'failed')).toEqual([
+        { status: 'failed', feature: 'assist.task', input: 40, output: 10, audio: 0 },
+      ]);
+
+      // The correction round itself fails: the first round's usage is still metered.
+      replies.push('nope', 'HTTP 401');
+      await expect(
+        t.app.services.ai.chatJson(userOf(alice), 'assist.task', {
+          messages: [{ role: 'user', content: 'x' }],
+          maxOutputTokens: 100,
+          schema,
+          name: 'subtasks',
+        }),
+      ).rejects.toMatchObject({ code: 'unauthorized' });
+      expect((await ledger()).filter((r) => r.status === 'failed')).toContainEqual({
+        status: 'failed',
+        feature: 'assist.task',
+        input: 20,
+        output: 5,
+        audio: 0,
+      });
+    } finally {
+      await m.close();
+    }
+  });
+
+  it.skipIf(!lanIp)(
+    'refuses a call the budget cannot cover before contacting the provider',
+    async () => {
+      const m = await modelServer((_p, _b, res) => json(res, reply('ok')));
+      try {
+        await settings({
+          'ai.instanceAccess': 'everyone',
+          'ai.monthlyTokenBudget': 1000,
+          'ai.routing': { 'assist.task': { credentialId: m.cred, model: 'llama' } },
+        });
+        await expect(
+          t.app.services.ai.chat(userOf(alice), 'assist.task', {
+            messages: [{ role: 'user', content: 'x' }],
+            maxOutputTokens: 5000,
+          }),
+        ).rejects.toBeInstanceOf(AiBudgetExceededError);
+        expect(m.seen).toHaveLength(0);
+      } finally {
+        await m.close();
+      }
+    },
+  );
+
+  it.skipIf(!lanIp)('transcribes and embeds through their routes', async () => {
+    const m = await modelServer((path, _b, res) => {
+      if (path === '/v1/audio/transcriptions') return json(res, { text: 'call mum' });
+      json(res, { data: [{ index: 0, embedding: [0.1, 0.2] }], usage: { prompt_tokens: 3 } });
+    });
+    try {
+      await settings({
+        'ai.instanceAccess': 'everyone',
+        'ai.routing': {
+          'ramble.transcribe': { credentialId: m.cred, model: 'whisper' },
+          embeddings: { credentialId: m.cred, model: 'nomic' },
+        },
+      });
+      const text = await t.app.services.ai.transcribe(userOf(alice), 'ramble.transcribe', {
+        audio: Buffer.from('fake-audio'),
+        mimeType: 'audio/ogg',
+        durationSeconds: 12.2,
+      });
+      expect(text).toBe('call mum');
+      expect(m.seen[0]!.body).toContain('filename="audio.ogg"');
+      expect(await t.app.services.ai.embed(userOf(alice), ['call mum'])).toEqual([[0.1, 0.2]]);
+      const rows = await ledger();
+      expect(rows).toContainEqual({
+        status: 'done',
+        feature: 'ramble.transcribe',
+        input: 0,
+        output: 0,
+        audio: 13,
+      });
+      expect(rows).toContainEqual({
+        status: 'done',
+        feature: 'embeddings',
+        input: 3,
+        output: 0,
+        audio: 0,
+      });
+      // A feature only takes calls of its own kind.
+      await expect(
+        t.app.services.ai.chat(userOf(alice), 'ramble.transcribe', {
+          messages: [{ role: 'user', content: 'x' }],
+          maxOutputTokens: 1,
+        }),
+      ).rejects.toThrow(TypeError);
+    } finally {
+      await m.close();
+    }
+  });
+
+  it.skipIf(!lanIp)(
+    'tries a model with a stored credential, without leaking the error body',
+    async () => {
+      let calls = 0;
+      const m = await modelServer((_p, _b, res) =>
+        ++calls === 1 ? json(res, reply('OK')) : json(res, { error: `bad key ${KEY}` }, 401),
+      );
+      try {
+        const tryIt = (body: unknown) =>
+          admin.http.post(`/api/v1/admin/ai/credentials/${m.cred}/try`, body);
+        const ok = (await tryIt({ model: 'llama', kind: 'chat' })).json();
+        expect(ok).toMatchObject({ ok: true, reply: 'OK' });
+        expect(ok.latencyMs).toEqual(expect.any(Number));
+        expect((await tryIt({ model: 'llama', kind: 'chat' })).json()).toEqual({
+          ok: false,
+          error: 'unauthorized',
+          status: 401,
+        });
+        expect((await tryIt({ model: 'bad model', kind: 'chat' })).statusCode).toBe(400);
+        // Not someone else's credential, and not an instance one through the user route.
+        expect(
+          (
+            await alice.http.post(`/api/v1/ai/credentials/${m.cred}/try`, {
+              model: 'x',
+              kind: 'chat',
+            })
+          ).statusCode,
+        ).toBe(404);
+      } finally {
+        await m.close();
+      }
+    },
+  );
 });

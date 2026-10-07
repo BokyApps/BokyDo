@@ -29,6 +29,7 @@ import { purgeOAuth, registerOAuthServer } from './oauth/server.js';
 import { ApiTokenStore } from './oauth/token-store.js';
 import { registerMcpServer } from './mcp/server.js';
 import { ensureFirstPartyClients, registerAndroidRoutes } from './android/routes.js';
+import { registerRestRoutes } from './rest/routes.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
@@ -47,6 +48,7 @@ import type { Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
+import { registerRambleRoutes } from './ramble/routes.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
 
@@ -146,6 +148,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
     log: app.log,
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    ...(deps.resolver ? { resolver: deps.resolver } : {}),
   });
   jobs.add(
     {
@@ -271,6 +274,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     key: deps.secrets.sessionKey,
   });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
+  registerRestRoutes(app, db, sync, () => settings.get('instance.publicUrl') ?? null);
   registerMcpServer(app, { db, sync, settings, tokens: apiTokens });
   await ensureFirstPartyClients(db);
   registerAndroidRoutes(app, { settings });
@@ -284,6 +288,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
+  registerRambleRoutes(app, { db, settings, sync, ai });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {

@@ -1,10 +1,23 @@
-import { normalizePublicUrl, type PublicSettings, type SettingsPatch } from '@bokydo/shared';
+import {
+  normalizePublicUrl,
+  parsePushHost,
+  type PublicSettings,
+  type SettingsPatch,
+} from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { AiAdminSettings } from '../components/AiSettings.js';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
-import { Alert, Button, Card, Checkbox, SelectField, TextField } from '../components/ui.js';
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  SelectField,
+  TextArea,
+  TextField,
+} from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { adminSettingsQuery } from '../lib/queries.js';
@@ -23,6 +36,9 @@ export function AdminSettingsPage() {
       </Section>
       <Section title="Email">
         <EmailSettingsForm settings={settings} />
+      </Section>
+      <Section title="Push services">
+        <PushHostsForm settings={settings} />
       </Section>
       <Section title="AI">
         <AiAdminSettings />
@@ -230,6 +246,52 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
         checked={breachCheck}
         onChange={(e) => setBreachCheck(e.target.checked)}
       />
+      <SaveRow save={save} />
+    </form>
+  );
+}
+
+/** Extra push services (UnifiedPush distributors, self-hosted) devices may register with. */
+function PushHostsForm({ settings }: { settings: PublicSettings }) {
+  const save = useSaveSettings();
+  const [text, setText] = useState(settings['push.allowedHosts'].join('\n'));
+  const hosts = text
+    .split(/[\s,]+/)
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const invalid = hosts.filter((h) => !parsePushHost(h));
+  const hasNtfy = hosts.some((h) => h.toLowerCase() === 'ntfy.sh');
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate({ 'push.allowedHosts': hosts });
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <p className="text-sm text-muted">
+        Browsers push through their vendor's service (Google, Mozilla, Apple, Microsoft), which
+        always works. The Android app can also use UnifiedPush through a distributor such as ntfy;
+        list the push servers it may use here. Notifications are end-to-end encrypted, but the
+        server will send requests to these hosts, so only list push servers you trust.
+      </p>
+      <TextArea
+        label="Allowed push servers"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        spellCheck={false}
+        placeholder="ntfy.sh"
+        hint="One per line: a hostname (ntfy.example.com), optionally with a port (:8443) or *. for its subdomains. HTTPS only. A listed server may be on your private network."
+      />
+      {invalid.length > 0 && <Alert tone="warning">Not a hostname: {invalid.join(', ')}</Alert>}
+      {!hasNtfy && (
+        <Button
+          variant="ghost"
+          onClick={() => setText((t) => (t.trim() ? `${t.trim()}\nntfy.sh` : 'ntfy.sh'))}
+        >
+          Add ntfy.sh (the public ntfy server)
+        </Button>
+      )}
       <SaveRow save={save} />
     </form>
   );

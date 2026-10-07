@@ -69,6 +69,7 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/admin/ai/credentials/:id': 'admin/after',
   'DELETE /api/v1/admin/ai/credentials/:id': 'admin/after',
   'POST /api/v1/admin/ai/credentials/:id/test': 'admin/after',
+  'POST /api/v1/admin/ai/credentials/:id/try': 'admin/after',
   'PUT /api/v1/admin/ai/routing': 'admin/after',
   'GET /api/v1/admin/ai/usage': 'admin/after',
   // OAuth consent, authorized apps, personal access tokens
@@ -86,6 +87,7 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/ai/credentials/:id': 'user/after',
   'DELETE /api/v1/ai/credentials/:id': 'user/after',
   'POST /api/v1/ai/credentials/:id/test': 'user/after',
+  'POST /api/v1/ai/credentials/:id/try': 'user/after',
   'GET /api/v1/ai/routing': 'user/after',
   'PUT /api/v1/ai/routing': 'user/after',
   'GET /api/v1/ai/usage': 'user/after',
@@ -106,6 +108,21 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/tasks/completed': 'user/after',
   'GET /api/v1/search': 'user/after',
   'GET /api/v1/tasks/filter': 'user/after',
+  // REST v1 (W10b): resource-oriented access for integrations, reachable with a bearer token.
+  'GET /api/v1/tasks': 'user/after',
+  'GET /api/v1/tasks/:id': 'user/after',
+  'POST /api/v1/tasks': 'user/after',
+  'PATCH /api/v1/tasks/:id': 'user/after',
+  'POST /api/v1/tasks/:id/complete': 'user/after',
+  'POST /api/v1/tasks/:id/uncomplete': 'user/after',
+  'DELETE /api/v1/tasks/:id': 'user/after',
+  'GET /api/v1/projects': 'user/after',
+  'GET /api/v1/projects/:id': 'user/after',
+  'POST /api/v1/projects': 'user/after',
+  'PATCH /api/v1/projects/:id': 'user/after',
+  'DELETE /api/v1/projects/:id': 'user/after',
+  'GET /api/docs': 'public/after',
+  'GET /api/docs/openapi.json': 'public/after',
   // Sharing
   'POST /api/v1/projects/:id/invites': 'user/after',
   'GET /api/v1/projects/:id/invites': 'user/after',
@@ -115,6 +132,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/push/subscriptions': 'user/after',
   'DELETE /api/v1/push/subscriptions': 'user/after',
   'POST /api/v1/push/test': 'user/after',
+  'POST /api/v1/ramble/transcribe': 'user/after',
+  'POST /api/v1/ramble/extract': 'user/after',
+  'POST /api/v1/ramble/commit': 'user/after',
   'POST /api/v1/notifications/unsubscribe': 'public/after',
   'POST /api/v1/workspaces/:id/invites': 'user/after',
   'GET /api/v1/workspaces/:id/invites': 'user/after',
@@ -150,6 +170,25 @@ const PASSWORD = 'violin-pancake-orbit-meadow';
 const TOKEN_SCOPES: Record<string, string> = {
   'POST /api/v1/sync': 'sync',
   'GET /api/v1/sync/events': 'sync',
+  'GET /api/v1/tasks': 'tasks:read',
+  'GET /api/v1/tasks/:id': 'tasks:read',
+  'POST /api/v1/tasks': 'tasks:write',
+  'PATCH /api/v1/tasks/:id': 'tasks:write',
+  'POST /api/v1/tasks/:id/complete': 'tasks:write',
+  'POST /api/v1/tasks/:id/uncomplete': 'tasks:write',
+  'DELETE /api/v1/tasks/:id': 'tasks:write',
+  'GET /api/v1/projects': 'projects:read',
+  'GET /api/v1/projects/:id': 'projects:read',
+  'POST /api/v1/projects': 'projects:write',
+  'PATCH /api/v1/projects/:id': 'projects:write',
+  'DELETE /api/v1/projects/:id': 'projects:write',
+  'POST /api/v1/ramble/transcribe': 'ai:use',
+  'POST /api/v1/ramble/extract': 'ai:use',
+  'POST /api/v1/ramble/commit': 'tasks:write',
+  'GET /api/v1/push/key': 'sync',
+  'POST /api/v1/push/subscriptions': 'sync',
+  'DELETE /api/v1/push/subscriptions': 'sync',
+  'POST /api/v1/push/test': 'sync',
 };
 
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {
@@ -271,6 +310,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', { timeout: 60_000 },
   });
 
   for (const setupComplete of [false, true]) {
+    // One request per route per principal (500+ injects), so it grows with the API surface.
     it(`enforces declarations ${setupComplete ? 'after' : 'before'} setup`, async () => {
       if (setupComplete) {
         await app.services.settings.markSetupComplete({ userId: null, ip: null });
@@ -285,7 +325,7 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', { timeout: 60_000 },
         }
       }
       expect(mismatches).toEqual([]);
-    });
+    }, 30_000);
   }
 
   it('lists every route that accepts bearer tokens, with its scopes', () => {
@@ -314,7 +354,9 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', { timeout: 60_000 },
     });
     const narrow = await app.services.apiTokens.createPat(admin!.id, {
       name: 'narrow',
-      scopes: ['tasks:read'],
+      // Deliberately a scope that no /api route requires, so this token is refused everywhere
+      // below. Not `tasks:read`/`projects:read` (REST reads) nor `ai:use` (Ramble).
+      scopes: ['comments:read'],
       expiresInDays: 1,
     });
     const bearerClient = (token: string) => {

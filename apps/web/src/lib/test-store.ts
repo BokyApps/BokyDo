@@ -7,6 +7,7 @@ const USER = {
   username: 'alice',
   isAdmin: false,
   inboxProjectId: 'inbox',
+  timeZone: 'UTC',
   preferences: DEFAULT_PREFERENCES,
 };
 const signedIn = (): SyncResponse => ({

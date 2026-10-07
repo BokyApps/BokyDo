@@ -3,6 +3,7 @@ import {
   AI_PROVIDERS,
   aiCredentialCreateSchema,
   aiCredentialUpdateSchema,
+  aiModelSchema,
   aiRoutingSchema,
   providerSupports,
   type AiFeature,
@@ -34,6 +35,9 @@ export interface AiRouteDeps {
 }
 
 const idParams = z.object({ id: z.uuid() });
+const tryBody = z
+  .object({ model: aiModelSchema, kind: z.enum(['chat', 'transcribe', 'embed']) })
+  .strict();
 
 /**
  * AI credentials, routing and usage. Users manage only their own credentials; admins manage
@@ -108,6 +112,19 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps): void 
       if (!tests.attempt(requireSession(req).user.id).allowed)
         return reply.status(429).send({ error: 'too_many_requests' });
       const result = await ai.test(ownerOf(req), params.data.id);
+      return result ?? reply.status(404).send({ error: 'not_found' });
+    });
+
+    // A real (tiny) call with a model, so a route can be checked before it's saved.
+    app.post(`${prefix}/:id/try`, opts, async (req, reply) => {
+      if (!allowedToWrite()) return userKeysOff(reply);
+      const params = idParams.safeParse(req.params);
+      if (!params.success) return reply.status(404).send({ error: 'not_found' });
+      const body = parseBody(tryBody, req.body, reply);
+      if (!body) return;
+      if (!tests.attempt(requireSession(req).user.id).allowed)
+        return reply.status(429).send({ error: 'too_many_requests' });
+      const result = await ai.tryModel(ownerOf(req), params.data.id, body.model, body.kind);
       return result ?? reply.status(404).send({ error: 'not_found' });
     });
   };

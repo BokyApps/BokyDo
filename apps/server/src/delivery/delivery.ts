@@ -12,15 +12,22 @@ import {
   notifications,
   projectMembers,
   projects,
+  oauthGrants,
   pushSubscriptions,
   tasks,
   users,
 } from '../db/schema.js';
 import type { Mailer } from '../email/mailer.js';
+import {
+  allowlistPolicy,
+  createOutbound,
+  type OutboundFetch,
+  type Resolver,
+} from '../net/outbound.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import { clean, contentOf, eventOf, pushMessageOf, type NotificationContent } from './messages.js';
 import { unsubscribeToken, type UnsubscribeTopic } from './unsubscribe.js';
-import { sendPush, type PushMessage, type VapidKeys } from './webpush.js';
+import { pushEndpointAllowed, sendPush, type PushMessage, type VapidKeys } from './webpush.js';
 
 /** Notifications not delivered within this long (e.g. a long outage) stay in-app only. */
 const STALE_MS = 3600_000;
@@ -37,7 +44,30 @@ export interface DeliveryDeps {
   vapid: VapidKeys;
   sessionKey: Buffer;
   log: FastifyBaseLogger;
+  /** Tests only: stands in for the network when sending push. */
   fetchImpl?: typeof fetch;
+  /** Tests only: replaces DNS for the outbound client. */
+  resolver?: Resolver;
+}
+
+/** Tests only: a `fetch` stand-in shaped like the outbound client. */
+function outboundFromFetch(fetchImpl: typeof fetch): OutboundFetch {
+  return async (url, init = {}) => {
+    const res = await fetchImpl(url, {
+      method: init.method ?? 'GET',
+      headers: init.headers ?? {},
+      ...(init.body !== undefined ? { body: init.body } : {}),
+    });
+    const text = () => res.text();
+    return {
+      status: res.status,
+      headers: Object.fromEntries(res.headers),
+      body: (async function* () {})(),
+      text,
+      json: async () => JSON.parse(await text()) as unknown,
+      cancel: () => void res.body?.cancel().catch(() => undefined),
+    };
+  };
 }
 
 /** Quiet hours: `start`–`end` local time, wrapping past midnight when start > end. */
@@ -204,23 +234,56 @@ export class Delivery {
     });
   }
 
-  /** Send to every browser the user enabled push on; dead subscriptions are removed. */
+  /** Whether a device may register this push endpoint (vendor services + the admin's list). */
+  acceptsPushEndpoint(endpoint: string): boolean {
+    return pushEndpointAllowed(endpoint, this.deps.settings.get('push.allowedHosts'));
+  }
+
+  /**
+   * The client push is sent with. Vendor services are public; an admin-listed push host may also
+   * be on a private network (a self-hosted ntfy), so its name is allowed to resolve to private
+   * addresses, as are the instance's private-network allow-list entries. Loopback, link-local and
+   * metadata addresses stay unreachable whatever the lists say.
+   */
+  private pushFetch(): OutboundFetch {
+    if (this.deps.fetchImpl) return outboundFromFetch(this.deps.fetchImpl);
+    const hosts = this.deps.settings
+      .get('push.allowedHosts')
+      .filter((h) => !h.startsWith('*.'))
+      .map((h) => h.replace(/:\d+$/, ''));
+    const policy = allowlistPolicy([
+      ...this.deps.settings.get('network.privateAllowlist'),
+      ...hosts,
+    ]);
+    return createOutbound(policy, this.deps.resolver);
+  }
+
+  /** Send to every device the user enabled push on; dead subscriptions are removed. */
   async push(
     userId: string,
     message: PushMessage,
     opts: { urgency?: 'high' | 'normal' } = {},
   ): Promise<number> {
     const { db } = this.deps;
-    const subs = await db
-      .select()
+    // An app's subscription stops with its grant, even before housekeeping removes it.
+    const rows = await db
+      .select({ sub: pushSubscriptions, grantRevokedAt: oauthGrants.revokedAt })
       .from(pushSubscriptions)
+      .leftJoin(oauthGrants, eq(oauthGrants.id, pushSubscriptions.grantId))
       .where(eq(pushSubscriptions.userId, userId));
+    const stale = rows.filter((r) => r.grantRevokedAt).map((r) => r.sub.id);
+    if (stale.length)
+      await db.delete(pushSubscriptions).where(inArray(pushSubscriptions.id, stale));
+    const subs = rows.filter((r) => !r.grantRevokedAt).map((r) => r.sub);
     let sent = 0;
     const subject = this.publicUrl ?? 'https://bokydo.invalid';
+    const fetch = this.pushFetch();
+    const extraHosts = this.deps.settings.get('push.allowedHosts');
     for (const sub of subs) {
       const result = await sendPush(sub, message, this.deps.vapid, subject, {
         ...opts,
-        ...(this.deps.fetchImpl ? { fetchImpl: this.deps.fetchImpl } : {}),
+        fetch,
+        extraHosts,
       });
       if (result === 'sent') {
         sent++;
