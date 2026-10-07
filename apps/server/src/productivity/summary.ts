@@ -124,6 +124,7 @@ export function summariseProductivity(input: ProductivityInput): ProductivitySum
       completed: todayCompleted,
       goal: dailyGoal,
       met: onVacation(today) || (goalsOn && todayCompleted >= dailyGoal),
+      vacation: onVacation(today),
     },
     week: {
       start: weekStartDate,

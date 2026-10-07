@@ -193,6 +193,8 @@ export const preferencesPatchSchema = preferencesSchema
   .extend({
     appearance: appearanceSchema.partial().strict().optional(),
     notifications: notificationPrefsPatchSchema.optional(),
+    /** Partial, so changing one goal does not require sending the others back. */
+    productivity: productivityPrefsSchema.partial().strict().optional(),
   })
   .strict();
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;

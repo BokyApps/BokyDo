@@ -48,6 +48,7 @@ import type { Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
+import { registerProductivityRoutes } from './productivity/routes.js';
 import { registerRambleRoutes } from './ramble/routes.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
@@ -290,6 +291,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
   registerRambleRoutes(app, { db, settings, sync, ai });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
+  registerProductivityRoutes(app, { db, settings });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

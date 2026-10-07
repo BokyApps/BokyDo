@@ -17,7 +17,7 @@ export async function userUpdatePreferences(
     .from(users)
     .where(eq(users.id, ctx.userId));
   const current = resolvePreferences(row?.preferences);
-  const { appearance, notifications, ...rest } = args;
+  const { appearance, notifications, productivity, ...rest } = args;
   const defined = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
   const next = resolvePreferences({
     ...current,
@@ -27,6 +27,11 @@ export async function userUpdatePreferences(
       ...Object.fromEntries(Object.entries(appearance ?? {}).filter(([, v]) => v !== undefined)),
     },
     notifications: mergeNotifications(current.notifications, notifications ?? {}),
+    // `null` is meaningful here (clearing a vacation date), so only `undefined` is dropped.
+    productivity: {
+      ...current.productivity,
+      ...Object.fromEntries(Object.entries(productivity ?? {}).filter(([, v]) => v !== undefined)),
+    },
   });
   await ctx.tx
     .update(users)
