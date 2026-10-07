@@ -23,6 +23,10 @@ import { SettingsService } from './settings/settings-service.js';
 import { registerSetupRoutes } from './setup/routes.js';
 import { EventBus } from './sync/events.js';
 import { registerSyncRoutes } from './sync/routes.js';
+import { registerOAuthRoutes } from './oauth/routes.js';
+import { purgeOAuth, registerOAuthServer } from './oauth/server.js';
+import { ApiTokenStore } from './oauth/token-store.js';
+import { registerMcpServer } from './mcp/server.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
@@ -31,6 +35,10 @@ import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
 import { Delivery } from './delivery/delivery.js';
+import { AiCredentialStore } from './ai/credentials.js';
+import { registerAiRoutes } from './ai/routes.js';
+import { AiService } from './ai/service.js';
+import type { Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
@@ -46,6 +54,8 @@ export interface AppDeps {
   logger?: FastifyServerOptions['logger'];
   /** Outbound fetch (breached-password check); injectable for tests. */
   fetchImpl?: typeof fetch;
+  /** DNS for the SSRF-safe outbound client; injectable for tests. */
+  resolver?: Resolver;
 }
 
 export interface AppServices {
@@ -59,6 +69,8 @@ export interface AppServices {
   /** Reminders, notification delivery and digests (started by main; tests call `tick`). */
   jobs: JobRunner;
   delivery: Delivery;
+  ai: AiService;
+  apiTokens: ApiTokenStore;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -73,6 +85,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const { db } = deps.db;
   const settings = await SettingsService.load(db, deps.secrets.masterKey);
   const sessions = new SessionStore(db, deps.secrets.sessionKey, settings);
+  const apiTokens = new ApiTokenStore(db, deps.secrets.sessionKey, settings);
+  sessions.onRevokeAll = (userId) => apiTokens.revokeAllForUser(userId);
   const mailer = new Mailer(settings);
   const events = new EventBus(db);
 
@@ -87,6 +101,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     routerOptions: { maxParamLength: 200 },
   });
   const jobs = new JobRunner(app.log);
+  let lastOAuthPurge = 0;
   const sync = new SyncService(
     db,
     (affected) => {
@@ -135,7 +150,24 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       },
     },
     { name: 'digests', run: (now) => delivery.digests(now) },
+    {
+      name: 'oauth-housekeeping',
+      run: async (now) => {
+        // Hourly is plenty: expired rows are already unusable.
+        if (now.getTime() - lastOAuthPurge < 3600_000) return;
+        lastOAuthPurge = now.getTime();
+        await purgeOAuth(db, now);
+        await apiTokens.purge(now);
+      },
+    },
   );
+  const aiCredentials = new AiCredentialStore(db, deps.secrets.masterKey);
+  const ai = new AiService({
+    db,
+    settings,
+    credentials: aiCredentials,
+    ...(deps.resolver ? { resolver: deps.resolver } : {}),
+  });
   const services: AppServices = {
     settings,
     sessions,
@@ -146,6 +178,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     tokens,
     jobs,
     delivery,
+    ai,
+    apiTokens,
   };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
@@ -164,7 +198,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(cookie);
   await registerSecurityHeaders(app, settings);
-  registerAccessControl(app, { settings, sessions });
+  registerAccessControl(app, { settings, sessions, tokens: apiTokens });
 
   // Liveness: process is up. Readiness: database reachable.
   app.get('/healthz', async (): Promise<Health> => ({ status: 'ok' }));
@@ -210,8 +244,17 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerAdminUserRoutes(app, authDeps);
   registerSetupRoutes(app, settings);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
-  registerSyncRoutes(app, { sync, events, sessions });
+  registerSyncRoutes(app, { sync, events, sessions, tokens: apiTokens });
+  registerOAuthServer(app, { db, settings, tokens: apiTokens, key: deps.secrets.sessionKey });
+  registerOAuthRoutes(app, {
+    db,
+    settings,
+    tokens: apiTokens,
+    notifier,
+    key: deps.secrets.sessionKey,
+  });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
+  registerMcpServer(app, { db, sync, settings, tokens: apiTokens });
   registerInviteRoutes(app, { db, sync, sessionKey: deps.secrets.sessionKey });
   registerActivityRoutes(app, db);
   registerDeliveryRoutes(app, {
@@ -221,6 +264,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     vapid,
     sessionKey: deps.secrets.sessionKey,
   });
+  registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {

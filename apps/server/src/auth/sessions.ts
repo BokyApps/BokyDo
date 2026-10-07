@@ -174,8 +174,15 @@ export class SessionStore {
     await this.db.delete(sessions).where(eq(sessions.id, sessionId));
   }
 
-  /** Revoke every session of a user, optionally keeping one. */
+  /** Also called when every session of a user is revoked (wired to the API token store). */
+  onRevokeAll: (userId: string) => Promise<void> = async () => undefined;
+
+  /**
+   * Revoke every session of a user, optionally keeping one. Revoking all of them (password
+   * change, admin action) also ends their API tokens and app authorizations.
+   */
   async revokeAllForUser(userId: string, exceptSessionId?: string): Promise<void> {
+    if (!exceptSessionId) await this.onRevokeAll(userId);
     await this.db
       .delete(sessions)
       .where(

@@ -33,6 +33,8 @@ import {
 import { SetupPage } from './pages/SetupPage.js';
 import { SetupPendingPage } from './pages/SetupPendingPage.js';
 import { UnsubscribePage } from './pages/UnsubscribePage.js';
+import { stashOAuthRequest } from './lib/oauth.js';
+import { ConsentPage } from './pages/ConsentPage.js';
 
 type Gate = '/login' | '/change-password' | '/account/security' | '/setup' | '/setup-pending';
 /** Screens that only make sense while signed out. */
@@ -143,6 +145,17 @@ const routeTree = rootRoute.addChildren([
     path: '/unsubscribe',
     component: UnsubscribePage,
   }),
+  // An app's sign-in request (OAuth). The handle moves from the fragment into this tab's
+  // storage first, so it survives the detour through sign-in.
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/oauth/consent',
+    beforeLoad: async () => {
+      stashOAuthRequest();
+      await guard('/oauth/consent');
+    },
+    component: ConsentPage,
+  }),
   page('/change-password', ChangePasswordPage),
   page('/setup', SetupPage),
   page('/setup-pending', SetupPendingPage),
@@ -159,6 +172,7 @@ const routeTree = rootRoute.addChildren([
     appPage('/settings', () => <SettingsPage />),
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
     appPage('/settings/calendar', () => <SettingsPage initialTab="calendar" />),
+    appPage('/settings/apps', () => <SettingsPage initialTab="apps" />),
     appPage('/invitations', InvitationsPage),
     appPage('/join', JoinPage),
     projectRoute,

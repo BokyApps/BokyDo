@@ -1,6 +1,7 @@
 import type { Appearance, Preferences, PreferencesPatch } from '@bokydo/shared';
 import { FAMILIES, FONTS, getTheme, TEXT_SIZES, THEMES, type Mode } from '@bokydo/themes';
 import { useState, type ReactNode } from 'react';
+import { ApiAccessSettings } from '../components/ApiAccessSettings.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
@@ -8,7 +9,14 @@ import { usePreferences, useSend } from '../lib/sync.js';
 import { CalendarSettings } from './CalendarSettings.js';
 import { NotificationSettings } from './NotificationSettings.js';
 
-type Tab = 'appearance' | 'general' | 'notifications' | 'calendar';
+type Tab = 'appearance' | 'general' | 'notifications' | 'calendar' | 'apps';
+const TAB_LABEL: Record<Tab, string> = {
+  appearance: 'Appearance',
+  general: 'General',
+  notifications: 'Notifications',
+  calendar: 'Calendar',
+  apps: 'Apps & tokens',
+};
 
 export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }) {
   const prefs = usePreferences();
@@ -19,16 +27,16 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
     <Page>
       <ViewHeader title="Settings" />
       <div role="tablist" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
-        {(['appearance', 'general', 'notifications', 'calendar'] as const).map((t) => (
+        {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
           <button
             key={t}
             role="tab"
             type="button"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm capitalize ${tab === t ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
+            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
           >
-            {t}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>
@@ -36,6 +44,7 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
       {tab === 'general' && <GeneralSettings prefs={prefs} update={update} />}
       {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
       {tab === 'calendar' && <CalendarSettings />}
+      {tab === 'apps' && <ApiAccessSettings />}
     </Page>
   );
 }

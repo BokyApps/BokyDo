@@ -6,6 +6,7 @@ import { Alert, AuthLayout, Button, TextField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { browserSupportsPasskeys, passkeyAssertion } from '../lib/passkeys.js';
+import { afterSignIn } from '../lib/oauth.js';
 import { instanceQuery } from '../lib/queries.js';
 
 export function LoginPage() {
@@ -19,7 +20,7 @@ export function LoginPage() {
   const signedIn = async () => {
     setPassword('');
     await queryClient.invalidateQueries();
-    await navigate({ to: '/' });
+    await navigate({ to: afterSignIn() });
   };
 
   const login = useMutation({

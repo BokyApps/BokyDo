@@ -22,6 +22,9 @@ Lost the passphrase? `docker compose exec app bokydo admin reset-password admin`
 Lost your phone and recovery codes? `docker compose exec app bokydo admin reset-mfa <username>`
 Set a wrong public URL and can't save anything? `docker compose exec app bokydo admin clear-public-url`
 
+Lost both copies of the database password, or lost the app volume? See
+[docs/recovery.md](docs/recovery.md) for the tested recovery procedure.
+
 For anything beyond `localhost`, put BokyDo behind an HTTPS reverse proxy. Passkeys and push
 notifications only work over HTTPS.
 

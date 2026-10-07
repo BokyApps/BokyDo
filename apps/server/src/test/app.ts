@@ -8,6 +8,7 @@ import type { DbHandle } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
+import type { Resolver } from '../net/outbound.js';
 import { hashPassword } from '../security/password.js';
 import { freshDb } from './db.js';
 
@@ -25,6 +26,7 @@ export async function testApp(
   opts: {
     webRoot?: string;
     fetchImpl?: typeof fetch;
+    resolver?: Resolver;
     logger?: Parameters<typeof buildApp>[0]['logger'];
   } = {},
 ): Promise<TestApp> {
@@ -37,6 +39,7 @@ export async function testApp(
     dataDir,
     webRoot: opts.webRoot ?? null,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.resolver ? { resolver: opts.resolver } : {}),
     ...(opts.logger ? { logger: opts.logger } : {}),
   });
   return {

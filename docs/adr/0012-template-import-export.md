@@ -1,4 +1,4 @@
-# ADR 0007: Templates: CSV import and export, and the gallery
+# ADR 0012: Templates: CSV import and export, and the gallery
 
 - Status: Accepted (2026-10-06)
 

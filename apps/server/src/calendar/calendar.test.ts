@@ -436,12 +436,19 @@ describe.skipIf(!TEST_DATABASE_URL)('calendar feeds: abuse', () => {
   it('does not accept a feed link as a session or the other way round', async () => {
     const feed = await createFeed(aliceHttp, { kind: 'project', targetId: alice.inbox });
     const token = feed.url.slice('/api/v1/calendar/'.length, -'.ics'.length);
-    const bearer = await anon.request({
+    const asCookie = await anon.request({
       method: 'GET',
       url: '/api/v1/account/sessions',
-      headers: { authorization: `Bearer ${token}`, cookie: `bokydo_session=${token}` },
+      headers: { cookie: `bokydo_session=${token}` },
     });
-    expect(bearer.statusCode).toBe(401);
+    expect(asCookie.statusCode).toBe(401);
+    // As a bearer token it is refused too: the API's token auth knows nothing of feed links.
+    const asBearer = await anon.request({
+      method: 'GET',
+      url: '/api/v1/account/sessions',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect([401, 403]).toContain(asBearer.statusCode);
     // A session token is not a feed link either.
     const session = aliceHttp.cookies.get('bokydo_session') ?? '';
     expect((await anon.get(`/api/v1/calendar/${session}.ics`)).statusCode).toBe(404);

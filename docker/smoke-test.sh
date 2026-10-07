@@ -38,6 +38,7 @@ api() { # api <METHOD> <path> [json-body]
 status_of() { tail -n1 <<<"$1"; }
 body_of() { sed '$d' <<<"$1"; }
 volume() { docker run --rm -v "${PROJECT}_$1:/v:ro" busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e "${@:2}"; }
+volume_rw() { docker run --rm -v "${PROJECT}_$1:/v" busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e "${@:2}"; }
 
 echo "== starting stack"
 PORT=$PORT "${C[@]}" up -d --build --quiet-pull >/dev/null 2>&1 || { "${C[@]}" logs --tail 50; exit 1; }
@@ -376,6 +377,82 @@ C_ON=$(cmd user_update_preferences '{"keyboardShortcuts":true}')
 sync_cmds "$C_ON" >/dev/null
 check "and they can be turned back on" shortcuts_on "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
 
+echo "== AI provider layer (W7a)"
+r=$(api POST /api/v1/admin/ai/credentials '{"provider":"openai-compatible","label":"Mailpit as a model server","baseUrl":"http://mailpit:8025/api/v1","apiKey":"smoke-ai-secret-key"}')
+check "instance AI credential saved" test "$(status_of "$r")" = 201
+check "AI key is write-only" bash -c "! grep -q smoke-ai-secret <<<'$(body_of "$r")'"
+AI_CRED=$(body_of "$r" | jq -r .id)
+check "AI key encrypted at rest" \
+  bash -c "! docker exec ${PROJECT}-db-1 psql -U bokydo -d bokydo -Atc \"select secret::text from ai_credentials\" | grep -q smoke-ai-secret"
+check "private network unreachable until allow-listed (SSRF)" \
+  bash -c "jq -e '.error == \"blocked_address\"' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
+api PATCH /api/v1/admin/settings '{"network.privateAllowlist":["mailpit"]}' >/dev/null
+check "allow-listed private host is reached (and answers 404)" \
+  bash -c "jq -e '.error == \"unexpected_status\" and .status == 404' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
+check "metadata address refused even for admins" \
+  test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://169.254.169.254/latest"}')")" = 400
+r=$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"Mine","baseUrl":"https://mailpit:8025/v1"}')
+check "own credentials can't reach allow-listed private hosts" \
+  bash -c "jq -e '.error == \"blocked_address\"' <<<'$(body_of "$(api POST "/api/v1/ai/credentials/$(body_of "$r" | jq -r .id)/test")")'"
+check "own credentials need https" \
+  test "$(status_of "$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://models.example.com/v1"}')")" = 400
+check "AI key never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q smoke-ai-secret"
+
+echo "== public API auth: OAuth 2.1 and personal access tokens (W10a)"
+check "OAuth metadata names this instance as issuer" \
+  test "$(curl -s "$BASE/.well-known/oauth-authorization-server" | jq -r .issuer)" = "$BASE"
+oauth_post() { curl -s -X POST -H 'content-type: application/json' --data "$2" "$BASE$1"; }
+check "client registration refuses non-loopback http redirects" \
+  test "$(oauth_post /oauth/register '{"redirect_uris":["http://evil.example/cb"]}' | jq -r .error)" = invalid_redirect_uri
+CLIENT=$(oauth_post /oauth/register '{"redirect_uris":["https://client.example/cb"],"client_name":"Smoke client"}' | jq -r .client_id)
+check "client registered dynamically" bash -c "[[ $CLIENT == bkdc_* ]]"
+VERIFIER=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')
+CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
+AUTHZ="$BASE/oauth/authorize?response_type=code&client_id=$CLIENT&code_challenge=$CHALLENGE&code_challenge_method=S256&scope=sync&state=st"
+check "unregistered redirect URI gets an error page, never a redirect" \
+  test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$AUTHZ&redirect_uri=https://evil.example/cb")" = "400 "
+LOC=$(curl -s -o /dev/null -w '%{redirect_url}' "$AUTHZ&redirect_uri=https://client.example/cb")
+check "authorization request goes to the consent page" bash -c "[[ '$LOC' == $BASE/oauth/consent#* ]]"
+r=$(api POST /api/v1/oauth/request/decision "{\"request\":\"${LOC#*#}\",\"approve\":true}")
+CODE=$(body_of "$r" | jq -r .redirect | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')
+check "consent returns a code to the registered redirect" bash -c "[[ -n '$CODE' ]]"
+token_req() { curl -s -X POST -H 'content-type: application/x-www-form-urlencoded' --data "$1" "$BASE/oauth/token"; }
+TOKENS=$(token_req "grant_type=authorization_code&code=$CODE&redirect_uri=https://client.example/cb&client_id=$CLIENT&code_verifier=$VERIFIER")
+AT=$(jq -r .access_token <<<"$TOKENS")
+bearer_sync() { curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $1" -H 'content-type: application/json' --data '{"cursor":null}' "$BASE/api/v1/sync"; }
+check "access token works for sync" test "$(bearer_sync "$AT")" = 200
+check "bearer tokens can't reach session-only routes" \
+  test "$(curl -s -H "authorization: Bearer $AT" "$BASE/api/v1/account/tokens" | jq -r .error)" = token_not_accepted
+check "replayed code is refused and revokes its tokens" \
+  bash -c "[[ \$(jq -r .error <<<'$(token_req "grant_type=authorization_code&code=$CODE&redirect_uri=https://client.example/cb&client_id=$CLIENT&code_verifier=$VERIFIER")') == invalid_grant && $(bearer_sync "$AT") == 401 ]]"
+api POST /api/v1/auth/reauth "{\"password\":\"$NEWPW2\"}" >/dev/null
+r=$(api POST /api/v1/account/tokens '{"name":"smoke","scopes":["sync"],"expiresInDays":1}')
+PAT=$(body_of "$r" | jq -r .token)
+check "personal access token created and works" bash -c "[[ $(status_of "$r") == 201 && $(bearer_sync "$PAT") == 200 ]]"
+check "tokens stored only as hashes" \
+  bash -c "! docker exec ${PROJECT}-db-1 psql -U bokydo -d bokydo -Atc 'select hash from api_tokens' | grep -q '${PAT#bkd_pat_}'"
+check "tokens never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q -e '${PAT#bkd_pat_}' -e '${AT#bkd_at_}'"
+api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
+check "revoked token stops working" test "$(bearer_sync "$PAT")" = 401
+
+echo "== MCP server (W10c)"
+mcp() { curl -s -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' "${@:2}" --data "$1" "$BASE/mcp"; }
+check "MCP asks for a token and points to its metadata" \
+  bash -c "curl -s -D - -o /dev/null -X POST -H 'content-type: application/json' --data '{}' $BASE/mcp | grep -qi 'resource_metadata=\"$BASE/.well-known/oauth-protected-resource/mcp\"'"
+check "MCP resource metadata published" \
+  test "$(curl -s "$BASE/.well-known/oauth-protected-resource/mcp" | jq -r .resource)" = "$BASE/mcp"
+r=$(api POST /api/v1/account/tokens '{"name":"mcp","scopes":["tasks:read","tasks:write"],"expiresInDays":1}')
+MCPT=$(body_of "$r" | jq -r .token)
+check "MCP initialize with a token" \
+  test "$(mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' -H "authorization: Bearer $MCPT" | jq -r .result.protocolVersion)" = 2025-06-18
+check "MCP refuses a foreign Origin" \
+  test "$(mcp '{"jsonrpc":"2.0","id":1,"method":"ping"}' -H "authorization: Bearer $MCPT" -H 'origin: https://evil.example' -o /dev/null -w '%{http_code}')" = 403
+check "MCP lists only the token's tools" \
+  test "$(mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' -H "authorization: Bearer $MCPT" | jq -r '[.result.tools[].name] | sort | join(",")')" = "add_task,complete_task,get_report,get_task,run_filter,search_tasks,update_task"
+check "MCP adds a task from natural language" \
+  test "$(mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"text":"Smoke via MCP tomorrow p1"}}}' -H "authorization: Bearer $MCPT" | jq -r '.result.structuredContent.task | "\(.content) \(.priority)"')" = "Smoke via MCP p1"
+api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5
@@ -396,6 +473,30 @@ check "CLI clear-public-url works" bash -c "${C[*]} exec -T app bokydo admin cle
 check "reset revokes existing sessions" test "$(status_of "$(api GET /api/v1/auth/session)")" = 401
 check "reset is audited" \
   test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from audit_log where action='user.password_reset_cli'")" = 1
+
+echo "== losing both database password copies (docs/recovery.md)"
+"${C[@]}" stop app db >/dev/null 2>&1
+volume_rw app-data rm -f /v/secrets/db_password
+volume_rw db-secret rm -f /v/password
+PORT=$PORT "${C[@]}" up -d >/dev/null 2>&1
+# The app generates a fresh pair and publishes it, but Postgres still expects the old password.
+for _ in $(seq 30); do
+  [[ -n "$(volume db-secret sh -c 'cat /v/password 2>/dev/null')" ]] && break
+  sleep 1
+done
+NEW_PW=$(volume db-secret cat /v/password)
+printf "%s\n" "ALTER ROLE bokydo WITH PASSWORD :'pw';" \
+  | "${C[@]}" exec -T db psql -U bokydo -d bokydo -v pw="$NEW_PW" >/dev/null 2>&1
+for _ in $(seq 60); do
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
+  sleep 2
+done
+check "app recovers after both password copies are lost" \
+  test "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1")" = healthy
+check "recovery kept the database (same admin, not a fresh one)" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc 'select count(*) from users where is_admin')" = 1
+check "recovery leaves one agreed password in both copies" \
+  test "$(volume db-secret sha256sum /v/password | cut -d' ' -f1)" = "$(volume app-data sha256sum /v/secrets/db_password | cut -d' ' -f1)"
 
 if [[ $fail == 0 ]]; then echo "== all checks passed"; else echo "== FAILURES"; "${C[@]}" logs --tail 50; fi
 exit $fail

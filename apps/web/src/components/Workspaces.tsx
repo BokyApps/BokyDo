@@ -12,6 +12,7 @@ import { ApiError, api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
 import { newId, useSend, useSyncState } from '../lib/sync.js';
 import { Avatar, ROLE_LABEL } from './Sharing.js';
+import { ActivityList } from './Comments.js';
 import { Alert, Button, Dialog, inputClass, Popover, TextField } from './ui.js';
 
 const ROLE_HINT: Record<GrantableWorkspaceRole, string> = {
@@ -449,6 +450,11 @@ function WorkspaceBody({ workspace, onClose }: { workspace: Workspace; onClose: 
           </ul>
         </section>
       )}
+
+      <section aria-label="Team activity" className="border-t border-line pt-4">
+        <h3 className="mb-2 text-sm font-semibold">Activity</h3>
+        <ActivityList workspaceId={workspace.id} />
+      </section>
 
       <div className="flex justify-end gap-2 border-t border-line pt-4">
         {!owner && (

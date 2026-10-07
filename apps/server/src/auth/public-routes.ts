@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { audit } from '../audit.js';
 import { newId } from '../db/ids.js';
 import { sessions as sessionsTable, users } from '../db/schema.js';
+import { revokeApiAccess } from '../oauth/token-store.js';
 import { clientMeta, parseBody } from '../http/validation.js';
 import { hashPassword } from '../security/password.js';
 import { pgCode } from '../sync/handlers/common.js';
@@ -101,6 +102,7 @@ export function registerPublicAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
           .where(eq(users.id, user.id));
         // A reset signs out everywhere. Two-factor stays on: a reset link alone never bypasses it.
         await tx.delete(sessionsTable).where(eq(sessionsTable.userId, user.id));
+        await revokeApiAccess(tx, user.id);
         await audit(tx, {
           action: 'auth.password_reset',
           actorType: 'user',

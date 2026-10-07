@@ -55,6 +55,31 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/admin/settings': 'admin/always',
   'PATCH /api/v1/admin/settings': 'admin/always',
   'POST /api/v1/admin/email/test': 'admin/always',
+  'GET /api/v1/admin/ai/credentials': 'admin/after',
+  'POST /api/v1/admin/ai/credentials': 'admin/after',
+  'PATCH /api/v1/admin/ai/credentials/:id': 'admin/after',
+  'DELETE /api/v1/admin/ai/credentials/:id': 'admin/after',
+  'POST /api/v1/admin/ai/credentials/:id/test': 'admin/after',
+  'PUT /api/v1/admin/ai/routing': 'admin/after',
+  'GET /api/v1/admin/ai/usage': 'admin/after',
+  // OAuth consent, authorized apps, personal access tokens
+  'POST /api/v1/oauth/request': 'user/after',
+  'POST /api/v1/oauth/request/decision': 'user/after',
+  'GET /api/v1/account/apps': 'user/after',
+  'DELETE /api/v1/account/apps/:clientId': 'user/after',
+  'GET /api/v1/account/tokens': 'user/after',
+  'POST /api/v1/account/tokens': 'user/after',
+  'DELETE /api/v1/account/tokens/:id': 'user/after',
+  // AI (own credentials, routing, usage)
+  'GET /api/v1/ai/catalog': 'user/after',
+  'GET /api/v1/ai/credentials': 'user/after',
+  'POST /api/v1/ai/credentials': 'user/after',
+  'PATCH /api/v1/ai/credentials/:id': 'user/after',
+  'DELETE /api/v1/ai/credentials/:id': 'user/after',
+  'POST /api/v1/ai/credentials/:id/test': 'user/after',
+  'GET /api/v1/ai/routing': 'user/after',
+  'PUT /api/v1/ai/routing': 'user/after',
+  'GET /api/v1/ai/usage': 'user/after',
   'GET /api/v1/admin/users': 'admin/after',
   'POST /api/v1/admin/users': 'admin/after',
   'PATCH /api/v1/admin/users/:id': 'admin/after',
@@ -107,6 +132,15 @@ type Principal = 'anonymous' | 'restricted' | 'unenrolled' | 'user' | 'admin';
 const PRINCIPALS: Principal[] = ['anonymous', 'restricted', 'unenrolled', 'user', 'admin'];
 const PASSWORD = 'violin-pancake-orbit-meadow';
 
+/**
+ * Routes that bearer tokens (personal access tokens, OAuth) may call, with the scopes they need.
+ * Everything else is session-only; adding a route here is a deliberate API decision.
+ */
+const TOKEN_SCOPES: Record<string, string> = {
+  'POST /api/v1/sync': 'sync',
+  'GET /api/v1/sync/events': 'sync',
+};
+
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {
   if (route.setup === 'after' && !setupComplete) return 'setup_required';
   if (route.setup === 'before' && setupComplete) return 'not_found';
@@ -127,6 +161,10 @@ const DENIALS = new Set([
   'mfa_enrollment_required',
   'forbidden',
   'csrf_failed',
+  'token_not_accepted',
+  'unexpected_authorization',
+  'insufficient_scope',
+  'invalid_access_token',
 ]);
 
 async function outcome(client: Client, route: ApiRoute): Promise<string> {
@@ -237,6 +275,68 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', () => {
       expect(mismatches).toEqual([]);
     });
   }
+
+  it('lists every route that accepts bearer tokens, with its scopes', () => {
+    const actual = Object.fromEntries(
+      routes.filter((r) => r.scopes).map((r) => [`${r.method} ${r.url}`, r.scopes?.join(' ')]),
+    );
+    expect(actual).toEqual(TOKEN_SCOPES);
+  });
+
+  it('lets bearer tokens reach only the routes that accept them, with the right scopes', async () => {
+    await app.services.settings.markSetupComplete({ userId: null, ip: null });
+    const [admin] = await t.db.db.select().from(users).where(eq(users.username, 'admin'));
+    const all = await app.services.apiTokens.createPat(admin!.id, {
+      name: 'all',
+      scopes: [
+        'sync',
+        'tasks:read',
+        'tasks:write',
+        'projects:read',
+        'projects:write',
+        'comments:read',
+        'comments:write',
+        'ai:use',
+      ],
+      expiresInDays: 1,
+    });
+    const narrow = await app.services.apiTokens.createPat(admin!.id, {
+      name: 'narrow',
+      scopes: ['tasks:read'],
+      expiresInDays: 1,
+    });
+    const bearerClient = (token: string) => {
+      const c = new Client(app, null); // no cookies, no Origin: like curl or an app
+      const request = c.request.bind(c);
+      c.request = (opts) =>
+        request({
+          ...opts,
+          headers: { ...(opts.headers as object), authorization: `Bearer ${token}` },
+        });
+      return c;
+    };
+    const mismatches: string[] = [];
+    for (const route of routes.filter((r) => r.setup !== 'before')) {
+      const key = `${route.method} ${route.url}`;
+      const want =
+        route.access === 'public'
+          ? 'unexpected_authorization'
+          : TOKEN_SCOPES[key]
+            ? 'allowed'
+            : 'token_not_accepted';
+      const got = await outcome(bearerClient(all.token), route);
+      if (got !== want) mismatches.push(`${key} with full token: want ${want}, got ${got}`);
+      if (TOKEN_SCOPES[key]) {
+        const narrowGot = await outcome(bearerClient(narrow.token), route);
+        if (narrowGot !== 'insufficient_scope')
+          mismatches.push(`${key} with narrow token: got ${narrowGot}`);
+        const forged = await outcome(bearerClient(`${all.token.slice(0, -2)}xx`), route);
+        if (forged !== 'invalid_access_token')
+          mismatches.push(`${key} with forged token: got ${forged}`);
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
 
   it('requires a same-origin Origin and the session CSRF token on every state change', async () => {
     const unsafe = routes.filter((r) => r.method !== 'GET' && r.setup !== 'before');

@@ -5,6 +5,7 @@ import { Alert, AuthLayout, Button, TextField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { instanceQuery, sessionQuery } from '../lib/queries.js';
+import { afterSignIn } from '../lib/oauth.js';
 
 export function ChangePasswordPage() {
   const queryClient = useQueryClient();
@@ -22,7 +23,7 @@ export function ChangePasswordPage() {
     mutationFn: () => api('POST', '/api/v1/auth/password', { currentPassword, newPassword }),
     onSuccess: async () => {
       await queryClient.invalidateQueries();
-      await navigate({ to: '/' });
+      await navigate({ to: afterSignIn() });
     },
   });
 

@@ -1,4 +1,4 @@
-# ADR 0006: Calendar feeds (iCal subscriptions)
+# ADR 0011: Calendar feeds (iCal subscriptions)
 
 - Status: Accepted (2026-10-06)
 
@@ -52,7 +52,7 @@ and cannot send custom headers. Whatever authorizes the fetch has to be in the U
 ## Consequences
 
 - Anyone holding a link sees titles and dates until it is reset or deleted. The settings screen
-  says so, and the threat model records it as residual (T83).
+  says so, and the threat model records it as residual (T109).
 - Hosted calendar apps cache what they fetched; resetting a link does not recall that copy.
 - The limits are per process (in-memory), like the other limiters (ADR 0003); a multi-replica
   deployment would move them to Postgres.

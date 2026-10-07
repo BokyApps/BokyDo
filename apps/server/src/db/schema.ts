@@ -43,6 +43,8 @@ export const users = pgTable(
     preferences: jsonb('preferences').notNull().default({}),
     /** The user's local date of the last daily digest sent (so it goes out once a day). */
     lastDigestOn: date('last_digest_on'),
+    /** The user's own AI routing (feature → their credential + model; @bokydo/shared aiRoutingSchema). */
+    aiRouting: jsonb('ai_routing').notNull().default({}),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),
     ...timestamps,
   },
@@ -695,4 +697,158 @@ export const folders = pgTable(
     ...softDelete,
   },
   (t) => [index('folders_workspace_idx').on(t.workspaceId)],
+);
+
+/**
+ * AI provider credentials. `ownerUserId` null = instance credential (admin-managed); otherwise
+ * the user's own. The key and any custom headers are envelope-encrypted together in `secret`,
+ * bound to the row id and owner; they are never returned by the API.
+ */
+export const aiCredentials = pgTable(
+  'ai_credentials',
+  {
+    id: uuid('id').primaryKey(),
+    ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    label: text('label').notNull(),
+    baseUrl: text('base_url'),
+    /** EncryptedValue of JSON { apiKey?: string, headers?: Record<string, string> }. */
+    secret: jsonb('secret'),
+    hasKey: boolean('has_key').notNull().default(false),
+    headerNames: jsonb('header_names').$type<string[]>().notNull().default([]),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index('ai_credentials_owner_idx').on(t.ownerUserId)],
+);
+
+/**
+ * One row per AI call: metering for everyone, and the budget ledger for calls on instance
+ * credentials. A call first inserts a `reserved` row holding its worst-case cost (under a
+ * per-user lock), then settles it to `done`/`failed` with what it actually used.
+ */
+export const aiUsage = pgTable(
+  'ai_usage',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    credentialId: uuid('credential_id').references(() => aiCredentials.id, {
+      onDelete: 'set null',
+    }),
+    billing: text('billing', { enum: ['own', 'instance'] }).notNull(),
+    feature: text('feature').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    status: text('status', { enum: ['reserved', 'done', 'failed'] }).notNull(),
+    reservedTokens: integer('reserved_tokens').notNull().default(0),
+    reservedAudioSeconds: integer('reserved_audio_seconds').notNull().default(0),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    audioSeconds: integer('audio_seconds').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('ai_usage_user_started_idx').on(t.userId, t.startedAt),
+    check('ai_usage_billing_check', sql`billing in ('own', 'instance')`),
+    check('ai_usage_status_check', sql`status in ('reserved', 'done', 'failed')`),
+  ],
+);
+
+/**
+ * OAuth clients. Registered dynamically (RFC 7591, as MCP connectors do) or by an admin. All are
+ * public clients: PKCE is mandatory and there is no client secret.
+ */
+export const oauthClients = pgTable('oauth_clients', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
+  registeredVia: text('registered_via', { enum: ['dynamic', 'admin'] }).notNull(),
+  registeredIp: text('registered_ip'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** First consent; dynamic clients nobody ever authorized are purged after a day. */
+  authorizedAt: timestamp('authorized_at', { withTimezone: true }),
+});
+
+/** An authorization request waiting for the user's decision on the consent screen. */
+export const oauthRequests = pgTable('oauth_requests', {
+  /** tokenId of the request handle carried in the consent page's URL fragment. */
+  id: text('id').primaryKey(),
+  clientId: text('client_id')
+    .notNull()
+    .references(() => oauthClients.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  scopes: jsonb('scopes').$type<string[]>().notNull(),
+  audience: text('audience', { enum: ['api', 'mcp'] }).notNull(),
+  state: text('state'),
+  codeChallenge: text('code_challenge').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
+/** A user's consent to one client: the family every code, access and refresh token belongs to. */
+export const oauthGrants = pgTable(
+  'oauth_grants',
+  {
+    id: uuid('id').primaryKey(),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    scopes: jsonb('scopes').$type<string[]>().notNull(),
+    audience: text('audience', { enum: ['api', 'mcp'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    /** Set on revocation, including automatically on refresh-token or code reuse. */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedReason: text('revoked_reason'),
+  },
+  (t) => [index('oauth_grants_user_idx').on(t.userId)],
+);
+
+export const oauthCodes = pgTable('oauth_codes', {
+  id: text('id').primaryKey(),
+  grantId: uuid('grant_id')
+    .notNull()
+    .references(() => oauthGrants.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  codeChallenge: text('code_challenge').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+});
+
+/**
+ * Bearer tokens: personal access tokens and OAuth access/refresh tokens. Only a keyed hash of
+ * the token is stored. Refresh tokens are single-use (rotation); presenting a used one revokes
+ * its whole grant.
+ */
+export const apiTokens = pgTable(
+  'api_tokens',
+  {
+    id: uuid('id').primaryKey(),
+    hash: text('hash').notNull().unique(),
+    kind: text('kind', { enum: ['pat', 'access', 'refresh'] }).notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    grantId: uuid('grant_id').references(() => oauthGrants.id, { onDelete: 'cascade' }),
+    /** Personal access tokens only. */
+    name: text('name'),
+    scopes: jsonb('scopes').$type<string[]>().notNull(),
+    /** null for personal access tokens (valid for every audience). */
+    audience: text('audience', { enum: ['api', 'mcp'] }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('api_tokens_user_idx').on(t.userId, t.kind),
+    index('api_tokens_grant_idx').on(t.grantId),
+  ],
 );

@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ (2026-10-06) · **Next: W7.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ (2026-10-06) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -413,7 +413,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Invites by email (SMTP) or single-use expiring link; join requests; leave/remove; transfer ownership.
 - Assign tasks (`+name`, picker), "assigned to me/others" views, comments with @mentions, emoji reactions, file attachments, activity log per task/project/workspace, in-app notification inbox.
 - **Security gate:** full role matrix; invite-link brute force/guessing, reuse, privilege escalation via invite role tampering, removed member token/sync access, attachment access after removal, mention-spam rate limits.
-- *Done 2026-10-06. Project sharing with admin/editor/commenter/viewer roles; invitations by username or verified email (in-app, plus an email when SMTP is set up) and one-time 7-day links; leave, remove, transfer ownership. Assignment via `+name` and a picker, with `assigned to:`/`assigned by:` names and `shared` in filters. Comments with @mentions, emoji reactions and file attachments (type sniffed from the bytes, served sandboxed); activity log per project and task; in-app notification inbox with a live unread count; comment counts on board cards. Workspaces appear as "teams": owner/admin/member/guest, folders, per-project visibility (whole team or only people it's shared with), moving projects between teams, `workspace:` in filters. Team access is stored as ordinary project memberships tagged as workspace-granted, so every existing access check covers it. Deviations: no join requests (invite links cover the need); there's no workspace-level activity log (per project and task only); notifications are in-app only until W6 adds email and push.*
+- *Done 2026-10-06. Project sharing with admin/editor/commenter/viewer roles; invitations by username or verified email (in-app, plus an email when SMTP is set up) and one-time 7-day links; leave, remove, transfer ownership. Assignment via `+name` and a picker, with `assigned to:`/`assigned by:` names and `shared` in filters. Comments with @mentions, emoji reactions and file attachments (type sniffed from the bytes, served sandboxed); activity log per project and task; in-app notification inbox with a live unread count; comment counts on board cards. Workspaces appear as "teams": owner/admin/member/guest, folders, per-project visibility (whole team or only people it's shared with), moving projects between teams, `workspace:` in filters. Team access is stored as ordinary project memberships tagged as workspace-granted, so every existing access check covers it. Deviations: no join requests (invite links cover the need); a workspace-level activity log was added after W6 (the team dialog shows it, scoped to the team's projects the caller can see); notifications are in-app only until W6 adds email and push.*
 
 #### W6 — Reminders & notifications · M
 - Reminder types: relative to due time, absolute, auto-reminder default; scheduler via pg-boss (exact-minute precision, catch-up after downtime, timezone-correct).
@@ -426,6 +426,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - `packages/ai`: provider registry per §5.2, capability model, router (feature → provider/model), streaming, retries, budgets & usage metering, "test connection" button, live model list fetch.
 - Admin + user credential management UIs; OAuth flows: **ChatGPT sign-in** (experimental) and **SuperGrok device flow** (experimental); token refresh jobs.
 - **Security gate:** SSRF via custom/Ollama base URL (private IPs, DNS rebinding, redirects, IPv6 tricks, metadata endpoints); keys never in logs/errors/responses; per-user keys inaccessible to admins via UI; budget enforcement can't be bypassed by parallel requests.
+- *W7a done 2026-10-06 (see ADR 0006): SSRF-safe outbound client (`apps/server/src/net/outbound.ts`, reusable by webhooks and imports), shared IP classification, provider catalog and capability model, owner-bound encrypted credentials (instance and per user), feature routing with per-call ownership/capability checks, usage ledger with lock-serialised monthly budgets, "test connection" / live model list for the OpenAI, Anthropic and Gemini dialects, and the REST routes (`/api/v1/ai/*`, `/api/v1/admin/ai/*`). Admin settings: `ai.userKeys`, `ai.instanceAccess`, `ai.monthlyTokenBudget`, `ai.monthlyAudioMinutes`, `ai.routing`, `network.privateAllowlist`. Deviation: no `packages/ai` (catalog in `packages/shared/src/ai.ts`, key-handling code server-only). For W7b: adapters implement calls through `AiService.run(user, { feature, estimate, run(ctx) })` and must use `ctx.fetch` only; report usage (or throw `AiCallError` with partial usage).*
 
 #### W8 — Ramble · L
 - Mic capture UI (waveform), chunked and live pipelines, live draft list with edit ops, review panel, commit as one batch command, language selection, push-to-talk + keyboard shortcut, Web Speech fallback.
@@ -440,6 +441,8 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 #### W10 — Public API, OAuth AS & MCP · L
 - REST v1 + OpenAPI docs, PATs with scopes, OAuth 2.1 AS (DCR, PKCE, metadata, consent, revocation), MCP server (§6), webhooks, recipes for Claude/ChatGPT/Grok/Hermes.
 - **Security gate:** scope enforcement per tool/route (matrix), DCR abuse (redirect URI validation, open redirect, client impersonation), token leakage in logs, consent-screen clickjacking, PKCE downgrade, refresh-token reuse detection, webhook SSRF + signature verification docs, MCP tool output injection framing.
+- *W10a done 2026-10-06 (see ADR 0008): OAuth 2.1 authorization server (RFC 8414 and RFC 9728 metadata incl. `/.well-known/oauth-protected-resource/mcp`, dynamic registration, `/oauth/authorize` with PKCE S256 only, consent page at `/oauth/consent`, `/oauth/token` with code and refresh-token grants, rotation with reuse detection, RFC 7009 revocation, RFC 8707 audiences `api`/`mcp`), personal access tokens with scopes and expiry (Settings → Apps & tokens, which also lists and removes authorized apps), bearer authentication in the access hook with per-route `config.scopes` (pinned by the authz matrix), and account resets revoking all API access. Admin settings: `api.enabled`, `api.dynamicClientRegistration`. Deviations: in-house instead of `oidc-provider` (no OpenID Connect needed); public clients only; personal-access-token project restriction deferred to W10b. Only `/api/v1/sync` and `/api/v1/sync/events` accept tokens so far (scope `sync`, for Android). For W10b: give each REST route `config: { access: 'user', scopes: [...] }`, use `requireUser(req)` in its handler, and add it to `TOKEN_SCOPES` in the authz matrix. For W10c: authenticate `/mcp` with `apiTokens.authenticate(token, 'mcp')` and answer 401 with `WWW-Authenticate: Bearer resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"`.*
+- *W10c (MCP) done 2026-10-06 (see ADR 0009): stateless Streamable HTTP endpoint `/mcp` (in-house, JSON responses), tools `search_tasks`, `run_filter`, `get_task`, `list_projects`, `list_filters`, `get_report`, `add_task` (natural language), `update_task`, `complete_task`, `add_comment`, each gated by scopes; writes are sync commands; results framed as data. Admin setting `api.mcpEnabled`. Deferred: `ramble_text` (needs W8); webhooks split out as W10d. Connector recipes (Claude, ChatGPT, …) still to write with W10b's docs.*
 
 #### W11 — Parity extras · L
 - **Import from Todoist** (user's API token via Todoist Sync API, or backup/CSV) — projects, sections, tasks, labels, filters, comments, recurring rules. Huge for adoption.
@@ -531,11 +534,11 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 ## 12. Status & handoff (for the next contributor)
 
-*Updated 2026-10-06, after W6.* Everything needed to pick up where work stopped.
+*Updated 2026-10-06, after W10c (MCP).* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T94); design decisions are in `docs/adr/0001`–`0007`.
+**Done:** F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W12b (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T120); design decisions are in `docs/adr/0001`–`0006`, `0008`, `0009`, `0011` and `0012`.
 
-**Next, in order:** W7 (AI provider layer, BYOK) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
+**Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
 **Open items:**
 - F-029: add a pnpm override `source-map-js: ^1.2.2` once 1.2.2 passes the 7-day release-age gate (on/after 2026-10-07 14:08 UTC), re-run osv-scanner, mark F-029 fixed.
@@ -554,19 +557,20 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | R2 | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | Release-age gate: not before 2026-10-07 14:08 UTC | Everything |
 | R3 ✅ | Completed-tasks paging skips tasks that share a completion timestamp (parent + sub-tasks, ms-truncated cursor): use a `(completed_at, id)` cursor, scoped to visible projects, plus a test | Sonnet | **Done 2026-10-06** (F-034): opaque `<completed_at>_<id>` cursor, strict validation, regression + mutation-checked tests | Everything |
 | R4 | Verify Web Push in a real browser on an HTTPS install (enable, test push, click-through, sign-out removes it) | Sonnet (guided) | Needs an HTTPS deployment and a person with a real browser | Everything |
-| W7a | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | None | W10a, W11b–W11e, W12a |
+| W7a ✅ | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | **Done 2026-10-06** (ADR 0006; catalog lives in `packages/shared/src/ai.ts`, not a new package) | W10a, W11b–W11e, W12a |
 | W7b | Provider adapters on top of W7a (OpenAI-compatible, Anthropic, Gemini, Ollama, …), streaming, retries, live model list, "test connection" | Sonnet | W7a interfaces | W10, W11 |
 | W7c | Admin + user AI settings UI | DeepSeek (Sonnet review) | W7a/W7b API shapes | Anything server-side |
 | W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | W7a; current provider docs and test accounts from the owner; ToS check | W10, W11 |
 | W8 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | W7a–W7b (STT/LLM providers) | W10, W11, W12 |
 | W9 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | W7; Ask-your-tasks tools reuse W10's MCP tool layer if built first | W10, W11, W12 |
-| W10a | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | None | W7, W11, W12 |
+| W10a ✅ | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | **Done 2026-10-06** (ADR 0008, migration 0013) | W7, W11, W12 |
 | W10b | REST v1 + OpenAPI docs, scope matrix tests | Sonnet | W10a scopes | W7, W11 |
-| W10c | MCP server and webhooks (signed, SSRF-safe delivery) | Opus | W10a; webhooks reuse W7a's outbound client | W11, W12 |
+| W10c ✅ | MCP server | Opus | **Done 2026-10-06** (ADR 0009) | W11, W12 |
+| W10d | Outgoing webhooks: per-user subscriptions to task/project/comment events, HMAC-SHA256 signed and timestamped, retries with backoff via the job runner, delivery only through the W7a outbound client (users' webhooks public-only), admin switch, docs for verifying signatures | Sonnet (Opus review of signing and SSRF) | None (W7a outbound client and W6 job runner exist) | Everything |
 | W11a | Granular Todoist import (API token or backup/CSV, preview, per-item choices, dry run, background job, re-runnable) | Opus (untrusted input, token handling) + Sonnet (UI) | None (uses the W6 job runner) | W7, W10, W12 |
-| W11b ✅ | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | **Done 2026-10-06** (ADR 0007, T89–T94): Todoist-format CSV import (preview, new or existing project) and export, nine-template gallery; import is ordinary sync commands | Everything |
+| W11b ✅ | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | **Done 2026-10-06** (ADR 0012, T115–T120): Todoist-format CSV import (preview, new or existing project) and export, nine-template gallery; import is ordinary sync commands | Everything |
 | W11c | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | None | Everything |
-| W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0006, T82–T88): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
+| W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0011, T108–T114): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
 | W11e | Export everything, scheduled encrypted backups + restore, account deletion | Opus | None | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
 | W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Best after UI churn from W7–W11 settles; caching must not break the push service worker | W10, W11 |
@@ -584,7 +588,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
-- Now: **W7a** (Opus) starts; **R2** (DeepSeek) on/after 2026-10-07. (R1 and R3 are done.)
+- Now: **A1 Android foundation** (Opus; needs an Android SDK on the machine) or **W11a/W11e** (Opus) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a and W10c are done; W11 is in progress on branch `w11-sonnet`: when it merges it must renumber its migration (main has 0012–0013), its ADRs 0006–0007 and threat rows T82–T94 that clash with main.)
 - **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
 - **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
 - **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).
