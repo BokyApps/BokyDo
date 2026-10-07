@@ -12,6 +12,7 @@ import {
   notifications,
   projectMembers,
   projects,
+  oauthGrants,
   pushSubscriptions,
   tasks,
   users,
@@ -264,10 +265,16 @@ export class Delivery {
     opts: { urgency?: 'high' | 'normal' } = {},
   ): Promise<number> {
     const { db } = this.deps;
-    const subs = await db
-      .select()
+    // An app's subscription stops with its grant, even before housekeeping removes it.
+    const rows = await db
+      .select({ sub: pushSubscriptions, grantRevokedAt: oauthGrants.revokedAt })
       .from(pushSubscriptions)
+      .leftJoin(oauthGrants, eq(oauthGrants.id, pushSubscriptions.grantId))
       .where(eq(pushSubscriptions.userId, userId));
+    const stale = rows.filter((r) => r.grantRevokedAt).map((r) => r.sub.id);
+    if (stale.length)
+      await db.delete(pushSubscriptions).where(inArray(pushSubscriptions.id, stale));
+    const subs = rows.filter((r) => !r.grantRevokedAt).map((r) => r.sub);
     let sent = 0;
     const subject = this.publicUrl ?? 'https://bokydo.invalid';
     const fetch = this.pushFetch();

@@ -6,7 +6,7 @@ import { RateLimiter } from '../auth/rate-limiter.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { pushSubscriptions, users } from '../db/schema.js';
-import { requireSession } from '../http/access.js';
+import { requireUser } from '../http/access.js';
 import type { SyncService } from '../sync/sync-service.js';
 import type { Delivery } from './delivery.js';
 import { readUnsubscribeToken } from './unsubscribe.js';
@@ -35,7 +35,8 @@ export interface DeliveryRouteDeps {
 }
 
 export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRouteDeps): void {
-  const user = { config: { access: 'user' } } as const;
+  // The Android app registers for UnifiedPush with its own (sync-scoped) token.
+  const userOrApp = { config: { access: 'user', scopes: ['sync'] } } as const;
   const tests = new RateLimiter({
     windowMs: 3600_000,
     maxPerWindow: 10,
@@ -43,14 +44,15 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
     maxBackoffMs: 0,
   });
 
-  app.get('/api/v1/push/key', user, async () => ({ publicKey: deps.vapid.publicKey }));
+  app.get('/api/v1/push/key', userOrApp, async () => ({ publicKey: deps.vapid.publicKey }));
 
   /**
-   * Register this browser for push. The subscription belongs to the current session, and an
-   * endpoint registered before (by anyone, e.g. on a shared computer) is taken over, so it
-   * only ever reaches the person signed in there now.
+   * Register this browser (or app) for push. The subscription belongs to the current session, or
+   * for the app to its OAuth grant, and ends with it. An endpoint registered before (by anyone,
+   * e.g. on a shared computer) is taken over, so it only ever reaches the person signed in now.
+   * Personal access tokens can't register: nothing would end the subscription with the device.
    */
-  app.post('/api/v1/push/subscriptions', user, async (req, reply) => {
+  app.post('/api/v1/push/subscriptions', userOrApp, async (req, reply) => {
     const body = subscriptionSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'validation_failed' });
     const { endpoint, keys } = body.data;
@@ -61,13 +63,19 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
     } catch {
       return reply.status(400).send({ error: 'validation_failed' });
     }
-    const session = requireSession(req);
+    const me = requireUser(req);
+    const owner = req.session
+      ? { sessionId: req.session.id }
+      : req.token?.grantId
+        ? { grantId: req.token.grantId }
+        : null;
+    if (!owner) return reply.status(403).send({ error: 'forbidden', message: 'push_needs_app' });
     await deps.db.transaction(async (tx) => {
       await tx.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint));
       await tx.insert(pushSubscriptions).values({
         id: newId(),
-        userId: session.user.id,
-        sessionId: session.id,
+        userId: me.id,
+        ...owner,
         endpoint,
         p256dh: keys.p256dh,
         auth: keys.auth,
@@ -76,12 +84,12 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
       const [n] = await tx
         .select({ n: count() })
         .from(pushSubscriptions)
-        .where(eq(pushSubscriptions.userId, session.user.id));
+        .where(eq(pushSubscriptions.userId, me.id));
       if ((n?.n ?? 0) > MAX_SUBSCRIPTIONS_PER_USER) {
         const [oldest] = await tx
           .select({ id: pushSubscriptions.id })
           .from(pushSubscriptions)
-          .where(eq(pushSubscriptions.userId, session.user.id))
+          .where(eq(pushSubscriptions.userId, me.id))
           .orderBy(asc(pushSubscriptions.createdAt))
           .limit(1);
         if (oldest) await tx.delete(pushSubscriptions).where(eq(pushSubscriptions.id, oldest.id));
@@ -90,7 +98,7 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
     return reply.status(201).send({ ok: true });
   });
 
-  app.delete('/api/v1/push/subscriptions', user, async (req, reply) => {
+  app.delete('/api/v1/push/subscriptions', userOrApp, async (req, reply) => {
     const body = endpointSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'validation_failed' });
     await deps.db
@@ -98,14 +106,14 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
       .where(
         and(
           eq(pushSubscriptions.endpoint, body.data.endpoint),
-          eq(pushSubscriptions.userId, requireSession(req).user.id),
+          eq(pushSubscriptions.userId, requireUser(req).id),
         ),
       );
     return reply.status(204).send();
   });
 
-  app.post('/api/v1/push/test', user, async (req, reply) => {
-    const me = requireSession(req).user;
+  app.post('/api/v1/push/test', userOrApp, async (req, reply) => {
+    const me = requireUser(req);
     if (!tests.attempt(me.id).allowed) return reply.status(429).send({ error: 'rate_limited' });
     const sent = await deps.delivery.push(me.id, {
       title: 'Notifications are working',

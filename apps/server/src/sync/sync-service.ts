@@ -298,6 +298,7 @@ export class SyncService {
             ),
           );
         const team = await this.team(tx, userId, [...visible.keys()]);
+        const prefs = resolvePreferences(user?.preferences);
         const base = {
           ...team,
           cursor: String(headSeq),
@@ -306,7 +307,8 @@ export class SyncService {
             username: user?.username ?? '',
             isAdmin: user?.isAdmin ?? false,
             inboxProjectId: inbox[0]?.id ?? '',
-            preferences: resolvePreferences(user?.preferences),
+            preferences: prefs,
+            timeZone: prefs.timezone ?? this.defaultTimeZone(),
           },
         };
 

@@ -158,6 +158,10 @@ const TOKEN_SCOPES: Record<string, string> = {
   'POST /api/v1/ramble/transcribe': 'ai:use',
   'POST /api/v1/ramble/extract': 'ai:use',
   'POST /api/v1/ramble/commit': 'tasks:write',
+  'GET /api/v1/push/key': 'sync',
+  'POST /api/v1/push/subscriptions': 'sync',
+  'DELETE /api/v1/push/subscriptions': 'sync',
+  'POST /api/v1/push/test': 'sync',
 };
 
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {
