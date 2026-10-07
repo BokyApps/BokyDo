@@ -45,11 +45,14 @@ import { AiCredentialStore } from './ai/credentials.js';
 import { registerAiRoutes } from './ai/routes.js';
 import { AiService } from './ai/service.js';
 import type { Resolver } from './net/outbound.js';
+import { createOutbound, PUBLIC_ONLY } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerRambleRoutes } from './ramble/routes.js';
 import { fireDueReminders } from './reminders/reminders.js';
+import { registerWebhookRoutes } from './webhooks/routes.js';
+import { Webhooks } from './webhooks/webhooks.js';
 import { VERSION } from './version.js';
 
 export interface AppDeps {
@@ -83,6 +86,8 @@ export interface AppServices {
   ai: AiService;
   apiTokens: ApiTokenStore;
   backups: BackupService;
+  /** Outgoing webhook deliveries (the `webhooks` background job drives enqueue + dispatch). */
+  webhooks: Webhooks;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -179,6 +184,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         await apiTokens.purge(now);
       },
     },
+    {
+      name: 'webhooks',
+      run: async (now) => {
+        // Batches of 500 (enqueue) / 100 (dispatch) until caught up, like the delivery job.
+        for (let i = 0; i < 50; i++) if ((await webhooks.enqueue(now)) < 500) break;
+        for (let i = 0; i < 20; i++) if ((await webhooks.dispatch(now)) < 100) break;
+      },
+    },
   );
   const aiCredentials = new AiCredentialStore(db, deps.secrets.masterKey);
   const ai = new AiService({
@@ -186,6 +199,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     settings,
     credentials: aiCredentials,
     ...(deps.resolver ? { resolver: deps.resolver } : {}),
+  });
+  // User-configured endpoints are public-internet only, whatever the admin allow-list says.
+  const webhooks = new Webhooks({
+    db,
+    settings,
+    masterKey: deps.secrets.masterKey,
+    fetch: createOutbound(PUBLIC_ONLY, deps.resolver),
   });
   const services: AppServices = {
     settings,
@@ -200,6 +220,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     ai,
     apiTokens,
     backups,
+    webhooks,
   };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
@@ -289,6 +310,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
   registerRambleRoutes(app, { db, settings, sync, ai });
+  registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {

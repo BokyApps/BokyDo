@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { Due } from '@bokydo/shared';
+import type { Due, WebhookDeliveryPayload, WebhookEventName } from '@bokydo/shared';
 import {
   bigint,
   bigserial,
@@ -861,3 +861,77 @@ export const apiTokens = pgTable(
     index('api_tokens_grant_idx').on(t.grantId),
   ],
 );
+
+// ---------------------------------------------------------------------------------------------
+// Outgoing webhooks (W10d)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A user's webhook endpoint, notified about task, project and comment events in the projects
+ * they can see. The signing secret must be usable by the server on every delivery (unlike a
+ * feed token, which only has to be verified), so it is envelope-encrypted at rest and shown
+ * once. Delivery goes only through the outbound client's public-only policy.
+ */
+export const webhookSubscriptions = pgTable(
+  'webhook_subscriptions',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    /** EncryptedValue: the HMAC-SHA256 signing secret (AAD-bound to this row's id and owner). */
+    secret: jsonb('secret').notNull(),
+    /** Which of the webhook event types this endpoint wants (@bokydo/shared webhookEventNames). */
+    events: jsonb('events').$type<WebhookEventName[]>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    /** Reason code of the last failure only; never the URL or a response body. */
+    lastError: text('last_error'),
+  },
+  (t) => [index('webhook_subscriptions_user_idx').on(t.userId)],
+);
+
+/**
+ * One signed POST per subscription per event: the retry queue for the webhooks job. The payload
+ * is frozen at enqueue time so retries send byte-identical bodies (the signature stays valid).
+ */
+export const webhookDeliveries = pgTable(
+  'webhook_deliveries',
+  {
+    id: uuid('id').primaryKey(),
+    subscriptionId: uuid('subscription_id')
+      .notNull()
+      .references(() => webhookSubscriptions.id, { onDelete: 'cascade' }),
+    event: text('event').notNull(),
+    /** The activity row this delivery came from (null for test deliveries). */
+    sourceActivityId: bigint('source_activity_id', { mode: 'number' }),
+    payload: jsonb('payload').$type<WebhookDeliveryPayload>().notNull(),
+    status: text('status', { enum: ['pending', 'delivered', 'dropped', 'failed'] }).notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
+    /** OutboundError reason or HTTP status line, never URLs or response bodies. */
+    lastError: text('last_error'),
+    responseStatus: integer('response_status'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('webhook_deliveries_due_idx')
+      .on(t.nextAttemptAt)
+      .where(sql`status = 'pending'`),
+    index('webhook_deliveries_subscription_idx').on(t.subscriptionId, t.createdAt),
+    check(
+      'webhook_deliveries_status_check',
+      sql`status in ('pending', 'delivered', 'dropped', 'failed')`,
+    ),
+  ],
+);
+
+/** How far the webhooks job has read the activity log. Exactly one row (id = 1). */
+export const webhookState = pgTable('webhook_state', {
+  id: integer('id').primaryKey().default(1),
+  lastActivityId: bigint('last_activity_id', { mode: 'number' }).notNull(),
+});

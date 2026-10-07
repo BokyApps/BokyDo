@@ -153,6 +153,11 @@ export const settingDefinitions = {
   },
   /** The MCP endpoint (`/mcp`) for AI assistants such as Claude and ChatGPT. */
   'api.mcpEnabled': { schema: z.boolean(), default: true, secret: false },
+  /**
+   * Users may subscribe webhook endpoints to their task/project/comment events. Off stops all
+   * deliveries and pauses new subscriptions; events during the outage are not delivered.
+   */
+  'api.webhooksEnabled': { schema: z.boolean(), default: true, secret: false },
 
   /** Automatic encrypted backups (Admin → Backups). Off until a passphrase is set and this is on. */
   'backups.schedule': { schema: z.enum(['off', 'daily', 'weekly']), default: 'off', secret: false },

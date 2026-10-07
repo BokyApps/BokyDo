@@ -153,6 +153,13 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/calendar-feeds/:id/rotate': 'user/after',
   'DELETE /api/v1/calendar-feeds/:id': 'user/after',
   'GET /api/v1/calendar/:file': 'public/after',
+  // Webhooks: per-user subscriptions managed with a session (not the token API)
+  'GET /api/v1/webhooks': 'user/after',
+  'POST /api/v1/webhooks': 'user/after',
+  'PATCH /api/v1/webhooks/:id': 'user/after',
+  'POST /api/v1/webhooks/:id/rotate': 'user/after',
+  'POST /api/v1/webhooks/:id/test': 'user/after',
+  'DELETE /api/v1/webhooks/:id': 'user/after',
 };
 
 /** Streaming routes never finish on success; only their status line is checked. */
