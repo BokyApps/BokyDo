@@ -256,7 +256,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     key: deps.secrets.sessionKey,
   });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
-  registerRestRoutes(app, db, () => settings.get('instance.publicUrl') ?? null);
+  registerRestRoutes(app, db, sync, () => settings.get('instance.publicUrl') ?? null);
   registerMcpServer(app, { db, sync, settings, tokens: apiTokens });
   await ensureFirstPartyClients(db);
   registerAndroidRoutes(app, { settings });

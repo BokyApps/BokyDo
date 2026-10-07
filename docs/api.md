@@ -47,12 +47,17 @@ Both are public: a public API that hides its own contract is not much use.
 
 ## Operations
 
-| Method | Path                    | Scope           | Notes                                                                                                   |
-| ------ | ----------------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/tasks`         | `tasks:read`    | Newest first. `projectId`, `completed=true`, `limit` (≤ 100) and the opaque `cursor` from `nextCursor`. |
-| GET    | `/api/v1/tasks/{id}`    | `tasks:read`    | One task.                                                                                               |
-| GET    | `/api/v1/projects`      | `projects:read` | Every project you can see.                                                                              |
-| GET    | `/api/v1/projects/{id}` | `projects:read` | One project.                                                                                            |
+| Method | Path                            | Scope           | Notes                                                                                                   |
+| ------ | ------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/tasks`                 | `tasks:read`    | Newest first. `projectId`, `completed=true`, `limit` (≤ 100) and the opaque `cursor` from `nextCursor`. |
+| GET    | `/api/v1/tasks/{id}`            | `tasks:read`    | One task.                                                                                               |
+| POST   | `/api/v1/tasks`                 | `tasks:write`   | Create one. The same fields as the `task_add` sync command, minus the id, which the server assigns.     |
+| PATCH  | `/api/v1/tasks/{id}`            | `tasks:write`   | Change only the fields you send.                                                                        |
+| POST   | `/api/v1/tasks/{id}/complete`   | `tasks:write`   | Completes it; a recurring task rolls forward to its next occurrence and stays open.                     |
+| POST   | `/api/v1/tasks/{id}/uncomplete` | `tasks:write`   | Reopens a completed task.                                                                               |
+| DELETE | `/api/v1/tasks/{id}`            | `tasks:write`   | Deletes it and answers `204`.                                                                           |
+| GET    | `/api/v1/projects`              | `projects:read` | Every project you can see.                                                                              |
+| GET    | `/api/v1/projects/{id}`         | `projects:read` | One project.                                                                                            |
 
 Reads page with an opaque cursor rather than an offset, so a task that moves while you page cannot
 be skipped or repeated:
@@ -67,9 +72,27 @@ curl -s -H "Authorization: Bearer $BOKYDO_TOKEN" \
   'https://your-instance/api/v1/tasks?projectId=…&limit=50&cursor=0199…'
 ```
 
-Writes (`POST`/`PATCH`/`DELETE` for tasks and projects, and the comment resources) are the next
-slice of W10b; until they land, use the sync/command endpoint (`POST /api/v1/sync` with the `sync`
-scope), which is what the web app and the Android app use.
+A write answers with the task as it now is, so you never have to guess what the server did with it —
+including a recurring task, which comes back open at its next date rather than completed:
+
+```bash
+# Create it
+curl -s -X POST -H "Authorization: Bearer $BOKYDO_TOKEN" -H 'content-type: application/json' \
+  -d '{"projectId":"…","content":"Water the plants","due":{"date":"2026-01-01","time":null,"timezone":null,"string":"every day","recurrence":{"rrule":"FREQ=DAILY","anchor":"scheduled"}}}' \
+  https://your-instance/api/v1/tasks
+# → 201 {"task":{"id":"0199…","isCompleted":false,…}}
+
+# Change one field, then complete it
+curl -s -X PATCH -H "Authorization: Bearer $BOKYDO_TOKEN" -H 'content-type: application/json' \
+  -d '{"priority":1}' https://your-instance/api/v1/tasks/0199…
+curl -s -X POST -H "Authorization: Bearer $BOKYDO_TOKEN" \
+  https://your-instance/api/v1/tasks/0199…/complete
+```
+
+Writes go through the same command layer the app uses, so every authorization and validation rule
+applies unchanged: writing into a project you cannot see answers `404`, and a token without
+`tasks:write` answers `403 insufficient_scope`. Still to come in W10b: project and comment writes,
+and the per-token project restriction deferred from W10a.
 
 ## Recipes
 

@@ -1,6 +1,7 @@
-import type { ApiScope } from '@bokydo/shared';
+import type { ApiScope, CommandError, CommandType } from '@bokydo/shared';
 import {
   colorSchema,
+  commandArgs,
   dueSchema,
   idSchema,
   orderKeySchema,
@@ -13,10 +14,12 @@ import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../db/client.js';
+import { newId } from '../db/ids.js';
 import { projects, tasks } from '../db/schema.js';
 import { requireUser } from '../http/access.js';
 import { visibleProjects } from '../sync/policy.js';
 import { projectToWire, taskToWire } from '../sync/serialize.js';
+import type { SyncService } from '../sync/sync-service.js';
 
 // ---------------------------------------------------------------------------------------------
 // Wire shapes. These mirror the sync payloads (packages/shared model.ts) and exist so the
@@ -79,6 +82,23 @@ const taskSingle = z.object({ task: taskResource });
 const projectList = z.object({ projects: z.array(projectResource) });
 const projectSingle = z.object({ project: projectResource });
 
+/**
+ * Write bodies are the sync command schemas minus the id the route supplies itself. Deriving them
+ * from `commandArgs` means a REST write cannot accept something the command layer would reject, or
+ * drift from it later.
+ */
+const createTaskBody = commandArgs.task_add.omit({ id: true });
+const updateTaskBody = commandArgs.task_update.omit({ id: true });
+
+/** Command errors are the sync layer's vocabulary; this is how they surface over HTTP. */
+const COMMAND_STATUS: Record<CommandError, number> = {
+  invalid: 400,
+  not_found: 404,
+  forbidden: 403,
+  conflict: 409,
+  limit_exceeded: 429,
+};
+
 // ---------------------------------------------------------------------------------------------
 // Descriptors: one entry per REST operation, used both to build the OpenAPI document and to
 // document the surface at /api/docs. Keeping them next to the routes is what stops the docs
@@ -86,14 +106,15 @@ const projectSingle = z.object({ project: projectResource });
 // ---------------------------------------------------------------------------------------------
 
 interface RestOperation {
-  method: 'get';
+  method: 'get' | 'post' | 'patch' | 'delete';
   /** Fastify path, with `:param` placeholders. */
   path: string;
   summary: string;
   tag: string;
   scopes: readonly ApiScope[];
   query?: z.ZodType;
-  response: z.ZodType;
+  body?: z.ZodType;
+  response?: z.ZodType;
 }
 
 export const REST_OPERATIONS: RestOperation[] = [
@@ -113,6 +134,47 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Tasks',
     scopes: ['tasks:read'],
     response: taskSingle,
+  },
+  {
+    method: 'post',
+    path: '/api/v1/tasks',
+    summary: 'Create a task',
+    tag: 'Tasks',
+    scopes: ['tasks:write'],
+    body: createTaskBody,
+    response: taskSingle,
+  },
+  {
+    method: 'patch',
+    path: '/api/v1/tasks/:id',
+    summary: 'Update a task (only the fields you send change)',
+    tag: 'Tasks',
+    scopes: ['tasks:write'],
+    body: updateTaskBody,
+    response: taskSingle,
+  },
+  {
+    method: 'post',
+    path: '/api/v1/tasks/:id/complete',
+    summary: 'Complete a task; a recurring task rolls forward to its next occurrence',
+    tag: 'Tasks',
+    scopes: ['tasks:write'],
+    response: taskSingle,
+  },
+  {
+    method: 'post',
+    path: '/api/v1/tasks/:id/uncomplete',
+    summary: 'Reopen a completed task',
+    tag: 'Tasks',
+    scopes: ['tasks:write'],
+    response: taskSingle,
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/tasks/:id',
+    summary: 'Delete a task',
+    tag: 'Tasks',
+    scopes: ['tasks:write'],
   },
   {
     method: 'get',
@@ -152,6 +214,9 @@ function queryParameters(schema: z.ZodType): unknown[] {
   }));
 }
 
+const successStatus = (method: RestOperation['method']) =>
+  method === 'post' ? '201' : method === 'delete' ? '204' : '200';
+
 export function buildOpenApiDocument(publicUrl: string | null): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const op of REST_OPERATIONS) {
@@ -166,18 +231,29 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
     }
     if (op.query) parameters.push(...queryParameters(op.query));
     const path = op.path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+    const ok = successStatus(op.method);
     paths[path] ??= {};
     paths[path][op.method] = {
       summary: op.summary,
       tags: [op.tag],
       security: [{ bearerAuth: [...op.scopes] }],
       ...(parameters.length ? { parameters } : {}),
+      ...(op.body && op.method !== 'get'
+        ? {
+            requestBody: {
+              required: true,
+              content: { 'application/json': { schema: toJsonSchema(op.body, 'input') } },
+            },
+          }
+        : {}),
       responses: {
-        '200': {
-          description: 'Success',
-          content: { 'application/json': { schema: toJsonSchema(op.response, 'output') } },
+        [ok]: {
+          description: ok === '204' ? 'Deleted' : 'Success',
+          ...(op.response && ok !== '204'
+            ? { content: { 'application/json': { schema: toJsonSchema(op.response, 'output') } } }
+            : {}),
         },
-        '400': { description: 'Invalid query or path parameters' },
+        '400': { description: 'Invalid body, query or path parameters' },
         '401': { description: 'Missing, malformed or unknown bearer token' },
         '403': { description: 'The token does not carry the required scope' },
         '404': { description: 'No such resource, or it is not visible to you' },
@@ -232,10 +308,32 @@ ${items}
 export function registerRestRoutes(
   app: FastifyInstance,
   db: Database,
+  sync: SyncService,
   publicUrl: () => string | null,
 ): void {
   const tasksRead = { access: 'user', scopes: ['tasks:read'] } as const;
+  const tasksWrite = { access: 'user', scopes: ['tasks:write'] } as const;
   const projectsRead = { access: 'user', scopes: ['projects:read'] } as const;
+
+  /** A task the caller can see, as it looks now: writes answer with the real resulting state. */
+  const readTask = (userId: string, taskId: string) =>
+    db.transaction(async (tx) => {
+      const visible = await visibleProjects(tx, userId);
+      const row = (
+        await tx
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)))
+          .limit(1)
+      ).at(0);
+      return row && visible.has(row.projectId) ? taskToWire(row) : null;
+    });
+
+  /** Apply one command through the sync engine and translate its vocabulary into HTTP. */
+  const run = async (userId: string, type: CommandType, args: unknown) => {
+    const result = await sync.apply(userId, type, newId(), args);
+    return result.ok ? null : result.error;
+  };
 
   app.get('/api/v1/tasks', { config: tasksRead }, async (req, reply) => {
     const parsed = listTasksQuery.safeParse(req.query);
@@ -271,20 +369,60 @@ export function registerRestRoutes(
   app.get('/api/v1/tasks/:id', { config: tasksRead }, async (req, reply) => {
     const id = idSchema.safeParse((req.params as { id?: string }).id);
     if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+    const task = await readTask(requireUser(req).id, id.data);
+    if (!task) return reply.status(404).send({ error: 'not_found' });
+    return { task };
+  });
+
+  app.post('/api/v1/tasks', { config: tasksWrite }, async (req, reply) => {
+    const body = createTaskBody.safeParse(req.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
     const userId = requireUser(req).id;
-    return db.transaction(async (tx) => {
-      const visible = await visibleProjects(tx, userId);
-      const row = (
-        await tx
-          .select()
-          .from(tasks)
-          .where(and(eq(tasks.id, id.data), isNull(tasks.deletedAt)))
-          .limit(1)
-      ).at(0);
-      if (!row || !visible.has(row.projectId))
-        return reply.status(404).send({ error: 'not_found' });
-      return { task: taskToWire(row) };
+    const taskId = newId();
+    const failure = await run(userId, 'task_add', { ...body.data, id: taskId });
+    if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+    const task = await readTask(userId, taskId);
+    if (!task) return reply.status(404).send({ error: 'not_found' });
+    return reply.status(201).send({ task });
+  });
+
+  app.patch('/api/v1/tasks/:id', { config: tasksWrite }, async (req, reply) => {
+    const id = idSchema.safeParse((req.params as { id?: string }).id);
+    if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+    const body = updateTaskBody.safeParse(req.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
+    const userId = requireUser(req).id;
+    const failure = await run(userId, 'task_update', { id: id.data, ...body.data });
+    if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+    const task = await readTask(userId, id.data);
+    if (!task) return reply.status(404).send({ error: 'not_found' });
+    return { task };
+  });
+
+  for (const [suffix, type] of [
+    ['complete', 'task_complete'],
+    ['uncomplete', 'task_uncomplete'],
+  ] as const) {
+    app.post(`/api/v1/tasks/:id/${suffix}`, { config: tasksWrite }, async (req, reply) => {
+      const id = idSchema.safeParse((req.params as { id?: string }).id);
+      if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+      const userId = requireUser(req).id;
+      const failure = await run(userId, type, { id: id.data });
+      if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+      const task = await readTask(userId, id.data);
+      if (!task) return reply.status(404).send({ error: 'not_found' });
+      return { task };
     });
+  }
+
+  app.delete('/api/v1/tasks/:id', { config: tasksWrite }, async (req, reply) => {
+    const id = idSchema.safeParse((req.params as { id?: string }).id);
+    if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+    const failure = await run(requireUser(req).id, 'task_delete', { id: id.data });
+    if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+    return reply.status(204).send();
   });
 
   app.get('/api/v1/projects', { config: projectsRead }, async (req) => {

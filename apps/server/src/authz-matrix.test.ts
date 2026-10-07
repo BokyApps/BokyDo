@@ -95,9 +95,14 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/tasks/completed': 'user/after',
   'GET /api/v1/search': 'user/after',
   'GET /api/v1/tasks/filter': 'user/after',
-  // REST v1 (W10b): resource-oriented reads for integrations, reachable with a bearer token.
+  // REST v1 (W10b): resource-oriented access for integrations, reachable with a bearer token.
   'GET /api/v1/tasks': 'user/after',
   'GET /api/v1/tasks/:id': 'user/after',
+  'POST /api/v1/tasks': 'user/after',
+  'PATCH /api/v1/tasks/:id': 'user/after',
+  'POST /api/v1/tasks/:id/complete': 'user/after',
+  'POST /api/v1/tasks/:id/uncomplete': 'user/after',
+  'DELETE /api/v1/tasks/:id': 'user/after',
   'GET /api/v1/projects': 'user/after',
   'GET /api/v1/projects/:id': 'user/after',
   'GET /api/docs': 'public/after',
@@ -148,6 +153,11 @@ const TOKEN_SCOPES: Record<string, string> = {
   'GET /api/v1/sync/events': 'sync',
   'GET /api/v1/tasks': 'tasks:read',
   'GET /api/v1/tasks/:id': 'tasks:read',
+  'POST /api/v1/tasks': 'tasks:write',
+  'PATCH /api/v1/tasks/:id': 'tasks:write',
+  'POST /api/v1/tasks/:id/complete': 'tasks:write',
+  'POST /api/v1/tasks/:id/uncomplete': 'tasks:write',
+  'DELETE /api/v1/tasks/:id': 'tasks:write',
   'GET /api/v1/projects': 'projects:read',
   'GET /api/v1/projects/:id': 'projects:read',
 };

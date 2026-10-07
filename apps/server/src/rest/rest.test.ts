@@ -4,7 +4,7 @@ import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
 
 let t: TestApp;
-type Person = { id: string; sync: SyncUser; http: Client; token: string };
+type Person = { id: string; sync: SyncUser; http: Client; token: string; writeToken: string };
 const people: Record<string, Person> = {};
 
 async function person(name: string) {
@@ -18,13 +18,18 @@ async function person(name: string) {
   http.csrfToken = s.csrfToken;
   const sync = new SyncUser(t.app.services.sync, userId);
   await sync.run();
-  // A read-only integration token, the way a user would mint one in Settings.
+  // Read-only and read-write integration tokens, the way a user would mint them in Settings.
   const { token } = await t.app.services.apiTokens.createPat(userId, {
     name: `${name}-read`,
     scopes: ['tasks:read', 'projects:read'],
     expiresInDays: 1,
   });
-  people[name] = { id: userId, sync, http, token };
+  const { token: writeToken } = await t.app.services.apiTokens.createPat(userId, {
+    name: `${name}-write`,
+    scopes: ['tasks:read', 'tasks:write', 'projects:read', 'projects:write'],
+    expiresInDays: 1,
+  });
+  people[name] = { id: userId, sync, http, token, writeToken };
 }
 
 /** Like curl: no cookies, no Origin, just the bearer token. */
@@ -42,6 +47,16 @@ function bearer(token: string): Client {
 const as = (who: string) => bearer(people[who]!.token);
 const get = async (client: Client, url: string) => {
   const res = await client.request({ method: 'GET', url });
+  return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
+};
+
+const call = async (
+  client: Client,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  url: string,
+  payload?: Record<string, unknown>,
+) => {
+  const res = await client.request({ method, url, ...(payload === undefined ? {} : { payload }) });
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 };
 
@@ -149,5 +164,106 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
     expect(page.statusCode).toBe(200);
     expect(page.headers['content-type']).toContain('text/html');
     expect(page.body).toContain('/api/docs/openapi.json');
+  });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)('REST v1: writes with bearer tokens', () => {
+  const write = (who: string) => bearer(people[who]!.writeToken);
+
+  it('creates a task and answers with it', async () => {
+    const created = await call(write('alice'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+      content: 'Written over REST',
+      priority: 2,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.task).toMatchObject({
+      content: 'Written over REST',
+      priority: 2,
+      projectId: aliceProject,
+      isCompleted: false,
+    });
+
+    const fetched = await get(as('alice'), `/api/v1/tasks/${created.body.task.id}`);
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.task.content).toBe('Written over REST');
+  });
+
+  it('updates, completes, reopens and deletes', async () => {
+    const created = await call(write('alice'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+      content: 'Draft',
+    });
+    const taskId = created.body.task.id;
+
+    const patched = await call(write('alice'), 'PATCH', `/api/v1/tasks/${taskId}`, {
+      content: 'Final',
+      priority: 1,
+    });
+    expect(patched.status).toBe(200);
+    expect(patched.body.task).toMatchObject({ content: 'Final', priority: 1 });
+
+    const done = await call(write('alice'), 'POST', `/api/v1/tasks/${taskId}/complete`);
+    expect(done.status).toBe(200);
+    expect(done.body.task.isCompleted).toBe(true);
+
+    const reopened = await call(write('alice'), 'POST', `/api/v1/tasks/${taskId}/uncomplete`);
+    expect(reopened.body.task.isCompleted).toBe(false);
+
+    expect((await call(write('alice'), 'DELETE', `/api/v1/tasks/${taskId}`)).status).toBe(204);
+    expect((await get(as('alice'), `/api/v1/tasks/${taskId}`)).status).toBe(404);
+  });
+
+  it('refuses a read-only token and writes into someone else’s project', async () => {
+    const denied = await call(as('alice'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+      content: 'not allowed',
+    });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error).toBe('insufficient_scope');
+
+    // bob holds tasks:write, but not over alice's project.
+    const foreign = await call(write('bob'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+      content: 'not allowed either',
+    });
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.error).toBe('not_found');
+  });
+
+  it('rejects an invalid body without creating anything', async () => {
+    const missingContent = await call(write('alice'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+    });
+    expect(missingContent.status).toBe(400);
+
+    const before = await get(as('alice'), `/api/v1/tasks?projectId=${aliceProject}`);
+    expect(before.body.tasks).toHaveLength(aliceTasks.length);
+    expect((await call(write('alice'), 'PATCH', '/api/v1/tasks/nope', {})).status).toBe(400);
+  });
+
+  it('rolls a recurring task forward rather than closing it', async () => {
+    const created = await call(write('alice'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+      content: 'Water plants',
+      due: {
+        date: '2026-01-01',
+        time: null,
+        timezone: null,
+        string: 'every day',
+        recurrence: { rrule: 'FREQ=DAILY', anchor: 'scheduled' },
+      },
+    });
+    expect(created.status).toBe(201);
+
+    const done = await call(
+      write('alice'),
+      'POST',
+      `/api/v1/tasks/${created.body.task.id}/complete`,
+    );
+    expect(done.status).toBe(200);
+    // The occurrence completed, so the task is open again at its next date.
+    expect(done.body.task.isCompleted).toBe(false);
+    expect(done.body.task.due.date > '2026-01-01').toBe(true);
   });
 });
