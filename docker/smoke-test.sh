@@ -4,7 +4,7 @@
 #        KEEP=1 docker/smoke-test.sh     (leave the stack running afterwards)
 set -euo pipefail
 
-PROJECT=bokydo-smoke
+PROJECT=${PROJECT:-bokydo-smoke}
 PORT=${PORT:-18080}
 C=(docker compose -p "$PROJECT" -f compose.yml -f docker/compose.smoke.yml)
 BASE="http://127.0.0.1:$PORT"
@@ -299,6 +299,84 @@ check "signed unsubscribe link turns that email off" \
 check "unsubscribe changed only that preference" \
   bash -c "jq -e '.user.preferences.notifications.channels | (.reminder.email == false) and (.assigned.email == true)' <<<'$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")'"
 
+echo "== calendar feeds (W11d)"
+INBOX=$(body_of "$(api POST /api/v1/sync '{"cursor":null}')" | jq -r .user.inboxProjectId)
+FEED=$(body_of "$(api POST /api/v1/calendar-feeds "{\"kind\":\"project\",\"targetId\":\"$INBOX\"}")")
+FEED_ID=$(jq -r .id <<<"$FEED"); FEED_TOKEN=$(jq -r .url <<<"$FEED"); FEED_TOKEN=${FEED_TOKEN##*/}; FEED_TOKEN=${FEED_TOKEN%.ics}
+FEED_PATH=/api/v1/calendar/$FEED_TOKEN.ics
+check "feed link carries a 256-bit secret" bash -c "[[ '$FEED_TOKEN' =~ ^[A-Za-z0-9_-]{43}$ ]]"
+FEED_RES=$(curl -s -D - "$BASE$FEED_PATH") # no cookie: the link is the credential
+feed_has() { grep -qi -- "$1" <<<"$FEED_RES"; }
+check "feed is served without a session, as text/calendar" feed_has '^content-type: text/calendar'
+check "feed lists tasks that have a due date" feed_has '^SUMMARY:Smoke reminder'
+check "feed link needs the exact secret" test "$(http_code "$BASE/api/v1/calendar/${FEED_TOKEN%?}x.ics")" = 404
+check "database holds only a hash of the link" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from calendar_feeds where token_id = '$FEED_TOKEN'")" = 0
+check "feed link stays out of the logs" \
+  bash -c "! ${C[*]} logs app 2>&1 | grep -q '$FEED_TOKEN' && ${C[*]} logs app 2>&1 | grep -q 'calendar/\[redacted\]'"
+check "revoking a feed kills its link at once" \
+  bash -c "[[ $(status_of "$(api DELETE /api/v1/calendar-feeds/$FEED_ID)") == 204 && $(http_code "$BASE$FEED_PATH") == 404 ]]"
+
+echo "== templates (W11b)"
+# Importing a template is just ordinary sync commands, so the server vets every row of it like any
+# other write: validation, nesting limits and who may write where. Each refusal below is paired
+# with the same command succeeding without the one thing under test, so it can't pass by accident.
+as_admin
+all_ok() { jq -e '[.results[]?.ok] | all' <<<"$1"; }
+result_is() { jq -e --arg u "$2" --argjson want "$3" '.results[$u].ok == $want' <<<"$1"; } # result_is <body> <uuid> <true|false>
+refused_because() { jq -e --arg u "$2" --arg why "$3" '.results[$u] | (.ok == false) and (((.error // "") + " " + (.message // "")) | test($why))' <<<"$1"; }
+accepted_count() { jq '[.results[] | select(.ok)] | length' <<<"$1"; }
+IMP=$(uuid); IMP_SEC=$(uuid); IMP_T1=$(uuid); IMP_T2=$(uuid)
+r=$(sync_cmds "$(cmd project_add "{\"id\":\"$IMP\",\"name\":\"Imported template\"}"),$(cmd section_add "{\"id\":\"$IMP_SEC\",\"projectId\":\"$IMP\",\"name\":\"Section\",\"sectionOrder\":\"a0\"}"),$(cmd task_add "{\"id\":\"$IMP_T1\",\"projectId\":\"$IMP\",\"sectionId\":\"$IMP_SEC\",\"childOrder\":\"a0\",\"content\":\"=SUM(A1)\",\"description\":\"<img src=x onerror=alert(1)>\\nline two\"}"),$(cmd task_add "{\"id\":\"$IMP_T2\",\"projectId\":\"$IMP\",\"parentId\":\"$IMP_T1\",\"childOrder\":\"a0\",\"content\":\"Sub-task\"}"),$(cmd comment_add "{\"id\":\"$(uuid)\",\"taskId\":\"$IMP_T1\",\"content\":\"[x](javascript:alert(1))\"}")")
+check "a template-shaped batch (project, section, sub-task, comment) is accepted" all_ok "$(body_of "$r")"
+stored_literally() { jq -e --arg id "$IMP_T1" '.tasks[] | select(.id == $id) | (.content == "=SUM(A1)") and (.description | startswith("<img src=x"))' <<<"$1"; }
+check "imported text is stored as plain text" stored_literally "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+
+# Control characters: the same task is fine with a clean title and refused with a control character.
+ROW_OK=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a1\",\"content\":\"clean title\"}")
+ROW_BAD=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a2\",\"content\":\"bad\\u0007title\"}")
+r=$(sync_cmds "$ROW_OK,$ROW_BAD")
+check "a clean title is accepted" result_is "$(body_of "$r")" "$(jq -r .uuid <<<"$ROW_OK")" true
+check "a control character in a title is refused for that reason" \
+  refused_because "$(body_of "$r")" "$(jq -r .uuid <<<"$ROW_BAD")" "single line"
+
+# Nesting: five levels are fine, the sixth is refused for being too deep (every key here is valid).
+CHAIN=""; PREV=""
+for i in 1 2 3 4 5 6; do
+  ID=$(uuid); PARENT=""; [[ -n "$PREV" ]] && PARENT=",\"parentId\":\"$PREV\""
+  ROW=$(cmd task_add "{\"id\":\"$ID\",\"projectId\":\"$IMP\",\"childOrder\":\"a0\",\"content\":\"Level $i\"$PARENT}")
+  CHAIN="${CHAIN:+$CHAIN,}$ROW"; PREV=$ID; DEEPEST=$(jq -r .uuid <<<"$ROW")
+done
+r=$(sync_cmds "$CHAIN")
+check "nesting is accepted down to the depth limit" test "$(accepted_count "$(body_of "$r")")" = 5
+check "the task nested too deeply is refused for that reason" \
+  refused_because "$(body_of "$r")" "$DEEPEST" "too deeply nested"
+
+# Permissions: the same row is accepted from the project's owner and refused from someone else.
+SAM_ROW=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a3\",\"content\":\"Added by the owner\"}")
+check "the owner can add to the imported project" \
+  result_is "$(body_of "$(sync_cmds "$SAM_ROW")")" "$(jq -r .uuid <<<"$SAM_ROW")" true
+as_sam
+SAM_ROW=$(cmd task_add "{\"id\":\"$(uuid)\",\"projectId\":\"$IMP\",\"childOrder\":\"a4\",\"content\":\"Not mine\"}")
+check "an import can't write into a project the user can't edit" \
+  refused_because "$(body_of "$(sync_cmds "$SAM_ROW")")" "$(jq -r .uuid <<<"$SAM_ROW")" "not_found"
+as_admin
+check "the Templates page is served by the web app" test "$(http_code -H 'accept: text/html' "$BASE/templates")" = 200
+
+echo "== accessibility (W12b)"
+# Single-key shortcuts can be turned off (WCAG 2.1.4): the server stores a boolean and only a boolean.
+shortcuts_off() { jq -e '.user.preferences.keyboardShortcuts == false' <<<"$1"; }
+shortcuts_on() { jq -e '.user.preferences.keyboardShortcuts == true' <<<"$1"; }
+check "single-key shortcuts are on by default" shortcuts_on "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+C_OFF=$(cmd user_update_preferences '{"keyboardShortcuts":false}')
+check "turning them off is accepted" result_is "$(body_of "$(sync_cmds "$C_OFF")")" "$(jq -r .uuid <<<"$C_OFF")" true
+check "and persists" shortcuts_off "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+C_BAD=$(cmd user_update_preferences '{"keyboardShortcuts":"no"}')
+check "a non-boolean value is refused" result_is "$(body_of "$(sync_cmds "$C_BAD")")" "$(jq -r .uuid <<<"$C_BAD")" false
+C_ON=$(cmd user_update_preferences '{"keyboardShortcuts":true}')
+sync_cmds "$C_ON" >/dev/null
+check "and they can be turned back on" shortcuts_on "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+
 echo "== AI provider layer (W7a)"
 r=$(api POST /api/v1/admin/ai/credentials '{"provider":"openai-compatible","label":"Mailpit as a model server","baseUrl":"http://mailpit:8025/api/v1","apiKey":"smoke-ai-secret-key"}')
 check "instance AI credential saved" test "$(status_of "$r")" = 201
@@ -374,6 +452,13 @@ check "MCP lists only the token's tools" \
 check "MCP adds a task from natural language" \
   test "$(mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"text":"Smoke via MCP tomorrow p1"}}}' -H "authorization: Bearer $MCPT" | jq -r '.result.structuredContent.task | "\(.content) \(.priority)"')" = "Smoke via MCP p1"
 api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
+
+echo "== Android foundation (A1)"
+check "app discovery describes this instance" \
+  test "$(curl -s "$BASE/.well-known/bokydo" | jq -r '"\(.publicUrl) \(.android.clientId) \(.android.redirectUri)"')" = "$BASE bkdc_bokydo-android-app-001 com.bokyapps.bokydo:/oauth2redirect"
+check "Android app is a first-party OAuth client" \
+  bash -c "[[ \$(curl -s -o /dev/null -w '%{redirect_url}' '$BASE/oauth/authorize?response_type=code&client_id=bkdc_bokydo-android-app-001&redirect_uri=com.bokyapps.bokydo%3A%2Foauth2redirect&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=sync') == $BASE/oauth/consent#* ]]"
+check "asset links empty until fingerprints are configured" test "$(curl -s "$BASE/.well-known/assetlinks.json")" = "[]"
 
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1

@@ -133,6 +133,23 @@ export const settingDefinitions = {
    * expect. Registration grants nothing: every client still needs a user's consent.
    */
   'api.dynamicClientRegistration': { schema: z.boolean(), default: true, secret: false },
+  /**
+   * SHA-256 signing-certificate fingerprints of the Android app builds this instance trusts,
+   * published in /.well-known/assetlinks.json (passkeys and app links). Empty: none.
+   */
+  'android.certFingerprints': {
+    schema: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toUpperCase()
+          .regex(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/, 'Expected a SHA-256 fingerprint (AA:BB:…)'),
+      )
+      .max(10),
+    default: [],
+    secret: false,
+  },
   /** The MCP endpoint (`/mcp`) for AI assistants such as Claude and ChatGPT. */
   'api.mcpEnabled': { schema: z.boolean(), default: true, secret: false },
 

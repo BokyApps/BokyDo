@@ -7,3 +7,5 @@ apps/server/src/security/eff-wordlist.ts
 apps/server/drizzle/
 docs/PLAN.md
 .zap/
+# Kotlin/Gradle project with its own tooling (and build output)
+apps/android/

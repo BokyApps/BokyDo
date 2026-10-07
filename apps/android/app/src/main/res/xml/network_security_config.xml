@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Only the system's certificate authorities are trusted (no user-installed CAs).
+  Cleartext is permitted at the platform level because self-hosted servers on a LAN may use
+  plain http and their addresses can't be listed here; the app itself only allows http to
+  loopback, private IPv4 ranges and .local/.lan/.home.arpa/.internal names (ServerAddress),
+  and warns before using it. Everything else must be https.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

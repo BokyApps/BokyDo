@@ -71,7 +71,7 @@ export function ViewHeader({
                       type="button"
                       aria-pressed={layout.value === value}
                       onClick={() => layout.onChange(value)}
-                      className={`rounded-md border px-1 py-1.5 text-xs ${layout.value === value ? 'border-accent bg-accent/10 font-medium text-accent' : 'border-line text-muted hover:bg-surface-alt'}`}
+                      className={`rounded-md border px-1 py-1.5 text-xs ${layout.value === value ? 'border-accent bg-accent/10 font-medium text-fg' : 'border-line text-muted hover:bg-surface-alt'}`}
                     >
                       {label}
                     </button>

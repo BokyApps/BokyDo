@@ -43,6 +43,21 @@ jobs:
           BOKYDO_TEST_DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/bokydo_test
       - run: pnpm build
 
+  android:
+    name: Android (core tests, lint, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner image ships JDK 17/21 and the Android SDK (ANDROID_HOME); no extra actions.
+      # The wrapper jar must be Gradle 9.6.0's own (checksum published by Gradle).
+      - run: echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+      - run: ./gradlew --no-daemon :core:test :app:lintDebug :app:assembleDebug
+
   smoke:
     name: Compose stack smoke + security gate
     runs-on: ubuntu-latest

@@ -8,17 +8,21 @@ import {
   type RefObject,
 } from 'react';
 
-/** Highlight colours per token kind (backgrounds only: the text itself is the textarea's). */
+/**
+ * Highlight per token kind: a coloured underline drawn behind the textarea's own text. An
+ * underline (unlike a coloured wash) never lowers the text's contrast, in any theme.
+ */
+const UNDERLINE = 'bg-transparent underline decoration-2 underline-offset-4';
 export const TOKEN_CLASS: Record<TokenKind, string> = {
-  due: 'bg-success/20',
-  deadline: 'bg-danger/15',
-  priority: 'bg-p1/20',
-  label: 'bg-p3/20',
-  project: 'bg-accent/20',
-  section: 'bg-accent/20',
-  assignee: 'bg-warning/20',
-  duration: 'bg-warning/20',
-  reminder: 'bg-warning/20',
+  due: `${UNDERLINE} decoration-success`,
+  deadline: `${UNDERLINE} decoration-danger`,
+  priority: `${UNDERLINE} decoration-p1`,
+  label: `${UNDERLINE} decoration-p3`,
+  project: `${UNDERLINE} decoration-accent`,
+  section: `${UNDERLINE} decoration-accent`,
+  assignee: `${UNDERLINE} decoration-warning`,
+  duration: `${UNDERLINE} decoration-warning`,
+  reminder: `${UNDERLINE} decoration-warning`,
 };
 
 export interface Suggestion {

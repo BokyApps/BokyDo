@@ -103,7 +103,7 @@ export function DatePicker({
             <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? 'Date')}
           </Chip>
         ) : (
-          <Button variant="ghost" {...p}>
+          <Button variant="ghost" {...p} {...(value || label ? {} : { 'aria-label': 'Schedule' })}>
             <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? 'Schedule')}
           </Button>
         )
@@ -275,7 +275,11 @@ export function PriorityPicker({
   return (
     <Popover
       trigger={(p) => (
-        <Chip {...p} active={value !== 4} aria-label={`Priority ${value}`}>
+        <Chip
+          {...p}
+          active={value !== 4}
+          aria-label={value === 4 ? 'Priority 4' : `P${value} priority`}
+        >
           <FlagIcon
             className={PRIORITY_CLASS[value]}
             fill={value !== 4 ? 'currentColor' : 'none'}

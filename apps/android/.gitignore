@@ -1,0 +1,13 @@
+# Machine-specific: holds the local SDK path. Never commit.
+local.properties
+.gradle/
+build/
+.kotlin/
+captures/
+*.iml
+.idea/
+# Signing material must never reach the repository.
+*.jks
+*.keystore
+*.p12
+*.pem

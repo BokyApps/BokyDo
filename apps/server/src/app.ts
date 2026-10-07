@@ -27,6 +27,7 @@ import { registerOAuthRoutes } from './oauth/routes.js';
 import { purgeOAuth, registerOAuthServer } from './oauth/server.js';
 import { ApiTokenStore } from './oauth/token-store.js';
 import { registerMcpServer } from './mcp/server.js';
+import { ensureFirstPartyClients, registerAndroidRoutes } from './android/routes.js';
 import { registerRestRoutes } from './rest/routes.js';
 import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
@@ -41,6 +42,7 @@ import { registerAiRoutes } from './ai/routes.js';
 import { AiService } from './ai/service.js';
 import type { Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
+import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
@@ -256,6 +258,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
   registerRestRoutes(app, db, () => settings.get('instance.publicUrl') ?? null);
   registerMcpServer(app, { db, sync, settings, tokens: apiTokens });
+  await ensureFirstPartyClients(db);
+  registerAndroidRoutes(app, { settings });
   registerInviteRoutes(app, { db, sync, sessionKey: deps.secrets.sessionKey });
   registerActivityRoutes(app, db);
   registerDeliveryRoutes(app, {
@@ -266,6 +270,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
+  registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

@@ -10,6 +10,7 @@ import {
   INITIAL_ADMIN_USERNAME,
 } from './setup/initial-admin.js';
 import { VERSION } from './version.js';
+import { REQUEST_LOG_OPTIONS } from './http/log-redaction.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -28,10 +29,7 @@ async function main(): Promise<void> {
     secrets,
     dataDir: config.dataDir,
     webRoot: config.webRoot,
-    logger: {
-      level: config.logLevel,
-      redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
-    },
+    logger: { level: config.logLevel, ...REQUEST_LOG_OPTIONS },
   });
 
   const passphrase = await ensureInitialAdmin(dbHandle.db);

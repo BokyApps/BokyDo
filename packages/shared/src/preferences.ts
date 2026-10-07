@@ -68,6 +68,8 @@ export const preferencesSchema = z
     dateFormat: z.enum(['dmy', 'mdy', 'ymd']),
     startPage: z.enum(['inbox', 'today', 'upcoming']),
     smartDateRecognition: z.boolean(),
+    /** Single-key shortcuts (q, /, g…). Off for people whose speech input or assistive tech types them. */
+    keyboardShortcuts: z.boolean(),
     appearance: appearanceSchema,
     notifications: notificationPrefsSchema,
   })
@@ -81,6 +83,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   dateFormat: 'dmy',
   startPage: 'today',
   smartDateRecognition: true,
+  keyboardShortcuts: true,
   appearance: {
     mode: 'system',
     lightTheme: 'bokydo-light',
