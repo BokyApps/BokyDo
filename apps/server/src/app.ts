@@ -1,3 +1,4 @@
+import path from 'node:path';
 import cookie from '@fastify/cookie';
 import { type Health, type InstanceStatus } from '@bokydo/shared';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
@@ -33,6 +34,9 @@ import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
 import { registerAttachmentRoutes } from './attachments/routes.js';
+import { registerAccountDataRoutes } from './account/data-routes.js';
+import { BackupService } from './backup/backup.js';
+import { registerBackupRoutes, scheduledBackups } from './backup/routes.js';
 import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
@@ -44,6 +48,7 @@ import type { Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
+import { registerRambleRoutes } from './ramble/routes.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { VERSION } from './version.js';
 
@@ -56,6 +61,10 @@ export interface AppDeps {
   logger?: FastifyServerOptions['logger'];
   /** Outbound fetch (breached-password check); injectable for tests. */
   fetchImpl?: typeof fetch;
+  /** Where the instance keys live (default: `<dataDir>/secrets`); backups include them. */
+  secretsDir?: string;
+  /** After a backup restore (default: exit, so the container restarts with the restored keys). */
+  onRestored?: () => void;
   /** DNS for the SSRF-safe outbound client; injectable for tests. */
   resolver?: Resolver;
 }
@@ -73,6 +82,7 @@ export interface AppServices {
   delivery: Delivery;
   ai: AiService;
   apiTokens: ApiTokenStore;
+  backups: BackupService;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -103,6 +113,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     routerOptions: { maxParamLength: 200 },
   });
   const jobs = new JobRunner(app.log);
+  const backups = new BackupService({
+    sql: deps.db.sql,
+    dataDir: deps.dataDir,
+    secretsDir: deps.secretsDir ?? path.join(deps.dataDir, 'secrets'),
+  });
   let lastOAuthPurge = 0;
   const sync = new SyncService(
     db,
@@ -133,6 +148,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
     log: app.log,
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    ...(deps.resolver ? { resolver: deps.resolver } : {}),
   });
   jobs.add(
     {
@@ -152,6 +168,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       },
     },
     { name: 'digests', run: (now) => delivery.digests(now) },
+    { name: 'backups', run: scheduledBackups({ settings, backups, db, log: app.log }) },
     {
       name: 'oauth-housekeeping',
       run: async (now) => {
@@ -182,6 +199,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     delivery,
     ai,
     apiTokens,
+    backups,
   };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
@@ -270,12 +288,28 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
+  registerRambleRoutes(app, { db, settings, sync, ai });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,
     settings,
     store: attachmentStore,
+  });
+  registerBackupRoutes(app, {
+    db,
+    settings,
+    backups,
+    onRestored: deps.onRestored ?? (() => setTimeout(() => process.exit(0), 200)),
+  });
+  registerAccountDataRoutes(app, {
+    db,
+    sync,
+    events,
+    settings,
+    mailer,
+    store: attachmentStore,
+    tokens: apiTokens,
   });
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);

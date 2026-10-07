@@ -51,6 +51,7 @@ describe('runFilterLocally', () => {
       username: 'a',
       isAdmin: false,
       inboxProjectId: 'in',
+      timeZone: 'UTC',
       preferences: DEFAULT_PREFERENCES,
     },
     projects: new Map([

@@ -16,6 +16,9 @@ const NEW_PASSWORD = 'quartz-lantern-gravel-ribbon';
 let t: TestApp;
 let mail: Awaited<ReturnType<typeof captureMail>>;
 let aliceId: string;
+// Mail is sent in the background: wait for it rather than for a fixed time.
+const mailCount = (n: number) => expect.poll(() => mail.length).toBeGreaterThanOrEqual(n);
+// Only for asserting that nothing arrives.
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
 beforeEach(async () => {
@@ -44,6 +47,7 @@ describe.skipIf(!TEST_DATABASE_URL)('password reset', () => {
       expect(res.statusCode).toBe(202);
       expect(res.body).toBe('{"ok":true}');
     }
+    await mailCount(2);
     await settle();
     expect(mail.map((m) => m.to)).toEqual(['alice@example.com', 'alice@example.com']);
     expect(mail[0]!.text).toContain('http://bokydo.test/reset-password#');
@@ -54,10 +58,10 @@ describe.skipIf(!TEST_DATABASE_URL)('password reset', () => {
     await signedIn.login('alice', PASSWORD);
     const c = new Client(t.app);
     await c.post('/api/v1/auth/password-reset', { login: 'alice' });
-    await settle();
+    await mailCount(1);
     const older = tokenFromMail(mail.at(-1));
     await c.post('/api/v1/auth/password-reset', { login: 'alice' });
-    await settle();
+    await mailCount(2);
     const token = tokenFromMail(mail.at(-1));
 
     expect(
@@ -95,7 +99,7 @@ describe.skipIf(!TEST_DATABASE_URL)('password reset', () => {
 
   it('expired links are refused', async () => {
     await new Client(t.app).post('/api/v1/auth/password-reset', { login: 'alice' });
-    await settle();
+    await mailCount(1);
     const token = tokenFromMail(mail.at(-1));
     await t.db.db.update(userTokens).set({ expiresAt: new Date(Date.now() - 1000) });
     expect(
@@ -136,7 +140,7 @@ describe.skipIf(!TEST_DATABASE_URL)('email change and verification', () => {
       payload: { email: 'new@example.com' },
     });
     expect(res.json()).toEqual({ verificationSent: true });
-    await settle();
+    await mailCount(2);
     expect(mail.map((m) => m.to).sort()).toEqual(['alice@example.com', 'new@example.com']);
     const verify = tokenFromMail(mail.find((m) => m.to === 'new@example.com'));
     expect(
@@ -158,7 +162,7 @@ describe.skipIf(!TEST_DATABASE_URL)('email change and verification', () => {
       url: '/api/v1/account/email',
       payload: { email: 'first@example.com' },
     });
-    await settle();
+    await mailCount(1);
     const first = tokenFromMail(mail.find((m) => m.to === 'first@example.com'));
     await c.request({
       method: 'PUT',
@@ -261,7 +265,7 @@ describe.skipIf(!TEST_DATABASE_URL)('security notifications', () => {
     await settle();
     expect(mail).toHaveLength(0);
     await loginFrom('203.0.113.9');
-    await settle();
+    await mailCount(1);
     expect(mail.map((m) => m.subject)).toEqual(['BokyDo: New sign-in to your account']);
     expect(mail[0]!.text).toContain('203.0.113.9');
   });

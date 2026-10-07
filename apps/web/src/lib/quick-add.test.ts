@@ -39,6 +39,7 @@ function state(): SyncState {
       username: 'alice',
       isAdmin: false,
       inboxProjectId: 'inbox',
+      timeZone: 'UTC',
       preferences: DEFAULT_PREFERENCES,
     },
     projects: new Map(

@@ -40,6 +40,8 @@ export async function testApp(
     webRoot: opts.webRoot ?? null,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
+    secretsDir: dataDir,
+    onRestored: () => undefined,
     ...(opts.logger ? { logger: opts.logger } : {}),
   });
   return {

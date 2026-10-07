@@ -223,9 +223,8 @@ export const tasks = pgTable(
     isCompleted: boolean('is_completed').notNull().default(false),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     completedById: uuid('completed_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdById: uuid('created_by_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Null once the creator's account is deleted (the task lives on in a shared project). */
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
     ...softDelete,
   },
   (t) => [
@@ -613,9 +612,12 @@ export const pushSubscriptions = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    sessionId: text('session_id')
-      .notNull()
-      .references(() => sessions.id, { onDelete: 'cascade' }),
+    /** A browser's subscription lives as long as its session… */
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'cascade' }),
+    /** …an app's (UnifiedPush) as long as its OAuth grant (revoking removes it, see revokeGrant). */
+    grantId: uuid('grant_id').references((): AnyPgColumn => oauthGrants.id, {
+      onDelete: 'cascade',
+    }),
     endpoint: text('endpoint').notNull().unique(),
     p256dh: text('p256dh').notNull(),
     auth: text('auth').notNull(),
@@ -624,7 +626,14 @@ export const pushSubscriptions = pgTable(
     lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
     failures: integer('failures').notNull().default(0),
   },
-  (t) => [index('push_subscriptions_user_idx').on(t.userId)],
+  (t) => [
+    index('push_subscriptions_user_idx').on(t.userId),
+    index('push_subscriptions_grant_idx').on(t.grantId),
+    check(
+      'push_subscriptions_owner_check',
+      sql`(${t.sessionId} is null) <> (${t.grantId} is null)`,
+    ),
+  ],
 );
 
 /**

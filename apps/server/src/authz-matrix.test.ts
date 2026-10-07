@@ -48,6 +48,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/account/passkeys/:id': 'restricted/always',
   'DELETE /api/v1/account/passkeys/:id': 'restricted/always',
   'PUT /api/v1/account/email': 'user/always',
+  'GET /api/v1/account/export': 'user/after',
+  'GET /api/v1/account/deletion': 'user/after',
+  'POST /api/v1/account/delete': 'user/after',
   // Setup and administration
   'GET /api/v1/setup': 'admin/before',
   'PUT /api/v1/setup/public-url': 'admin/before',
@@ -55,11 +58,18 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/admin/settings': 'admin/always',
   'PATCH /api/v1/admin/settings': 'admin/always',
   'POST /api/v1/admin/email/test': 'admin/always',
+  'GET /api/v1/admin/backups': 'admin/always',
+  'POST /api/v1/admin/backups': 'admin/always',
+  'GET /api/v1/admin/backups/:name': 'admin/always',
+  'DELETE /api/v1/admin/backups/:name': 'admin/always',
+  'POST /api/v1/admin/backups/upload': 'admin/always',
+  'POST /api/v1/admin/backups/:name/restore': 'admin/always',
   'GET /api/v1/admin/ai/credentials': 'admin/after',
   'POST /api/v1/admin/ai/credentials': 'admin/after',
   'PATCH /api/v1/admin/ai/credentials/:id': 'admin/after',
   'DELETE /api/v1/admin/ai/credentials/:id': 'admin/after',
   'POST /api/v1/admin/ai/credentials/:id/test': 'admin/after',
+  'POST /api/v1/admin/ai/credentials/:id/try': 'admin/after',
   'PUT /api/v1/admin/ai/routing': 'admin/after',
   'GET /api/v1/admin/ai/usage': 'admin/after',
   // OAuth consent, authorized apps, personal access tokens
@@ -77,12 +87,15 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/ai/credentials/:id': 'user/after',
   'DELETE /api/v1/ai/credentials/:id': 'user/after',
   'POST /api/v1/ai/credentials/:id/test': 'user/after',
+  'POST /api/v1/ai/credentials/:id/try': 'user/after',
   'GET /api/v1/ai/routing': 'user/after',
   'PUT /api/v1/ai/routing': 'user/after',
   'GET /api/v1/ai/usage': 'user/after',
   'GET /api/v1/admin/users': 'admin/after',
   'POST /api/v1/admin/users': 'admin/after',
   'PATCH /api/v1/admin/users/:id': 'admin/after',
+  'GET /api/v1/admin/users/:id/deletion': 'admin/after',
+  'POST /api/v1/admin/users/:id/delete': 'admin/after',
   'POST /api/v1/admin/users/:id/reset-mfa': 'admin/after',
   'POST /api/v1/admin/users/:id/password-reset-link': 'admin/after',
   'GET /api/v1/admin/invites': 'admin/after',
@@ -119,6 +132,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/push/subscriptions': 'user/after',
   'DELETE /api/v1/push/subscriptions': 'user/after',
   'POST /api/v1/push/test': 'user/after',
+  'POST /api/v1/ramble/transcribe': 'user/after',
+  'POST /api/v1/ramble/extract': 'user/after',
+  'POST /api/v1/ramble/commit': 'user/after',
   'POST /api/v1/notifications/unsubscribe': 'public/after',
   'POST /api/v1/workspaces/:id/invites': 'user/after',
   'GET /api/v1/workspaces/:id/invites': 'user/after',
@@ -166,6 +182,13 @@ const TOKEN_SCOPES: Record<string, string> = {
   'POST /api/v1/projects': 'projects:write',
   'PATCH /api/v1/projects/:id': 'projects:write',
   'DELETE /api/v1/projects/:id': 'projects:write',
+  'POST /api/v1/ramble/transcribe': 'ai:use',
+  'POST /api/v1/ramble/extract': 'ai:use',
+  'POST /api/v1/ramble/commit': 'tasks:write',
+  'GET /api/v1/push/key': 'sync',
+  'POST /api/v1/push/subscriptions': 'sync',
+  'DELETE /api/v1/push/subscriptions': 'sync',
+  'POST /api/v1/push/test': 'sync',
 };
 
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {
@@ -332,8 +355,8 @@ describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', { timeout: 60_000 },
     const narrow = await app.services.apiTokens.createPat(admin!.id, {
       name: 'narrow',
       // Deliberately a scope that no /api route requires, so this token is refused everywhere
-      // below. It must not hold `tasks:read`/`projects:read`: those now unlock the REST reads.
-      scopes: ['ai:use'],
+      // below. Not `tasks:read`/`projects:read` (REST reads) nor `ai:use` (Ramble).
+      scopes: ['comments:read'],
       expiresInDays: 1,
     });
     const bearerClient = (token: string) => {

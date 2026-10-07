@@ -20,6 +20,8 @@ cleanup() {
   [[ "${KEEP:-}" == 1 ]] || "${C[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+# set -e stops on any failing command outside check(); say which, or CI only shows "exit code N".
+trap 'rc=$?; echo "== ABORTED (exit $rc) at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 check() { # check <description> <command...>
   local desc=$1; shift
@@ -279,6 +281,16 @@ check "push key is a P-256 public key" \
 r=$(api POST /api/v1/push/subscriptions '{"endpoint":"https://169.254.169.254/latest/meta-data/","keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}}') # gitleaks:allow (RFC 8291 example keys)
 check "push endpoints outside known push services are refused (SSRF)" \
   bash -c "[[ $(status_of "$r") == 400 ]] && jq -e '.error == \"unsupported_push_service\"' <<<'$(body_of "$r")'"
+UP_SUB='{"endpoint":"https://push.example.com/upSmoke?up=1","keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}}' # gitleaks:allow (RFC 8291 example keys)
+check "UnifiedPush server refused until the admin lists it (M1)" \
+  test "$(status_of "$(api POST /api/v1/push/subscriptions "$UP_SUB")")" = 400
+check "push allow-list rejects IP addresses and bare domains" \
+  test "$(status_of "$(api PATCH /api/v1/admin/settings '{"push.allowedHosts":["10.0.0.5","*.com"]}')")" = 400
+api PATCH /api/v1/admin/settings '{"push.allowedHosts":["push.example.com"]}' >/dev/null
+check "listed UnifiedPush server accepted" \
+  test "$(status_of "$(api POST /api/v1/push/subscriptions "$UP_SUB")")" = 201
+api DELETE /api/v1/push/subscriptions '{"endpoint":"https://push.example.com/upSmoke?up=1"}' >/dev/null
+api PATCH /api/v1/admin/settings '{"push.allowedHosts":[]}' >/dev/null
 # A real reminder: due two minutes from now (the smoke admin's zone), reminded one minute before.
 DUE_DAY=$(TZ=Asia/Phnom_Penh date -d '+2 min' +%F); DUE_TIME=$(TZ=Asia/Phnom_Penh date -d '+2 min' +%H:%M)
 REM_TASK=$(uuid)
@@ -389,6 +401,14 @@ check "private network unreachable until allow-listed (SSRF)" \
 api PATCH /api/v1/admin/settings '{"network.privateAllowlist":["mailpit"]}' >/dev/null
 check "allow-listed private host is reached (and answers 404)" \
   bash -c "jq -e '.error == \"unexpected_status\" and .status == 404' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
+check "a real model call through the allow-listed host fails cleanly (W7b)" \
+  bash -c "jq -e '.ok == false and (.status == 404 or .status == 405)' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/try" '{"model":"smoke-model","kind":"chat"}')")'"
+check "Ramble answers clearly when no model is set up (W8)" \
+  bash -c "jq -e '.error == \"ai_not_configured\"' <<<'$(body_of "$(api POST /api/v1/ramble/extract '{"text":"buy milk tomorrow"}')")'"
+check "Ramble refuses non-audio uploads" \
+  test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "Origin: $BASE" -H "x-csrf-token: $CSRF" -H 'content-type: video/mp4' --data-binary 'x' "$BASE/api/v1/ramble/transcribe?seconds=1")" = 415
+check "Ramble commit creates the reviewed tasks" \
+  test "$(status_of "$(api POST /api/v1/ramble/commit '{"tasks":[{"ref":"d1","content":"Smoke ramble task","due":"tomorrow","priority":2}]}')")" = 201
 check "metadata address refused even for admins" \
   test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://169.254.169.254/latest"}')")" = 400
 r=$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"Mine","baseUrl":"https://mailpit:8025/v1"}')
@@ -460,6 +480,48 @@ check "Android app is a first-party OAuth client" \
   bash -c "[[ \$(curl -s -o /dev/null -w '%{redirect_url}' '$BASE/oauth/authorize?response_type=code&client_id=bkdc_bokydo-android-app-001&redirect_uri=com.bokyapps.bokydo%3A%2Foauth2redirect&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=sync') == $BASE/oauth/consent#* ]]"
 check "asset links empty until fingerprints are configured" test "$(curl -s "$BASE/.well-known/assetlinks.json")" = "[]"
 
+echo "== export, account deletion and backups (W11e)"
+as_admin
+api POST /api/v1/auth/reauth "{\"password\":\"$NEWPW2\"}" >/dev/null
+EXPORT_ZIP=$(mktemp)
+curl -s -b "$JAR" -o "$EXPORT_ZIP" "$BASE/api/v1/account/export"
+check "export is a valid ZIP with everything in it" \
+  python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; n=z.namelist(); assert 'export.json' in n and 'tasks.csv' in n; assert b'Smoke task' in z.read('export.json')" "$EXPORT_ZIP"
+LEAVER=$(body_of "$(api POST /api/v1/admin/users '{"username":"leaver","email":"leaver@example.com"}')" | jq -r .id)
+check "admin deletes an account (username confirmed)" \
+  test "$(status_of "$(api POST "/api/v1/admin/users/$LEAVER/delete" '{"confirm":"leaver"}')")" = 204
+check "deleted account is gone" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc "select count(*) from users where username='leaver'")" = 0
+api PATCH /api/v1/admin/settings '{"backups.passphrase":"smoke-backup-passphrase"}' >/dev/null
+r=$(api POST /api/v1/admin/backups)
+BK=$(body_of "$r" | jq -r .name)
+check "backup created" test "$(status_of "$r")" = 201
+BK_STATE="$(volume app-data stat -c '%a' "/v/backups/$BK") $(volume app-data grep -c 'Smoke task' "/v/backups/$BK" || true)"
+check "backup file is 0600 and encrypted at rest" test "$BK_STATE" = "600 0"
+AFTER=$(uuid)
+sync_cmds "$(cmd project_add "{\"id\":\"$AFTER\",\"name\":\"Made after the backup\"}")" >/dev/null
+check "wrong passphrase refused, nothing changed" \
+  test "$(body_of "$(api POST "/api/v1/admin/backups/$BK/restore" '{"passphrase":"not-the-passphrase","confirm":"RESTORE"}')" | jq -r .error)" = backup_passphrase_or_damaged
+check "restore accepted" \
+  test "$(status_of "$(api POST "/api/v1/admin/backups/$BK/restore" '{"passphrase":"smoke-backup-passphrase","confirm":"RESTORE"}')")" = 200
+sleep 3
+for _ in $(seq 60); do
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
+  sleep 2
+done
+check "server restarted after the restore" test "$(curl -s "$BASE/api/v1/instance" | jq -r .setupComplete)" = true
+check "everyone was signed out" test "$(status_of "$(api GET /api/v1/auth/session)")" = 401
+# The admin has TOTP (enrolled above): password, then a fresh code (the restored database still
+# knows the last step used, minutes ago).
+api POST /api/v1/auth/login "{\"username\":\"admin\",\"password\":\"$NEWPW2\"}" >/dev/null
+r=$(api POST /api/v1/auth/mfa/totp "{\"code\":\"$(totp "$SECRET" 1)\"}")
+CSRF=$(body_of "$r" | jq -r .csrfToken)
+ADMIN_CSRF=$CSRF
+r=$(api POST /api/v1/sync '{"cursor":null}')
+check "restored data is back and later changes are gone" \
+  bash -c "jq -e '(any(.tasks[]; .content == \"Smoke task\")) and (all(.projects[]; .id != \"$AFTER\"))' <<<'$(body_of "$r")' >/dev/null"
+check "a pre-restore backup was kept" test "$(volume app-data ls /v/backups | grep -c '^pre-restore-')" -ge 1
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5
@@ -492,8 +554,13 @@ for _ in $(seq 30); do
   sleep 1
 done
 NEW_PW=$(volume db-secret cat /v/password)
-printf "%s\n" "ALTER ROLE bokydo WITH PASSWORD :'pw';" \
-  | "${C[@]}" exec -T db psql -U bokydo -d bokydo -v pw="$NEW_PW" >/dev/null 2>&1
+# Postgres may still be starting (psql exits 2 until it accepts connections): retry.
+for _ in $(seq 30); do
+  printf "%s\n" "ALTER ROLE bokydo WITH PASSWORD :'pw';" \
+    | "${C[@]}" exec -T db psql -U bokydo -d bokydo -v ON_ERROR_STOP=1 -v pw="$NEW_PW" \
+      >/dev/null 2>&1 && break
+  sleep 1
+done
 for _ in $(seq 60); do
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1" 2>/dev/null)" == healthy ]] && break
   sleep 2

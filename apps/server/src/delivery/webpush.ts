@@ -1,3 +1,4 @@
+import { pushHostAllowed } from '@bokydo/shared';
 import {
   createECDH,
   createPrivateKey,
@@ -6,6 +7,7 @@ import {
   randomBytes,
   sign,
 } from 'node:crypto';
+import type { OutboundFetch } from '../net/outbound.js';
 
 /**
  * Web Push without third-party code: message encryption (RFC 8291, aes128gcm per RFC 8188)
@@ -111,7 +113,9 @@ export function newVapidKey(): string {
 
 /**
  * Push services browsers actually use. The server POSTs to whatever endpoint a client registers,
- * so endpoints are limited to these hosts over HTTPS (no SSRF into the LAN or cloud metadata).
+ * so endpoints are limited to these hosts, plus the admin's `push.allowedHosts` (UnifiedPush,
+ * self-hosted), over HTTPS. Delivery goes through the outbound client as well, so a listed name
+ * that resolves to loopback or metadata addresses still isn't reached.
  */
 const PUSH_HOSTS = [
   'fcm.googleapis.com', // Chrome, Edge, Brave, Opera, Samsung Internet
@@ -121,7 +125,7 @@ const PUSH_HOSTS = [
 ];
 const PUSH_SUFFIXES = ['.push.apple.com', '.notify.windows.com'];
 
-export function pushEndpointAllowed(endpoint: string): boolean {
+export function pushEndpointAllowed(endpoint: string, extraHosts: readonly string[] = []): boolean {
   if (endpoint.length > 1024) return false;
   let url: URL;
   try {
@@ -130,8 +134,9 @@ export function pushEndpointAllowed(endpoint: string): boolean {
     return false;
   }
   if (url.protocol !== 'https:' || url.username || url.password) return false;
-  if (url.port && url.port !== '443') return false;
   const host = url.hostname.toLowerCase();
+  if (pushHostAllowed(extraHosts, host, url.port ? Number(url.port) : 443)) return true;
+  if (url.port && url.port !== '443') return false;
   return PUSH_HOSTS.includes(host) || PUSH_SUFFIXES.some((s) => host.endsWith(s));
 }
 
@@ -152,30 +157,39 @@ export async function sendPush(
   message: PushMessage,
   vapid: VapidKeys,
   subject: string,
-  opts: { urgency?: 'high' | 'normal'; ttlSeconds?: number; fetchImpl?: typeof fetch } = {},
+  opts: {
+    fetch: OutboundFetch;
+    /** The admin's extra push hosts (`push.allowedHosts`). */
+    extraHosts?: readonly string[];
+    urgency?: 'high' | 'normal';
+    ttlSeconds?: number;
+  },
 ): Promise<PushResult> {
-  if (!pushEndpointAllowed(subscription.endpoint)) return 'gone';
+  // Re-checked at send time: removing a host from the list stops delivery to it at once.
+  if (!pushEndpointAllowed(subscription.endpoint, opts.extraHosts)) return 'gone';
   let body: Buffer;
   try {
     body = encryptPayload(Buffer.from(JSON.stringify(message)), subscription);
   } catch {
     return 'gone'; // keys that can't be used will never work
   }
-  const res = await (opts.fetchImpl ?? fetch)(subscription.endpoint, {
-    method: 'POST',
-    redirect: 'error',
-    signal: AbortSignal.timeout(10_000),
-    headers: {
-      authorization: vapid.authorization(subscription.endpoint, subject),
-      'content-encoding': 'aes128gcm',
-      'content-type': 'application/octet-stream',
-      ttl: String(opts.ttlSeconds ?? 4 * 3600),
-      urgency: opts.urgency ?? 'normal',
-    },
-    body,
-  }).catch(() => null);
+  const res = await opts
+    .fetch(subscription.endpoint, {
+      method: 'POST',
+      timeoutMs: 10_000,
+      maxResponseBytes: 64 * 1024,
+      headers: {
+        authorization: vapid.authorization(subscription.endpoint, subject),
+        'content-encoding': 'aes128gcm',
+        'content-type': 'application/octet-stream',
+        ttl: String(opts.ttlSeconds ?? 4 * 3600),
+        urgency: opts.urgency ?? 'normal',
+      },
+      body,
+    })
+    .catch(() => null);
   if (!res) return 'failed';
-  await res.body?.cancel().catch(() => undefined);
+  res.cancel();
   if (res.status === 404 || res.status === 410) return 'gone';
-  return res.ok ? 'sent' : 'failed';
+  return res.status >= 200 && res.status < 300 ? 'sent' : 'failed';
 }

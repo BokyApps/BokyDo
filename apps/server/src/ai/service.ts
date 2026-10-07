@@ -7,6 +7,7 @@ import {
   type AiRouting,
 } from '@bokydo/shared';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Database } from '../db/client.js';
 import { users } from '../db/schema.js';
 import {
@@ -18,7 +19,23 @@ import {
 } from '../net/outbound.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import { listModels, type AiCallContext, type TestResult } from './adapters.js';
+import {
+  chat,
+  checkChatRequest,
+  promptChars,
+  type ChatOptions,
+  type ChatRequest,
+  type ChatResult,
+} from './chat.js';
 import type { AiCredentialStore, CredentialOwner, UsableCredential } from './credentials.js';
+import {
+  checkEmbedRequest,
+  checkTranscribeRequest,
+  embed,
+  transcribe,
+  type TranscribeRequest,
+} from './media.js';
+import { AiProviderError, type TransportOptions } from './transport.js';
 import { reserveUsage, settleUsage, type ReportedUsage, type UsageAmounts } from './usage.js';
 
 export class AiNotConfiguredError extends Error {
@@ -59,6 +76,80 @@ export class AiCallError extends Error {
 
 const NO_USAGE: ReportedUsage = { inputTokens: 0, outputTokens: 0, audioSeconds: 0 };
 
+const addUsage = (a: ReportedUsage, b: ReportedUsage): ReportedUsage => ({
+  inputTokens: a.inputTokens + b.inputTokens,
+  outputTokens: a.outputTokens + b.outputTokens,
+  audioSeconds: a.audioSeconds + b.audioSeconds,
+});
+
+/**
+ * Worst-case tokens for a prompt: about two characters per token, which over-reserves for
+ * English and stays safe for scripts that tokenise densely. Settled to the real count afterwards.
+ */
+const promptEstimate = (chars: number) => Math.ceil(chars / 2);
+
+const CHAT_CAPABILITIES = new Set(['chat.structured', 'chat.long', 'decision']);
+
+export interface ChatJsonRequest<T> extends Omit<ChatRequest, 'json' | 'tools' | 'toolChoice'> {
+  /** What the reply must parse as. Its JSON Schema (input side) is sent to the model. */
+  schema: z.ZodType<T>;
+  /** Short name for the schema, e.g. "task_suggestions". */
+  name: string;
+}
+
+export interface TryResult {
+  ok: boolean;
+  error?: string;
+  status?: number;
+  latencyMs?: number;
+  /** chat: the start of the reply; embed: the vector length. */
+  reply?: string;
+  dimensions?: number;
+}
+
+/** One second of 16 kHz mono silence as WAV: enough to prove a speech-to-text route works. */
+function silentWav(): Buffer {
+  const samples = 16_000;
+  const b = Buffer.alloc(44 + samples * 2);
+  b.write('RIFF', 0);
+  b.writeUInt32LE(36 + samples * 2, 4);
+  b.write('WAVEfmt ', 8);
+  b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20);
+  b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(16_000, 24);
+  b.writeUInt32LE(32_000, 28);
+  b.writeUInt16LE(2, 32);
+  b.writeUInt16LE(16, 34);
+  b.write('data', 36);
+  b.writeUInt32LE(samples * 2, 40);
+  return b;
+}
+
+/** JSON Schema for what a model must produce, without the meta key some providers reject. */
+export function replySchema(schema: z.ZodType): Record<string, unknown> {
+  const json = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+  delete json.$schema;
+  return json;
+}
+
+/**
+ * Model replies sometimes wrap JSON in a Markdown fence. Plain slicing, not a regex: replies are
+ * untrusted and can be megabytes long.
+ */
+function parseReplyJson(text: string): unknown {
+  let body = text.trim();
+  if (body.startsWith('```') && body.endsWith('```') && body.length >= 6) {
+    const nl = body.indexOf('\n');
+    body = nl === -1 ? '' : body.slice(nl + 1, -3);
+  }
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Feature → provider/model routing, the network policy per credential scope, and metering.
  * Every AI feature goes through `run`: it picks the route, reserves budget, hands the adapter
@@ -72,6 +163,8 @@ export class AiService {
       credentials: AiCredentialStore;
       /** Tests only: replaces DNS for the outbound client. */
       resolver?: Resolver;
+      /** Tests only: replaces the retry backoff timer. */
+      transport?: TransportOptions;
     },
   ) {}
 
@@ -177,8 +270,183 @@ export class AiService {
         this.deps.db,
         usageId,
         'failed',
-        err instanceof AiCallError ? err.usage : NO_USAGE,
+        err instanceof AiCallError || err instanceof AiProviderError ? err.usage : NO_USAGE,
       );
+      throw err;
+    }
+  }
+
+  private requireCapability(feature: AiFeature, allowed: (capability: string) => boolean) {
+    if (!allowed(AI_FEATURES[feature])) throw new TypeError(`${feature} can't be used this way`);
+  }
+
+  /**
+   * A chat completion for `feature`, metered against its route. Pass `onText` to stream the
+   * reply. Throws AiNotConfiguredError, AiBudgetExceededError or AiProviderError.
+   */
+  async chat(
+    user: AiUser,
+    feature: AiFeature,
+    request: ChatRequest,
+    opts: Omit<ChatOptions, keyof TransportOptions> & { signal?: AbortSignal } = {},
+  ): Promise<ChatResult> {
+    this.requireCapability(feature, (c) => CHAT_CAPABILITIES.has(c));
+    checkChatRequest(request);
+    const { signal, ...chatOpts } = opts;
+    return this.run(user, {
+      feature,
+      estimate: { tokens: promptEstimate(promptChars(request)) + request.maxOutputTokens },
+      ...(signal ? { signal } : {}),
+      run: async (ctx) => {
+        const result = await chat(ctx, request, { ...this.deps.transport, ...chatOpts });
+        return { result, usage: result.usage };
+      },
+    });
+  }
+
+  /**
+   * A structured reply, validated against `schema`. A reply that doesn't validate gets one
+   * correction round; after that the call fails with `output_invalid`. A refusal fails with
+   * `refused`. Callers still check what the value refers to (ids, permissions): the schema only
+   * proves its shape.
+   */
+  async chatJson<T>(
+    user: AiUser,
+    feature: AiFeature,
+    request: ChatJsonRequest<T>,
+    opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<{ value: T; result: ChatResult }> {
+    this.requireCapability(feature, (c) => CHAT_CAPABILITIES.has(c));
+    const { schema, name, ...rest } = request;
+    const base: ChatRequest = { ...rest, json: { name, schema: replySchema(schema) } };
+    checkChatRequest(base);
+    const { signal, ...chatOpts } = opts;
+    return this.run(user, {
+      feature,
+      // Room for the correction round too.
+      estimate: { tokens: 2 * (promptEstimate(promptChars(base)) + base.maxOutputTokens) },
+      ...(signal ? { signal } : {}),
+      run: async (ctx) => {
+        let usage = NO_USAGE;
+        const attempt = async (req: ChatRequest) => {
+          try {
+            const r = await chat(ctx, req, { ...this.deps.transport, ...chatOpts });
+            usage = addUsage(usage, r.usage);
+            return r;
+          } catch (err) {
+            if (err instanceof AiProviderError)
+              throw new AiProviderError(err.code, err.status, addUsage(usage, err.usage));
+            throw err;
+          }
+        };
+        let result = await attempt(base);
+        for (let round = 0; ; round++) {
+          if (result.stop === 'refused') throw new AiProviderError('refused', undefined, usage);
+          const parsed = schema.safeParse(parseReplyJson(result.text));
+          if (parsed.success) return { result: { value: parsed.data, result }, usage };
+          if (round === 1) throw new AiProviderError('output_invalid', undefined, usage);
+          const problems = parsed.error.issues
+            .slice(0, 5)
+            .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+            .join('; ');
+          result = await attempt({
+            ...base,
+            messages: [
+              ...base.messages,
+              { role: 'assistant', content: result.text.slice(0, 20_000) },
+              {
+                role: 'user',
+                content: `That reply doesn't match the required JSON Schema (${problems.slice(0, 1000)}). Reply again with only the corrected JSON.`,
+              },
+            ],
+          });
+        }
+      },
+    });
+  }
+
+  /** Speech to text for `feature` (a speech-to-text route), metered by audio length. */
+  async transcribe(
+    user: AiUser,
+    feature: AiFeature,
+    request: TranscribeRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<string> {
+    this.requireCapability(feature, (c) => c === 'stt.batch');
+    checkTranscribeRequest(request);
+    return this.run(user, {
+      feature,
+      estimate: { audioSeconds: Math.ceil(request.durationSeconds) },
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      run: async (ctx) => {
+        const r = await transcribe(ctx, request, this.deps.transport);
+        return { result: r.text, usage: r.usage };
+      },
+    });
+  }
+
+  /** Embedding vectors for `texts`, in order. */
+  async embed(
+    user: AiUser,
+    texts: string[],
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<number[][]> {
+    checkEmbedRequest(texts);
+    return this.run(user, {
+      feature: 'embeddings',
+      estimate: { tokens: promptEstimate(texts.reduce((n, t) => n + t.length, 0)) },
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      run: async (ctx) => {
+        const r = await embed(ctx, texts, this.deps.transport);
+        return { result: r.vectors, usage: r.usage };
+      },
+    });
+  }
+
+  /**
+   * "Try this model": a minimal real call with a stored credential of this owner, so a route can
+   * be checked before it's saved. Not metered (it's tiny and rate-limited by the route); the reply
+   * is cut short and errors are codes only.
+   */
+  async tryModel(
+    owner: CredentialOwner,
+    id: string,
+    model: string,
+    kind: 'chat' | 'transcribe' | 'embed',
+  ): Promise<TryResult | null> {
+    const credential = await this.deps.credentials.usable(owner, id);
+    if (!credential) return null;
+    const capability =
+      kind === 'chat' ? 'chat.structured' : kind === 'transcribe' ? 'stt.batch' : 'embeddings';
+    if (!providerSupports(credential.provider, capability))
+      return { ok: false, error: 'unsupported' };
+    const ctx: AiCallContext = { credential, model, fetch: this.outboundFor(owner) };
+    const started = Date.now();
+    try {
+      if (kind === 'chat') {
+        const r = await chat(
+          ctx,
+          {
+            messages: [{ role: 'user', content: 'Reply with the single word: OK' }],
+            maxOutputTokens: 32,
+          },
+          { ...this.deps.transport, timeoutMs: 30_000 },
+        );
+        return { ok: true, latencyMs: Date.now() - started, reply: r.text.trim().slice(0, 100) };
+      }
+      if (kind === 'transcribe') {
+        await transcribe(
+          ctx,
+          { audio: silentWav(), mimeType: 'audio/wav', durationSeconds: 1 },
+          this.deps.transport,
+        );
+        return { ok: true, latencyMs: Date.now() - started };
+      }
+      const r = await embed(ctx, ['BokyDo connection test'], this.deps.transport);
+      return { ok: true, latencyMs: Date.now() - started, dimensions: r.vectors[0]?.length ?? 0 };
+    } catch (err) {
+      if (err instanceof AiProviderError)
+        return { ok: false, error: err.code, ...(err.status ? { status: err.status } : {}) };
       throw err;
     }
   }

@@ -171,7 +171,8 @@ export interface Task {
   childOrder: string;
   isCompleted: boolean;
   completedAt: string | null;
-  createdById: string;
+  /** Null when the creator's account has been deleted. */
+  createdById: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -199,6 +200,8 @@ export interface SyncUser {
   isAdmin: boolean;
   inboxProjectId: string;
   preferences: Preferences;
+  /** The zone floating times and reminders use: the preference, else the instance default. */
+  timeZone: string;
 }
 
 /** Someone you share at least one project with (yourself included). */
