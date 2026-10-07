@@ -1,7 +1,10 @@
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { tasks } from '../db/schema.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
+import { RESPONSE_SCHEMAS } from './routes.js';
 
 let t: TestApp;
 type Person = { id: string; sync: SyncUser; http: Client; token: string; writeToken: string };
@@ -187,6 +190,24 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: writes with bearer tokens', () => 
     const fetched = await get(as('alice'), `/api/v1/tasks/${created.body.task.id}`);
     expect(fetched.status).toBe(200);
     expect(fetched.body.task.content).toBe('Written over REST');
+  });
+
+  it('answers in exactly the shapes the OpenAPI document describes', async () => {
+    const created = await call(write('alice'), 'POST', '/api/v1/tasks', {
+      projectId: aliceProject,
+      content: 'Labelled',
+      labels: ['home', 'errands'],
+    });
+    expect(created.status).toBe(201);
+    expect(RESPONSE_SCHEMAS.taskSingle.safeParse(created.body).error).toBeUndefined();
+    // A task whose creator's account was deleted has no creator any more.
+    await t.db.db.update(tasks).set({ createdById: null }).where(eq(tasks.id, aliceTasks[0]!));
+    const list = await get(as('alice'), '/api/v1/tasks');
+    expect(RESPONSE_SCHEMAS.taskList.safeParse(list.body).error).toBeUndefined();
+    const projects = await get(as('alice'), '/api/v1/projects');
+    expect(RESPONSE_SCHEMAS.projectList.safeParse(projects.body).error).toBeUndefined();
+    const one = await get(as('alice'), `/api/v1/projects/${aliceProject}`);
+    expect(RESPONSE_SCHEMAS.projectSingle.safeParse(one.body).error).toBeUndefined();
   });
 
   it('updates, completes, reopens and deletes', async () => {

@@ -38,13 +38,15 @@ const taskResource = z.object({
   due: dueSchema.nullable(),
   deadline: z.string().nullable(),
   durationMinutes: z.number().int().nullable(),
-  labels: z.array(idSchema),
+  /** Label names (labels are referenced by name, like in quick add). */
+  labels: z.array(z.string()),
   assigneeId: idSchema.nullable(),
   assignedById: idSchema.nullable(),
   childOrder: orderKeySchema,
   isCompleted: z.boolean(),
   completedAt: z.iso.datetime().nullable(),
-  createdById: idSchema,
+  /** Null once the creator's account has been deleted (ADR 0013). */
+  createdById: idSchema.nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -81,6 +83,9 @@ const taskList = z.object({ tasks: z.array(taskResource), nextCursor: idSchema.n
 const taskSingle = z.object({ task: taskResource });
 const projectList = z.object({ projects: z.array(projectResource) });
 const projectSingle = z.object({ project: projectResource });
+
+/** For tests: real responses must match what the OpenAPI document promises. */
+export const RESPONSE_SCHEMAS = { taskList, taskSingle, projectList, projectSingle };
 
 /**
  * Write bodies are the sync command schemas minus the id the route supplies itself. Deriving them

@@ -1,6 +1,6 @@
 # Threat model
 
-Living document, STRIDE per component. Every deliverable updates it. **v0.17 — F1–F4, W1–W6, W7a, W7b, W8 (server), W10a, W10c, W11b, W11d, W11e, W12b, A1, A3, M1 (2026-10-07).**
+Living document, STRIDE per component. Every deliverable updates it. **v0.18 — F1–F4, W1–W6, W7a, W7b, W8 (server), W10a, W10b, W10c, W11b, W11d, W11e, W12b, A1, A3, M1 (2026-10-07).**
 
 ## Assets
 
