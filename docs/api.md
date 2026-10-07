@@ -158,3 +158,5 @@ definition.
 - Grant the narrowest scope that does the job; `sync` is the whole account.
 - Revoking a token or removing someone from a project takes effect immediately: the next request
   re-checks project access, so history does not leak after access is lost.
+- For server-to-server push instead of polling, see [webhooks.md](webhooks.md): signed event
+  deliveries to your own https endpoints, managed under Settings → Webhooks.
