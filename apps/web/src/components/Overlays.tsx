@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useTaskActions } from '../lib/actions.js';
 import { api } from '../lib/api.js';
-import { useSyncState } from '../lib/sync.js';
+import { usePreferences, useSyncState } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { liveTasks } from '../lib/views.js';
 import { CheckIcon, SearchIcon, TrashIcon } from './icons.js';
@@ -210,11 +210,28 @@ export const SHORTCUTS: [string, string][] = [
   ['?', 'This help'],
 ];
 
+/** What still works with single-key shortcuts off: only keys that aren't a letter or digit. */
+export const ALWAYS_ON_SHORTCUTS: [string, string][] = [
+  ['Ctrl+K', 'Search'],
+  ['↑ ↓', 'Move between tasks'],
+  ['Enter', 'Open task'],
+  ['Delete', 'Delete task'],
+  ['Ctrl+Z', 'Undo'],
+  ['Esc', 'Close / clear selection'],
+];
+
 export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const enabled = usePreferences().keyboardShortcuts;
+  const list = enabled ? SHORTCUTS : ALWAYS_ON_SHORTCUTS;
   return (
     <Dialog open={open} onClose={onClose} title="Keyboard shortcuts">
+      <p className="mb-3 text-sm text-muted">
+        {enabled
+          ? 'You can turn single-key shortcuts off in Settings → General.'
+          : 'Single-key shortcuts are off (Settings → General). These still work:'}
+      </p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-        {SHORTCUTS.map(([k, v]) => (
+        {list.map(([k, v]) => (
           <div key={k} className="contents">
             <dt>
               <Kbd>{k}</Kbd>

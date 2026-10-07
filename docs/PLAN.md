@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ (2026-10-06) · A1 ✅ (2026-10-07) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W12b ✅ A1 ✅ (2026-10-07) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -537,7 +537,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 *Updated 2026-10-07, after A1.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6, W7a, W10a, W10c, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (main: T1–T88, T95–T107, T121–T124); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0010`. The `w11-sonnet` branch is already reconciled with main — it merged it, renumbered its ADRs to `0011`/`0012` and adds threat rows T108–T120, so nothing needs renumbering and it merges cleanly (`git merge-tree main w11-sonnet` reports no conflicts).
+**Done:** F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W12b, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T124); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0012`.
 
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
@@ -569,13 +569,13 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W10c ✅ | MCP server | Opus | **Done 2026-10-06** (ADR 0009) | W11, W12 |
 | W10d | Outgoing webhooks: per-user subscriptions to task/project/comment events, HMAC-SHA256 signed and timestamped, retries with backoff via the job runner, delivery only through the W7a outbound client (users' webhooks public-only), admin switch, docs for verifying signatures | Sonnet (Opus review of signing and SSRF) | None (W7a outbound client and W6 job runner exist) | Everything |
 | W11a | Granular Todoist import (API token or backup/CSV, preview, per-item choices, dry run, background job, re-runnable) | Opus (untrusted input, token handling) + Sonnet (UI) | None (uses the W6 job runner) | W7, W10, W12 |
-| W11b | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | None | Everything |
+| W11b ✅ | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | **Done 2026-10-06** (ADR 0012, T115–T120): Todoist-format CSV import (preview, new or existing project) and export, nine-template gallery; import is ordinary sync commands | Everything |
 | W11c | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | None | Everything |
-| W11d | iCal feed per project/filter (secret, revocable URL) | Sonnet | None | Everything |
+| W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0011, T108–T114): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
 | W11e | Export everything, scheduled encrypted backups + restore, account deletion | Opus | None | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
 | W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Best after UI churn from W7–W11 settles; caching must not break the push service worker | W10, W11 |
-| W12b | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | None (repeat after big UI changes) | Everything |
+| W12b ✅ | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | **Done 2026-10-07** ([docs/accessibility.md](accessibility.md)): axe and keyboard audit passes (`docker/a11y-audit.mjs`, repeat after big UI changes); real screen-reader testing still open for W13 | Everything |
 | W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Do after most UI exists (late W11) to avoid churn | Server work |
 | W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |
 | M1 | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | Needed by A3 | A1, A2 |
@@ -589,7 +589,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
-- Now: **W11e backups/export** or **W11a Todoist import** (Opus) ‖ **A2 Android screens** (Sonnet) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a, W10c and A1 are done; W11b/W11d/W12b are done on branch `w11-sonnet`, already reconciled with main, waiting to land.)
+- Now: **W11e backups/export** or **W11a Todoist import** (Opus) ‖ **A2 Android screens** (Sonnet) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a, W10c, W11b, W11d, W12b and A1 are done and on main.)
 - **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
 - **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
 - **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).
@@ -605,7 +605,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 - Before every push: gitleaks over git history; no `.claude`, `.env`, keys or secret dirs tracked; commits use the GitHub no-reply address; no local paths, personal emails or test passwords in tracked files. Never commit walkthrough credentials.
 - Upgrading a running instance: dump the database first, `docker compose up -d --build`, check health and that data is intact; remove dangling BokyDo images afterwards (repeat, since each removal exposes parent layers).
 
-**Code map (where things live):** `packages/shared` (model, command schemas, preferences, settings), `packages/nlp` (quick add, dates, recurrence, `zonedInstant`), `packages/filter-query`, `packages/sync-client` (optimistic reducers, state), `packages/themes`; `apps/server/src` — `sync/` (engine, handlers, policy), `workspaces/`, `projects/` (invites), `attachments/`, `notifications/`, `reminders/`, `delivery/` (outbox, email, Web Push, digest), `jobs/` (runner), `auth/`, `admin/`, `settings/`, `http/` (access control, headers); `apps/web/src` — `pages/`, `components/`, `lib/`; `apps/web/public/sw.js` (push service worker).
+**Code map (where things live):** `packages/shared` (model, command schemas, preferences, settings, `csv.ts` and `template.ts`: CSV and Todoist-format templates), `packages/nlp` (quick add, dates, recurrence, `zonedInstant`), `packages/filter-query`, `packages/sync-client` (optimistic reducers, state), `packages/themes`; `apps/server/src` — `sync/` (engine, handlers, policy), `workspaces/`, `projects/` (invites), `attachments/`, `notifications/`, `reminders/`, `delivery/` (outbox, email, Web Push, digest), `jobs/` (runner), `calendar/` (iCal writer, feed routes), `auth/`, `admin/`, `settings/`, `http/` (access control, headers); `apps/web/src` — `pages/`, `components/`, `lib/` (`lib/templates/`: import planner, exporter, gallery); `apps/web/public/sw.js` (push service worker).
 
 ---
 

@@ -8,6 +8,7 @@ import {
   redirect,
 } from '@tanstack/react-router';
 import { AppShell } from './components/AppShell.js';
+import { RouteAnnouncer } from './components/RouteAnnouncer.js';
 import { Spinner } from './components/ui.js';
 import { instanceQuery, queryClient, sessionQuery } from './lib/queries.js';
 import { AccountSecurityPage } from './pages/AccountSecurityPage.js';
@@ -16,6 +17,7 @@ import { AdminUsersPage } from './pages/AdminUsersPage.js';
 import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
 import { CompletedPage } from './pages/CompletedPage.js';
 import { ArchivedPage, FilterPage, FiltersLabelsPage, LabelPage } from './pages/LabelsPages.js';
+import { TemplatesPage } from './pages/TemplatesPage.js';
 import { InboxPage, ProjectView } from './pages/ProjectPage.js';
 import { HomeRedirect, TaskLinkPage } from './pages/RoutePages.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -64,7 +66,13 @@ async function guard(path: string, opts: { adminOnly?: boolean } = {}) {
   if (opts.adminOnly && !session?.user.isAdmin) throw redirect({ to: '/' });
 }
 
-const rootRoute = createRootRoute({ component: Outlet, pendingComponent: Spinner });
+const RootLayout = () => (
+  <>
+    <RouteAnnouncer />
+    <Outlet />
+  </>
+);
+const rootRoute = createRootRoute({ component: RootLayout, pendingComponent: Spinner });
 const page = (path: string, component: () => React.ReactNode, opts?: { adminOnly?: boolean }) =>
   createRoute({
     getParentRoute: () => rootRoute,
@@ -159,9 +167,11 @@ const routeTree = rootRoute.addChildren([
     appPage('/upcoming', UpcomingPage),
     appPage('/completed', CompletedPage),
     appPage('/filters-labels', FiltersLabelsPage),
+    appPage('/templates', TemplatesPage),
     appPage('/archived', ArchivedPage),
     appPage('/settings', () => <SettingsPage />),
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
+    appPage('/settings/calendar', () => <SettingsPage initialTab="calendar" />),
     appPage('/settings/apps', () => <SettingsPage initialTab="apps" />),
     appPage('/invitations', InvitationsPage),
     appPage('/join', JoinPage),

@@ -44,7 +44,7 @@ export function Avatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md'
     <span
       aria-hidden
       title={name}
-      className={`inline-flex shrink-0 items-center justify-center rounded-full bg-accent/20 font-semibold text-accent uppercase ${size === 'sm' ? 'size-5 text-[0.65rem]' : 'size-7 text-xs'}`}
+      className={`inline-flex shrink-0 items-center justify-center rounded-full bg-accent/20 font-semibold text-fg uppercase ${size === 'sm' ? 'size-5 text-[0.65rem]' : 'size-7 text-xs'}`}
     >
       {name.slice(0, 1)}
     </span>

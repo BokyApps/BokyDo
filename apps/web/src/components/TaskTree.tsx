@@ -1,4 +1,4 @@
-import { generateKeyBetween, type Task } from '@bokydo/shared';
+import type { Task } from '@bokydo/shared';
 import {
   closestCenter,
   DndContext,
@@ -20,6 +20,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from 'react';
 import { useTaskActions } from '../lib/actions.js';
 import { useSyncState } from '../lib/sync.js';
+import { announcementsFor, taskName } from '../lib/dnd-announcements.js';
+import { between } from '../lib/task-moves.js';
 import { byOrder, childrenOf } from '../lib/views.js';
 import { TaskItem } from './TaskItem.js';
 
@@ -64,16 +66,20 @@ export function TaskDnd({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const announcements = announcementsFor((id) => {
+    const key = String(id);
+    const task = state.tasks.get(key);
+    if (task) return taskName(task.content);
+    if (key === 'section:none') return 'the tasks without a section';
+    if (key.startsWith('section:'))
+      return `the section “${state.sections.get(key.slice(8))?.name ?? ''}”`;
+    if (key.startsWith('children:'))
+      return `the sub-tasks of ${taskName(state.tasks.get(key.slice(9))?.content ?? '')}`;
+    return null;
+  });
+
   const orderOf = (id: string | undefined) =>
     id ? (state.tasks.get(id)?.childOrder ?? null) : null;
-  const between = (a: string | null, b: string | null) => {
-    try {
-      return generateKeyBetween(a, b && a && b <= a ? null : b);
-    } catch {
-      return generateKeyBetween(a, null);
-    }
-  };
-
   const onDragEnd = ({ active, over, delta }: DragEndEvent) => {
     const task = state.tasks.get(String(active.id));
     if (!task || !over) return;
@@ -150,7 +156,12 @@ export function TaskDnd({
           showCompleted,
         }}
       >
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+          accessibility={{ announcements }}
+        >
           {children}
         </DndContext>
       </Collapsed.Provider>
@@ -217,31 +228,31 @@ function SortableTask({
   const kids = childrenOf(state, task.id).filter((k) => showCompleted || !k.isCompleted);
   const collapsed = isCollapsed(task.id);
   return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={isDragging ? 'relative z-10 opacity-60' : ''}
+    <TaskItem
+      task={task}
+      depth={depth}
+      orderedIds={orderedIds}
+      dragHandle={{ attributes, listeners }}
+      reorderable
+      listItem={{
+        ref: setNodeRef,
+        style: { transform: CSS.Translate.toString(transform), transition },
+        className: isDragging ? 'relative z-10 opacity-60' : '',
+      }}
+      {...(kids.length ? { collapsed, onToggleCollapsed: () => toggle(task.id) } : {})}
     >
-      <TaskItem
-        task={task}
-        depth={depth}
-        orderedIds={orderedIds}
-        dragHandle={{ attributes, listeners }}
-        {...(kids.length ? { collapsed, onToggleCollapsed: () => toggle(task.id) } : {})}
-      >
-        {kids.length > 0 && !collapsed && (
-          <SortableTaskList
-            id={`children:${task.id}`}
-            tasks={kids}
-            projectId={task.projectId}
-            sectionId={task.sectionId}
-            parentId={task.id}
-            depth={depth + 1}
-            orderedIds={orderedIds}
-          />
-        )}
-      </TaskItem>
-    </div>
+      {kids.length > 0 && !collapsed && (
+        <SortableTaskList
+          id={`children:${task.id}`}
+          tasks={kids}
+          projectId={task.projectId}
+          sectionId={task.sectionId}
+          parentId={task.id}
+          depth={depth + 1}
+          orderedIds={orderedIds}
+        />
+      )}
+    </TaskItem>
   );
 }
 

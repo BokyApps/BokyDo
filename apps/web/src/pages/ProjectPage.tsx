@@ -1,4 +1,10 @@
-import type { Project, Section, Task } from '@bokydo/shared';
+import {
+  countTemplate,
+  serializeTemplateCsv,
+  type Project,
+  type Section,
+  type Task,
+} from '@bokydo/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
@@ -6,6 +12,7 @@ import {
   ArchiveIcon,
   ChevronIcon,
   CommentIcon,
+  DownloadIcon,
   EditIcon,
   MoreIcon,
   PlusIcon,
@@ -23,6 +30,9 @@ import { SortableTaskList, TaskDnd } from '../components/TaskTree.js';
 import { Alert, Button, Dialog, inputClass, MenuItem, Popover } from '../components/ui.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { useConfirm } from '../lib/confirm.js';
+import { downloadText, safeFilename } from '../lib/templates/files.js';
+import { projectToTemplate } from '../lib/templates/export-project.js';
+import { useToast } from '../lib/toasts.js';
 import { newId, useSend, useSyncState } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { useTaskActions } from '../lib/actions.js';
@@ -211,7 +221,17 @@ function ProjectMenu({
   const send = useSend();
   const confirm = useConfirm();
   const navigate = useNavigate();
+  const state = useSyncState();
+  const toast = useToast();
   const canManage = ['owner', 'admin'].includes(project.role);
+  const exportCsv = () => {
+    const template = projectToTemplate(state, project.id);
+    downloadText(safeFilename(project.name), serializeTemplateCsv(template));
+    const { tasks } = countTemplate(template);
+    toast({
+      message: `Exported ${tasks} ${tasks === 1 ? 'task' : 'tasks'}. Completed tasks aren't included.`,
+    });
+  };
   return (
     <Popover
       align="right"
@@ -265,6 +285,15 @@ function ProjectMenu({
             }}
           >
             {project.isFavorite ? 'Remove from favourites' : 'Add to favourites'}
+          </MenuItem>
+          <MenuItem
+            icon={<DownloadIcon />}
+            onClick={() => {
+              close();
+              exportCsv();
+            }}
+          >
+            Export as CSV
           </MenuItem>
           {canManage && (
             <MenuItem

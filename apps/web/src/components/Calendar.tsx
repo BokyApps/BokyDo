@@ -13,6 +13,7 @@ import {
 } from '@dnd-kit/core';
 import { useState } from 'react';
 import { useTaskActions } from '../lib/actions.js';
+import { announcementsFor, dayName, taskName } from '../lib/dnd-announcements.js';
 import {
   addDays,
   formatTime,
@@ -68,10 +69,20 @@ export function CalendarView({
     useSensor(KeyboardSensor),
   );
 
+  const announcements = announcementsFor((id) => {
+    const key = String(id);
+    if (key.startsWith('day:')) return dayName(key.slice(4));
+    const task = tasks.find((t) => t.id === key);
+    return task ? taskName(task.content) : null;
+  });
+
   const days =
     mode === 'month'
       ? monthGrid(anchor, prefs.weekStart).flat()
       : Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(anchor, prefs.weekStart), i));
+  const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, i) =>
+    days.slice(i * 7, i * 7 + 7),
+  );
   const byDay = new Map<string, Task[]>();
   const undated: Task[] = [];
   for (const t of tasks) {
@@ -124,6 +135,7 @@ export function CalendarView({
     <DndContext
       sensors={sensors}
       collisionDetection={pointerWithin}
+      accessibility={{ announcements }}
       onDragStart={({ active }) => setDragging((active.data.current?.task as Task) ?? null)}
       onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}
@@ -178,34 +190,41 @@ export function CalendarView({
         role="grid"
         aria-label={title}
       >
-        {weekdayNames(prefs.weekStart).map((d) => (
-          <div
-            key={d}
-            role="columnheader"
-            data-week={mode === 'week' || undefined}
-            className={`border-r border-b border-line px-1 py-1 text-center font-medium text-muted ${mode === 'week' ? 'hidden sm:block' : ''}`}
-          >
-            {d}
+        <div role="row" className="contents">
+          {weekdayNames(prefs.weekStart).map((d) => (
+            <div
+              key={d}
+              role="columnheader"
+              data-week={mode === 'week' || undefined}
+              className={`border-r border-b border-line px-1 py-1 text-center font-medium text-muted ${mode === 'week' ? 'hidden sm:block' : ''}`}
+            >
+              {d}
+            </div>
+          ))}
+        </div>
+        {weeks.map((week) => (
+          <div key={week[0]} role="row" className="contents">
+            {week.map((day) => (
+              <Day
+                key={day}
+                day={day}
+                today={today}
+                dim={mode === 'month' && day.slice(0, 7) !== anchor.slice(0, 7)}
+                tasks={byDay.get(day) ?? []}
+                tall={mode === 'week'}
+                expanded={expanded === day}
+                onExpand={() => setExpanded(expanded === day ? null : day)}
+                onAdd={
+                  readOnly
+                    ? undefined
+                    : () =>
+                        ui.openQuickAdd({ ...addDefaults, due: makeDue(day, null, today, prefs) })
+                }
+                readOnly={readOnly}
+                timeLabel={(time) => formatTime(time, prefs)}
+              />
+            ))}
           </div>
-        ))}
-        {days.map((day) => (
-          <Day
-            key={day}
-            day={day}
-            today={today}
-            dim={mode === 'month' && day.slice(0, 7) !== anchor.slice(0, 7)}
-            tasks={byDay.get(day) ?? []}
-            tall={mode === 'week'}
-            expanded={expanded === day}
-            onExpand={() => setExpanded(expanded === day ? null : day)}
-            onAdd={
-              readOnly
-                ? undefined
-                : () => ui.openQuickAdd({ ...addDefaults, due: makeDue(day, null, today, prefs) })
-            }
-            readOnly={readOnly}
-            timeLabel={(time) => formatTime(time, prefs)}
-          />
         ))}
       </div>
       <DragOverlay>{dragging && <ChipBody task={dragging} />}</DragOverlay>

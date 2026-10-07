@@ -30,7 +30,7 @@ function renderInline(nodes: Inline[], key = ''): ReactNode[] {
             href={n.href}
             target="_blank"
             rel="noopener noreferrer nofollow"
-            className="text-accent underline-offset-2 hover:underline"
+            className="text-accent underline underline-offset-2 hover:decoration-2"
             onClick={(e) => e.stopPropagation()}
           >
             {renderInline(n.c, k)}

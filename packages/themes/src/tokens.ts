@@ -1,4 +1,4 @@
-import { contrast, ensureContrast, readableOn } from './contrast.js';
+import { contrast, ensureContrast, mix, readableOn } from './contrast.js';
 import { FAMILIES, PROJECT_COLORS, VARIANTS, type Mode, type VariantDef } from './palettes.js';
 
 /** Semantic colour tokens consumed by the web app (CSS variables) and Android (Compose). */
@@ -34,6 +34,30 @@ const TEXT = 4.5; // WCAG AA body text
 const UI = 3; // WCAG AA non-text UI (icons, flags, focus, borders of controls)
 
 /**
+ * Translucent washes of a colour that the app puts behind text of that same colour (error alerts,
+ * status badges). Text on a wash of the accent uses the normal text colour instead.
+ */
+export const TINTS: Record<'danger' | 'success', number[]> = {
+  danger: [0.1],
+  success: [0.1, 0.15, 0.2],
+};
+
+/**
+ * Reach `min` on the plain backgrounds and on tints of the colour itself. A tint moves with the
+ * colour, so settle it: adjust, rebuild the tints, and repeat until nothing changes.
+ */
+function ensureOnTints(color: string, bgs: string[], min: number, alphas: number[]): string {
+  let current = ensureContrast(color, bgs, min);
+  for (let i = 0; i < 12; i++) {
+    const tinted = bgs.flatMap((bg) => alphas.map((a) => mix(bg, current, a)));
+    const next = ensureContrast(current, [...bgs, ...tinted], min);
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+/**
  * Derive accessible tokens from a raw palette. Text colours must reach 4.5:1 and UI colours 3:1
  * against both the background and the surface; anything that already passes keeps its exact
  * published colour.
@@ -41,7 +65,9 @@ const UI = 3; // WCAG AA non-text UI (icons, flags, focus, borders of controls)
 export function deriveTokens(def: VariantDef): ThemeTokens {
   const r = def.raw;
   const bgs = [r.bg, r.surface, r.surfaceAlt];
-  let accent = ensureContrast(r.accent, [r.bg, r.surface], UI);
+  // The accent is also link text, so it reaches the text threshold on the page and the surfaces;
+  // a button's label must then read on it as well.
+  let accent = ensureContrast(r.accent, bgs, TEXT);
   let accentFg = readableOn(accent, '#ffffff', def.mode === 'dark' ? r.bg : '#111111');
   if (contrast(accentFg, accent) < TEXT) {
     // Neither white nor dark text reads well on this accent (e.g. Solarized blue): keep the
@@ -49,6 +75,7 @@ export function deriveTokens(def: VariantDef): ThemeTokens {
     accentFg = def.mode === 'dark' ? r.bg : '#ffffff';
     accent = ensureContrast(accent, [accentFg], TEXT);
   }
+  const danger = ensureOnTints(r.red, bgs, TEXT, TINTS.danger);
   return {
     bg: r.bg,
     surface: r.surface,
@@ -58,12 +85,14 @@ export function deriveTokens(def: VariantDef): ThemeTokens {
     muted: ensureContrast(r.muted, bgs, TEXT),
     accent,
     accentFg,
-    danger: ensureContrast(r.red, bgs, TEXT),
-    warning: ensureContrast(r.orange, bgs, UI),
-    success: ensureContrast(r.green, bgs, UI),
-    p1: ensureContrast(r.red, bgs, UI),
-    p2: ensureContrast(r.orange, bgs, UI),
-    p3: ensureContrast(r.blue, bgs, UI),
+    // The semantic colours are also used for small text (due-date labels, errors), so they all
+    // reach the text threshold; one that passes already keeps its published colour.
+    danger,
+    warning: ensureContrast(r.orange, bgs, TEXT),
+    success: ensureOnTints(r.green, bgs, TEXT, TINTS.success),
+    p1: danger,
+    p2: ensureContrast(r.orange, bgs, TEXT),
+    p3: ensureContrast(r.blue, bgs, TEXT),
     p4: ensureContrast(r.muted, bgs, UI),
     project: Object.fromEntries(
       Object.entries(PROJECT_COLORS).map(([k, hex]) => [k, ensureContrast(hex, bgs, UI)]),

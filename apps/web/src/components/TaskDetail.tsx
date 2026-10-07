@@ -126,19 +126,37 @@ function TaskDetail({ task }: { task: Task }) {
               onBlur={saveDescription}
               placeholder="Description (Markdown: **bold**, *italic*, [links](https://…), - lists)"
             />
+          ) : task.description ? (
+            // The text (with its links) is ordinary content; editing is its own button, so no
+            // control sits inside another. Clicking the text also edits, for pointer users.
+            <div
+              className={`group/desc relative rounded-lg ${readOnly ? '' : 'cursor-text hover:bg-surface-alt'}`}
+              onClick={() => !readOnly && setEditingDescription(true)}
+            >
+              <div className="p-2">
+                <Markdown text={task.description} />
+              </div>
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="absolute top-1 right-1 rounded px-2 py-1 text-xs text-muted opacity-0 group-focus-within/desc:opacity-100 group-hover/desc:opacity-100 hover:text-fg focus-visible:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingDescription(true);
+                  }}
+                >
+                  Edit description
+                </button>
+              )}
+            </div>
           ) : (
             <button
               type="button"
               disabled={readOnly}
-              className="w-full rounded-lg p-2 text-left hover:bg-surface-alt disabled:hover:bg-transparent"
+              className="w-full rounded-lg p-2 text-left text-sm text-muted hover:bg-surface-alt disabled:hover:bg-transparent"
               onClick={() => setEditingDescription(true)}
-              aria-label="Edit description"
             >
-              {task.description ? (
-                <Markdown text={task.description} />
-              ) : (
-                <span className="text-sm text-muted">Description</span>
-              )}
+              Add a description
             </button>
           )}
         </div>

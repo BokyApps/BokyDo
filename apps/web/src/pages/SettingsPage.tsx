@@ -6,13 +6,15 @@ import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
 import { usePreferences, useSend } from '../lib/sync.js';
+import { CalendarSettings } from './CalendarSettings.js';
 import { NotificationSettings } from './NotificationSettings.js';
 
-type Tab = 'appearance' | 'general' | 'notifications' | 'apps';
+type Tab = 'appearance' | 'general' | 'notifications' | 'calendar' | 'apps';
 const TAB_LABEL: Record<Tab, string> = {
   appearance: 'Appearance',
   general: 'General',
   notifications: 'Notifications',
+  calendar: 'Calendar',
   apps: 'Apps & tokens',
 };
 
@@ -24,7 +26,7 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
   return (
     <Page>
       <ViewHeader title="Settings" />
-      <div role="tablist" className="mb-6 flex gap-1 border-b border-line">
+      <div role="tablist" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
         {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
           <button
             key={t}
@@ -32,7 +34,7 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
             type="button"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
+            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
           >
             {TAB_LABEL[t]}
           </button>
@@ -41,6 +43,7 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
       {tab === 'appearance' && <AppearanceSettings prefs={prefs} update={update} />}
       {tab === 'general' && <GeneralSettings prefs={prefs} update={update} />}
       {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
+      {tab === 'calendar' && <CalendarSettings />}
       {tab === 'apps' && <ApiAccessSettings />}
     </Page>
   );
@@ -276,6 +279,12 @@ function GeneralSettings({
             hint="Turn phrases like “tomorrow 5pm” or “every mon” in quick add into due dates."
             checked={prefs.smartDateRecognition}
             onChange={(e) => update({ smartDateRecognition: e.target.checked })}
+          />
+          <Checkbox
+            label="Single-key keyboard shortcuts"
+            hint="Keys like q, /, g and j/k run commands when you aren't typing. Turn this off if speech input or assistive technology presses them by accident. Ctrl+K for search still works."
+            checked={prefs.keyboardShortcuts}
+            onChange={(e) => update({ keyboardShortcuts: e.target.checked })}
           />
         </div>
       </Section>

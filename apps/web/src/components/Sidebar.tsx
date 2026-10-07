@@ -10,6 +10,7 @@ import {
   ArchiveIcon,
   CheckIcon,
   ChevronIcon,
+  TemplateIcon,
   InboxIcon,
   PlusIcon,
   SearchIcon,
@@ -29,7 +30,7 @@ import {
 import { newId, useSend } from '../lib/sync.js';
 
 const item = 'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fg hover:bg-surface-alt';
-const active = { className: 'bg-accent/10 font-medium text-accent hover:bg-accent/15' };
+const active = { className: 'bg-accent/10 font-medium text-fg hover:bg-accent/15' };
 
 export function Sidebar({
   onSearch,
@@ -113,6 +114,12 @@ export function Sidebar({
             <TagIcon />
           </span>{' '}
           Filters &amp; Labels
+        </Link>
+        <Link to="/templates" className={item} activeProps={active}>
+          <span className="text-muted">
+            <TemplateIcon />
+          </span>{' '}
+          Templates
         </Link>
       </div>
 

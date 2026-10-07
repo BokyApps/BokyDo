@@ -6,7 +6,7 @@ import { resyncPush } from '../lib/push.js';
 import { api, clearCsrfToken } from '../lib/api.js';
 import { ConfirmProvider } from '../lib/confirm.js';
 import { sessionQuery } from '../lib/queries.js';
-import { PreferenceEffects, SyncProvider } from '../lib/sync.js';
+import { PreferenceEffects, SyncProvider, usePreferences } from '../lib/sync.js';
 import { TaskUIProvider, useTaskUI } from '../lib/task-ui.js';
 import { ToastProvider } from '../lib/toasts.js';
 import { MenuIcon, PlusIcon, SettingsIcon } from './icons.js';
@@ -38,6 +38,7 @@ const isTyping = (t: EventTarget | null) =>
 function Layout() {
   const ui = useTaskUI();
   const navigate = useNavigate();
+  const shortcuts = usePreferences().keyboardShortcuts;
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.matchMedia('(min-width: 768px)').matches,
   );
@@ -69,6 +70,8 @@ function Layout() {
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Single-character shortcuts can be turned off (WCAG 2.1.4); Ctrl+K above always works.
+      if (!shortcuts) return;
       if (pendingG.current) {
         pendingG.current = false;
         const to = {
@@ -99,7 +102,7 @@ function Layout() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [ui, navigate]);
+  }, [ui, navigate, shortcuts]);
 
   return (
     <div className="flex h-svh flex-col">
@@ -117,11 +120,14 @@ function Layout() {
         >
           <MenuIcon />
         </IconButton>
-        <Link to="/" aria-label="Home">
+        <Link to="/" aria-label="BokyDo home">
           <Logo className="text-lg" />
         </Link>
         <div className="ml-auto flex items-center gap-1">
-          <IconButton label="Quick add (q)" onClick={() => ui.openQuickAdd()}>
+          <IconButton
+            label={shortcuts ? 'Quick add (q)' : 'Quick add'}
+            onClick={() => ui.openQuickAdd()}
+          >
             <PlusIcon />
           </IconButton>
           <NotificationBell />
@@ -146,7 +152,7 @@ function Layout() {
             </aside>
           </>
         )}
-        <main id="main" className="min-w-0 flex-1 overflow-y-auto">
+        <main id="main" className="min-w-0 flex-1 overflow-y-auto focus:outline-none">
           <Outlet />
         </main>
       </div>
@@ -185,13 +191,16 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
         <button
           type="button"
           {...p}
-          aria-label="Account menu"
           className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-surface-alt"
         >
-          <span className="flex size-7 items-center justify-center rounded-full bg-accent text-xs font-semibold text-on-accent">
+          <span
+            aria-hidden
+            className="flex size-7 items-center justify-center rounded-full bg-accent text-xs font-semibold text-on-accent"
+          >
             {session?.user.username.slice(0, 1).toUpperCase()}
           </span>
           <span className="hidden sm:inline">{session?.user.username}</span>
+          <span className="sr-only">, account menu</span>
         </button>
       )}
     >

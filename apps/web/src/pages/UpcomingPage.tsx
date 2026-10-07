@@ -85,41 +85,40 @@ export function UpcomingPage() {
           </>
         }
       />
-      <div
+      <ul
         className="mb-6 grid grid-cols-7 gap-1 border-b border-line pb-2 text-center"
-        role="list"
         aria-label="Week"
       >
         {week.map((d) => {
           const past = d < today;
           const count = byDay.get(d)?.length ?? 0;
           return (
-            <button
-              key={d}
-              type="button"
-              role="listitem"
-              disabled={past}
-              onClick={() => jump(d)}
-              className={`rounded-lg py-1.5 text-sm ${d === today ? 'bg-accent text-on-accent' : past ? 'text-muted/60' : 'hover:bg-surface-alt'}`}
-            >
-              <div className="text-xs">
-                {new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, {
-                  weekday: 'short',
-                  timeZone: 'UTC',
-                })}
-              </div>
-              <div className="font-semibold">{Number(d.slice(8))}</div>
-              <div className="h-1.5">
-                {count > 0 && (
-                  <span
-                    className={`mx-auto block size-1 rounded-full ${d === today ? 'bg-on-accent' : 'bg-muted'}`}
-                  />
-                )}
-              </div>
-            </button>
+            <li key={d} className="list-none">
+              <button
+                type="button"
+                disabled={past}
+                onClick={() => jump(d)}
+                className={`w-full rounded-lg py-1.5 text-sm ${d === today ? 'bg-accent text-on-accent' : past ? 'text-muted/60' : 'hover:bg-surface-alt'}`}
+              >
+                <div className="text-xs">
+                  {new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    timeZone: 'UTC',
+                  })}
+                </div>
+                <div className="font-semibold">{Number(d.slice(8))}</div>
+                <div className="h-1.5">
+                  {count > 0 && (
+                    <span
+                      className={`mx-auto block size-1 rounded-full ${d === today ? 'bg-on-accent' : 'bg-muted'}`}
+                    />
+                  )}
+                </div>
+              </button>
+            </li>
           );
         })}
-      </div>
+      </ul>
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         {overdue.length > 0 && (
           <section aria-label="Overdue" className="mb-6">
@@ -191,19 +190,18 @@ function DraggableTask({ task }: { task: Task }) {
     id: task.id,
   });
   return (
-    <div
-      ref={setNodeRef}
-      style={
-        transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
-      }
-      className={isDragging ? 'relative z-10 opacity-70' : ''}
-    >
-      <TaskItem
-        task={task}
-        orderedIds={[task.id]}
-        showProject
-        dragHandle={{ attributes, listeners }}
-      />
-    </div>
+    <TaskItem
+      task={task}
+      orderedIds={[task.id]}
+      showProject
+      dragHandle={{ attributes, listeners, pointerOnly: true }}
+      listItem={{
+        ref: setNodeRef,
+        ...(transform
+          ? { style: { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } }
+          : {}),
+        className: isDragging ? 'relative z-10 opacity-70' : '',
+      }}
+    />
   );
 }
