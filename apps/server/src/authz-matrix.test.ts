@@ -48,6 +48,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'PATCH /api/v1/account/passkeys/:id': 'restricted/always',
   'DELETE /api/v1/account/passkeys/:id': 'restricted/always',
   'PUT /api/v1/account/email': 'user/always',
+  'GET /api/v1/account/export': 'user/after',
+  'GET /api/v1/account/deletion': 'user/after',
+  'POST /api/v1/account/delete': 'user/after',
   // Setup and administration
   'GET /api/v1/setup': 'admin/before',
   'PUT /api/v1/setup/public-url': 'admin/before',
@@ -83,6 +86,8 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'GET /api/v1/admin/users': 'admin/after',
   'POST /api/v1/admin/users': 'admin/after',
   'PATCH /api/v1/admin/users/:id': 'admin/after',
+  'GET /api/v1/admin/users/:id/deletion': 'admin/after',
+  'POST /api/v1/admin/users/:id/delete': 'admin/after',
   'POST /api/v1/admin/users/:id/reset-mfa': 'admin/after',
   'POST /api/v1/admin/users/:id/password-reset-link': 'admin/after',
   'GET /api/v1/admin/invites': 'admin/after',

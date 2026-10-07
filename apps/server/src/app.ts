@@ -32,6 +32,7 @@ import { registerTaskRoutes } from './tasks/routes.js';
 import { registerInviteRoutes } from './projects/invite-routes.js';
 import { registerActivityRoutes } from './activity/routes.js';
 import { registerAttachmentRoutes } from './attachments/routes.js';
+import { registerAccountDataRoutes } from './account/data-routes.js';
 import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
@@ -274,6 +275,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     db,
     settings,
     store: attachmentStore,
+  });
+  registerAccountDataRoutes(app, {
+    db,
+    sync,
+    events,
+    settings,
+    mailer,
+    store: attachmentStore,
+    tokens: apiTokens,
   });
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);

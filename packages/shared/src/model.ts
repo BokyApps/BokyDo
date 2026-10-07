@@ -171,7 +171,8 @@ export interface Task {
   childOrder: string;
   isCompleted: boolean;
   completedAt: string | null;
-  createdById: string;
+  /** Null when the creator's account has been deleted. */
+  createdById: string | null;
   createdAt: string;
   updatedAt: string;
 }

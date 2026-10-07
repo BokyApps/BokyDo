@@ -80,7 +80,13 @@ export async function refreshTaskReminders(
   const responsible = new Map(taskRows.map((t) => [t.id, t.assigneeId ?? t.createdById]));
   const people = await owners(
     tx,
-    [...new Set([...responsible.values(), ...existing.map((r) => r.userId)])],
+    [
+      ...new Set(
+        [...responsible.values(), ...existing.map((r) => r.userId)].filter(
+          (id): id is string => id !== null,
+        ),
+      ),
+    ],
     defaultTimeZone,
   );
   const members = new Set(
@@ -99,8 +105,9 @@ export async function refreshTaskReminders(
 
   const live = existing.filter((r) => !r.deletedAt);
   for (const task of taskRows) {
-    const owner = responsible.get(task.id) as string;
-    const auto = people.get(owner)?.auto ?? null;
+    // No one is responsible for a task whose creator was deleted and which nobody is assigned.
+    const owner = responsible.get(task.id) ?? null;
+    const auto = owner ? (people.get(owner)?.auto ?? null) : null;
     const mine = existing.filter((r) => r.taskId === task.id);
     // Automatic reminders of someone else (reassigned) or of a switched-off preference go away.
     for (const r of mine.filter((r) => r.isAuto && (r.userId !== owner || auto === null))) {
@@ -109,7 +116,8 @@ export async function refreshTaskReminders(
       changes.forUser('reminders', r.id, r.userId);
       live.splice(live.indexOf(r), 1);
     }
-    if (auto === null || task.deletedAt || task.isCompleted || !task.due?.time) continue;
+    if (owner === null || auto === null || task.deletedAt || task.isCompleted || !task.due?.time)
+      continue;
     if (!members.has(`${task.projectId}:${owner}`)) continue;
     const ownerRows = mine.filter((r) => r.userId === owner);
     const autoRow = ownerRows.find((r) => r.isAuto);

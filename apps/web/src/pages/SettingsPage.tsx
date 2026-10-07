@@ -1,6 +1,7 @@
 import type { Appearance, Preferences, PreferencesPatch } from '@bokydo/shared';
 import { FAMILIES, FONTS, getTheme, TEXT_SIZES, THEMES, type Mode } from '@bokydo/themes';
 import { useState, type ReactNode } from 'react';
+import { AccountDataSettings } from '../components/AccountDataSettings.js';
 import { ApiAccessSettings } from '../components/ApiAccessSettings.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
@@ -9,13 +10,14 @@ import { usePreferences, useSend } from '../lib/sync.js';
 import { CalendarSettings } from './CalendarSettings.js';
 import { NotificationSettings } from './NotificationSettings.js';
 
-type Tab = 'appearance' | 'general' | 'notifications' | 'calendar' | 'apps';
+type Tab = 'appearance' | 'general' | 'notifications' | 'calendar' | 'apps' | 'data';
 const TAB_LABEL: Record<Tab, string> = {
   appearance: 'Appearance',
   general: 'General',
   notifications: 'Notifications',
   calendar: 'Calendar',
   apps: 'Apps & tokens',
+  data: 'Your data',
 };
 
 export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }) {
@@ -45,6 +47,7 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
       {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
       {tab === 'calendar' && <CalendarSettings />}
       {tab === 'apps' && <ApiAccessSettings />}
+      {tab === 'data' && <AccountDataSettings />}
     </Page>
   );
 }

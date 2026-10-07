@@ -223,9 +223,8 @@ export const tasks = pgTable(
     isCompleted: boolean('is_completed').notNull().default(false),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     completedById: uuid('completed_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdById: uuid('created_by_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Null once the creator's account is deleted (the task lives on in a shared project). */
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
     ...softDelete,
   },
   (t) => [

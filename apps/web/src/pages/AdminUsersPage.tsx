@@ -34,6 +34,7 @@ export function AdminUsersPage() {
   const { data: users } = useQuery(usersQuery);
   const { data: session } = useQuery(sessionQuery);
   const [shown, setShown] = useState<Shown | null>(null);
+  const [deleting, setDeleting] = useState<AdminUser | null>(null);
   const update = useAdminAction(
     ({ id, ...patch }: { id: string; isAdmin?: boolean; disabled?: boolean }) =>
       api('PATCH', `/api/v1/admin/users/${id}`, patch),
@@ -118,6 +119,9 @@ export function AdminUsersPage() {
                           Reset 2FA
                         </Button>
                       )}
+                      <Button variant="ghost" onClick={() => setDeleting(u)}>
+                        Delete…
+                      </Button>
                     </div>
                   )}
                 </td>
@@ -126,6 +130,7 @@ export function AdminUsersPage() {
           </tbody>
         </table>
       </Card>
+      {deleting && <DeleteUserDialog user={deleting} onClose={() => setDeleting(null)} />}
       <Card>
         <Invites onCreated={setShown} />
       </Card>
@@ -141,6 +146,70 @@ export function AdminUsersPage() {
         )}
       </Dialog>
     </div>
+  );
+}
+
+/** Delete another user's account: shows what stops it, and needs their username typed. */
+function DeleteUserDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [confirm, setConfirm] = useState('');
+  const blockers = useQuery({
+    queryKey: ['admin-user-deletion', user.id],
+    queryFn: () =>
+      api<{
+        projects: { id: string; name: string }[];
+        workspaces: { id: string; name: string }[];
+        lastAdmin: boolean;
+      }>('GET', `/api/v1/admin/users/${user.id}/deletion`),
+  });
+  const remove = useAdminAction(
+    () => api('POST', `/api/v1/admin/users/${user.id}/delete`, { confirm }),
+    () => {
+      void queryClient.invalidateQueries({ queryKey: usersQuery.queryKey });
+      onClose();
+    },
+  );
+  const b = blockers.data;
+  const blocked = !!b && (b.projects.length > 0 || b.workspaces.length > 0 || b.lastAdmin);
+  return (
+    <Dialog open onClose={onClose} title={`Delete ${user.username}?`}>
+      <div className="space-y-3">
+        <p className="text-sm">
+          Deletes the account and everything only they could see. Their tasks and comments in shared
+          projects stay without their name. They get an email if they have a verified address.
+        </p>
+        {blocked && b && (
+          <Alert tone="warning">
+            First, they (or the project owners) must transfer or delete:{' '}
+            {[
+              ...b.projects.map((p) => `project “${p.name}”`),
+              ...b.workspaces.map((w) => `team “${w.name}”`),
+            ].join(', ')}
+            {b.lastAdmin ? ' (they are the last administrator)' : ''}.
+          </Alert>
+        )}
+        <TextField
+          label={`Type ${user.username} to confirm`}
+          value={confirm}
+          autoComplete="off"
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        {remove.isError && <Alert tone="error">{errorMessage(remove.error)}</Alert>}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            busy={remove.isPending}
+            disabled={!b || blocked || confirm !== user.username}
+            onClick={() => remove.mutate(undefined)}
+          >
+            Delete account
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 
