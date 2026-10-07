@@ -105,6 +105,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'DELETE /api/v1/tasks/:id': 'user/after',
   'GET /api/v1/projects': 'user/after',
   'GET /api/v1/projects/:id': 'user/after',
+  'POST /api/v1/projects': 'user/after',
+  'PATCH /api/v1/projects/:id': 'user/after',
+  'DELETE /api/v1/projects/:id': 'user/after',
   'GET /api/docs': 'public/after',
   'GET /api/docs/openapi.json': 'public/after',
   // Sharing
@@ -160,6 +163,9 @@ const TOKEN_SCOPES: Record<string, string> = {
   'DELETE /api/v1/tasks/:id': 'tasks:write',
   'GET /api/v1/projects': 'projects:read',
   'GET /api/v1/projects/:id': 'projects:read',
+  'POST /api/v1/projects': 'projects:write',
+  'PATCH /api/v1/projects/:id': 'projects:write',
+  'DELETE /api/v1/projects/:id': 'projects:write',
 };
 
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {

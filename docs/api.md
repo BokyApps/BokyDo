@@ -47,17 +47,20 @@ Both are public: a public API that hides its own contract is not much use.
 
 ## Operations
 
-| Method | Path                            | Scope           | Notes                                                                                                   |
-| ------ | ------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/tasks`                 | `tasks:read`    | Newest first. `projectId`, `completed=true`, `limit` (≤ 100) and the opaque `cursor` from `nextCursor`. |
-| GET    | `/api/v1/tasks/{id}`            | `tasks:read`    | One task.                                                                                               |
-| POST   | `/api/v1/tasks`                 | `tasks:write`   | Create one. The same fields as the `task_add` sync command, minus the id, which the server assigns.     |
-| PATCH  | `/api/v1/tasks/{id}`            | `tasks:write`   | Change only the fields you send.                                                                        |
-| POST   | `/api/v1/tasks/{id}/complete`   | `tasks:write`   | Completes it; a recurring task rolls forward to its next occurrence and stays open.                     |
-| POST   | `/api/v1/tasks/{id}/uncomplete` | `tasks:write`   | Reopens a completed task.                                                                               |
-| DELETE | `/api/v1/tasks/{id}`            | `tasks:write`   | Deletes it and answers `204`.                                                                           |
-| GET    | `/api/v1/projects`              | `projects:read` | Every project you can see.                                                                              |
-| GET    | `/api/v1/projects/{id}`         | `projects:read` | One project.                                                                                            |
+| Method | Path                            | Scope            | Notes                                                                                                   |
+| ------ | ------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/tasks`                 | `tasks:read`     | Newest first. `projectId`, `completed=true`, `limit` (≤ 100) and the opaque `cursor` from `nextCursor`. |
+| GET    | `/api/v1/tasks/{id}`            | `tasks:read`     | One task.                                                                                               |
+| POST   | `/api/v1/tasks`                 | `tasks:write`    | Create one. The same fields as the `task_add` sync command, minus the id, which the server assigns.     |
+| PATCH  | `/api/v1/tasks/{id}`            | `tasks:write`    | Change only the fields you send.                                                                        |
+| POST   | `/api/v1/tasks/{id}/complete`   | `tasks:write`    | Completes it; a recurring task rolls forward to its next occurrence and stays open.                     |
+| POST   | `/api/v1/tasks/{id}/uncomplete` | `tasks:write`    | Reopens a completed task.                                                                               |
+| DELETE | `/api/v1/tasks/{id}`            | `tasks:write`    | Deletes it and answers `204`.                                                                           |
+| GET    | `/api/v1/projects`              | `projects:read`  | Every project you can see.                                                                              |
+| GET    | `/api/v1/projects/{id}`         | `projects:read`  | One project.                                                                                            |
+| POST   | `/api/v1/projects`              | `projects:write` | Create one (`name` required; `color`, `viewStyle`, `parentId`, `folderId`, `visibility` optional).      |
+| PATCH  | `/api/v1/projects/{id}`         | `projects:write` | Change name, colour, view, folder or visibility.                                                        |
+| DELETE | `/api/v1/projects/{id}`         | `projects:write` | Deletes it and answers `204`.                                                                           |
 
 Reads page with an opaque cursor rather than an offset, so a task that moves while you page cannot
 be skipped or repeated:
@@ -91,8 +94,9 @@ curl -s -X POST -H "Authorization: Bearer $BOKYDO_TOKEN" \
 
 Writes go through the same command layer the app uses, so every authorization and validation rule
 applies unchanged: writing into a project you cannot see answers `404`, and a token without
-`tasks:write` answers `403 insufficient_scope`. Still to come in W10b: project and comment writes,
-and the per-token project restriction deferred from W10a.
+`projects:write` answers `403 insufficient_scope`. Comment resources, and the per-token project
+restriction deferred from W10a, are still to come — until then use the MCP `add_comment` tool or
+the sync endpoint for comments.
 
 ## Recipes
 

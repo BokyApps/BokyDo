@@ -89,6 +89,8 @@ const projectSingle = z.object({ project: projectResource });
  */
 const createTaskBody = commandArgs.task_add.omit({ id: true });
 const updateTaskBody = commandArgs.task_update.omit({ id: true });
+const createProjectBody = commandArgs.project_add.omit({ id: true });
+const updateProjectBody = commandArgs.project_update.omit({ id: true });
 
 /** Command errors are the sync layer's vocabulary; this is how they surface over HTTP. */
 const COMMAND_STATUS: Record<CommandError, number> = {
@@ -191,6 +193,31 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Projects',
     scopes: ['projects:read'],
     response: projectSingle,
+  },
+  {
+    method: 'post',
+    path: '/api/v1/projects',
+    summary: 'Create a project',
+    tag: 'Projects',
+    scopes: ['projects:write'],
+    body: createProjectBody,
+    response: projectSingle,
+  },
+  {
+    method: 'patch',
+    path: '/api/v1/projects/:id',
+    summary: 'Update a project (name, colour, view, folder, visibility)',
+    tag: 'Projects',
+    scopes: ['projects:write'],
+    body: updateProjectBody,
+    response: projectSingle,
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/projects/:id',
+    summary: 'Delete a project',
+    tag: 'Projects',
+    scopes: ['projects:write'],
   },
 ];
 
@@ -314,6 +341,7 @@ export function registerRestRoutes(
   const tasksRead = { access: 'user', scopes: ['tasks:read'] } as const;
   const tasksWrite = { access: 'user', scopes: ['tasks:write'] } as const;
   const projectsRead = { access: 'user', scopes: ['projects:read'] } as const;
+  const projectsWrite = { access: 'user', scopes: ['projects:write'] } as const;
 
   /** A task the caller can see, as it looks now: writes answer with the real resulting state. */
   const readTask = (userId: string, taskId: string) =>
@@ -327,6 +355,18 @@ export function registerRestRoutes(
           .limit(1)
       ).at(0);
       return row && visible.has(row.projectId) ? taskToWire(row) : null;
+    });
+
+  /** A project the caller can see, as it looks now. */
+  const readProject = (userId: string, projectId: string) =>
+    db.transaction(async (tx) => {
+      const visible = await visibleProjects(tx, userId);
+      const member = visible.get(projectId);
+      if (!member) return null;
+      const row = (await tx.select().from(projects).where(eq(projects.id, projectId)).limit(1)).at(
+        0,
+      );
+      return row ? projectToWire(row, member) : null;
     });
 
   /** Apply one command through the sync engine and translate its vocabulary into HTTP. */
@@ -444,15 +484,44 @@ export function registerRestRoutes(
   app.get('/api/v1/projects/:id', { config: projectsRead }, async (req, reply) => {
     const id = idSchema.safeParse((req.params as { id?: string }).id);
     if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+    const project = await readProject(requireUser(req).id, id.data);
+    if (!project) return reply.status(404).send({ error: 'not_found' });
+    return { project };
+  });
+
+  app.post('/api/v1/projects', { config: projectsWrite }, async (req, reply) => {
+    const body = createProjectBody.safeParse(req.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
     const userId = requireUser(req).id;
-    return db.transaction(async (tx) => {
-      const visible = await visibleProjects(tx, userId);
-      const member = visible.get(id.data);
-      if (!member) return reply.status(404).send({ error: 'not_found' });
-      const row = (await tx.select().from(projects).where(eq(projects.id, id.data)).limit(1)).at(0);
-      if (!row) return reply.status(404).send({ error: 'not_found' });
-      return { project: projectToWire(row, member) };
-    });
+    const projectId = newId();
+    const failure = await run(userId, 'project_add', { ...body.data, id: projectId });
+    if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+    const project = await readProject(userId, projectId);
+    if (!project) return reply.status(404).send({ error: 'not_found' });
+    return reply.status(201).send({ project });
+  });
+
+  app.patch('/api/v1/projects/:id', { config: projectsWrite }, async (req, reply) => {
+    const id = idSchema.safeParse((req.params as { id?: string }).id);
+    if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+    const body = updateProjectBody.safeParse(req.body);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
+    const userId = requireUser(req).id;
+    const failure = await run(userId, 'project_update', { id: id.data, ...body.data });
+    if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+    const project = await readProject(userId, id.data);
+    if (!project) return reply.status(404).send({ error: 'not_found' });
+    return { project };
+  });
+
+  app.delete('/api/v1/projects/:id', { config: projectsWrite }, async (req, reply) => {
+    const id = idSchema.safeParse((req.params as { id?: string }).id);
+    if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
+    const failure = await run(requireUser(req).id, 'project_delete', { id: id.data });
+    if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
+    return reply.status(204).send();
   });
 
   // The contract is public: a public API that hides its own documentation is not much use.

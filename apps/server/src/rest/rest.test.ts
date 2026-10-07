@@ -267,3 +267,55 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: writes with bearer tokens', () => 
     expect(done.body.task.due.date > '2026-01-01').toBe(true);
   });
 });
+
+describe.skipIf(!TEST_DATABASE_URL)('REST v1: project writes with bearer tokens', () => {
+  const write = (who: string) => bearer(people[who]!.writeToken);
+
+  it('creates, updates and deletes a project', async () => {
+    const created = await call(write('alice'), 'POST', '/api/v1/projects', {
+      name: 'REST project',
+      color: 'berry_red',
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.project).toMatchObject({ name: 'REST project', role: 'owner' });
+    const projectId = created.body.project.id;
+
+    const listed = await get(as('alice'), '/api/v1/projects');
+    expect(listed.body.projects.map((p: { id: string }) => p.id)).toContain(projectId);
+
+    const patched = await call(write('alice'), 'PATCH', `/api/v1/projects/${projectId}`, {
+      name: 'Renamed over REST',
+    });
+    expect(patched.status).toBe(200);
+    expect(patched.body.project.name).toBe('Renamed over REST');
+
+    expect((await call(write('alice'), 'DELETE', `/api/v1/projects/${projectId}`)).status).toBe(
+      204,
+    );
+    expect((await get(as('alice'), `/api/v1/projects/${projectId}`)).status).toBe(404);
+  });
+
+  it('refuses a read-only token, and hides projects it cannot see', async () => {
+    const denied = await call(as('alice'), 'POST', '/api/v1/projects', { name: 'nope' });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error).toBe('insufficient_scope');
+
+    // bob holds projects:write, but alice's project is not his.
+    expect(
+      (await call(write('bob'), 'PATCH', `/api/v1/projects/${aliceProject}`, { name: 'hijack' }))
+        .status,
+    ).toBe(404);
+    expect((await call(write('bob'), 'DELETE', `/api/v1/projects/${aliceProject}`)).status).toBe(
+      404,
+    );
+    // …and it is still there, unchanged.
+    const still = await get(as('alice'), `/api/v1/projects/${aliceProject}`);
+    expect(still.status).toBe(200);
+    expect(still.body.project.name).toBe('Alice roadmap');
+  });
+
+  it('rejects an invalid body without creating anything', async () => {
+    expect((await call(write('alice'), 'POST', '/api/v1/projects', {})).status).toBe(400);
+    expect((await call(write('alice'), 'PATCH', '/api/v1/projects/nope', {})).status).toBe(400);
+  });
+});
