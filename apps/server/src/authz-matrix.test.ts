@@ -117,6 +117,9 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/push/subscriptions': 'user/after',
   'DELETE /api/v1/push/subscriptions': 'user/after',
   'POST /api/v1/push/test': 'user/after',
+  'POST /api/v1/ramble/transcribe': 'user/after',
+  'POST /api/v1/ramble/extract': 'user/after',
+  'POST /api/v1/ramble/commit': 'user/after',
   'POST /api/v1/notifications/unsubscribe': 'public/after',
   'POST /api/v1/workspaces/:id/invites': 'user/after',
   'GET /api/v1/workspaces/:id/invites': 'user/after',
@@ -152,6 +155,9 @@ const PASSWORD = 'violin-pancake-orbit-meadow';
 const TOKEN_SCOPES: Record<string, string> = {
   'POST /api/v1/sync': 'sync',
   'GET /api/v1/sync/events': 'sync',
+  'POST /api/v1/ramble/transcribe': 'ai:use',
+  'POST /api/v1/ramble/extract': 'ai:use',
+  'POST /api/v1/ramble/commit': 'tasks:write',
 };
 
 function expectedOutcome(route: ApiRoute, who: Principal, setupComplete: boolean): string {

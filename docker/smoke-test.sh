@@ -401,6 +401,12 @@ check "allow-listed private host is reached (and answers 404)" \
   bash -c "jq -e '.error == \"unexpected_status\" and .status == 404' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
 check "a real model call through the allow-listed host fails cleanly (W7b)" \
   bash -c "jq -e '.ok == false and (.status == 404 or .status == 405)' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/try" '{"model":"smoke-model","kind":"chat"}')")'"
+check "Ramble answers clearly when no model is set up (W8)" \
+  bash -c "jq -e '.error == \"ai_not_configured\"' <<<'$(body_of "$(api POST /api/v1/ramble/extract '{"text":"buy milk tomorrow"}')")'"
+check "Ramble refuses non-audio uploads" \
+  test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "Origin: $BASE" -H "x-csrf-token: $CSRF" -H 'content-type: video/mp4' --data-binary 'x' "$BASE/api/v1/ramble/transcribe?seconds=1")" = 415
+check "Ramble commit creates the reviewed tasks" \
+  test "$(status_of "$(api POST /api/v1/ramble/commit '{"tasks":[{"ref":"d1","content":"Smoke ramble task","due":"tomorrow","priority":2}]}')")" = 201
 check "metadata address refused even for admins" \
   test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://169.254.169.254/latest"}')")" = 400
 r=$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"Mine","baseUrl":"https://mailpit:8025/v1"}')

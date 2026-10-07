@@ -190,6 +190,46 @@ export class SyncService {
     return result;
   }
 
+  /**
+   * Apply several commands as one: all succeed or none is kept. Each runs with the same checks
+   * as `apply`; on the first failure everything is rolled back and that failure is returned.
+   * Commands applied this way are not recorded for replay (callers use fresh ids each time).
+   */
+  async applyAll(
+    userId: string,
+    commands: { type: CommandType; args: unknown }[],
+  ): Promise<{ ok: true } | { ok: false; index: number; result: CommandResult }> {
+    const recorder = new ChangeRecorder();
+    class Abort extends Error {
+      constructor(
+        readonly index: number,
+        readonly result: CommandResult,
+      ) {
+        super('batch failed');
+      }
+    }
+    try {
+      await this.db.transaction(async (tx) => {
+        await tx.execute(WRITE_LOCK);
+        for (const [index, c] of commands.entries()) {
+          const parsed = commandArgs[c.type].safeParse(c.args);
+          const result = parsed.success
+            ? await this.runHandler(tx, userId, c.type, parsed.data, recorder)
+            : ({ ok: false, error: 'invalid' } as CommandResult);
+          if (!result.ok) throw new Abort(index, result);
+        }
+        await this.afterWrite(tx, recorder);
+        await recorder.flush(tx);
+      });
+    } catch (err) {
+      if (err instanceof Abort) return { ok: false, index: err.index, result: err.result };
+      throw err;
+    }
+    if (!recorder.isEmpty)
+      this.onCommitted({ projectIds: recorder.projectScopes, userIds: recorder.userScopes });
+    return { ok: true };
+  }
+
   /** Derived state that follows task changes: reminder times and automatic reminders. */
   private async afterWrite(tx: Tx, recorder: ChangeRecorder): Promise<void> {
     await refreshTaskReminders(tx, recorder, recorder.touched('tasks'), this.defaultTimeZone());

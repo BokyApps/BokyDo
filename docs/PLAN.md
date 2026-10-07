@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ (2026-10-07) · **Next: W7c, W7d, W8, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ (2026-10-07) · **Next: W7c, W7d, W8 UI/live, W9, W10b, W10d, A2, A3.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -433,6 +433,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Mic capture UI (waveform), chunked and live pipelines, live draft list with edit ops, review panel, commit as one batch command, language selection, push-to-talk + keyboard shortcut, Web Speech fallback.
 - Also a **text Ramble** (paste a brain-dump) — same extractor, great for API/MCP too.
 - **Security gate:** prompt injection via existing task names/collaborator names fed as context; extraction output validated against schema + authz (can't add to projects user can't write); audio never persisted unless the user opts in; max session length & rate limits.
+- *W8 server done 2026-10-07 (see ADR 0014): `POST /api/v1/ramble/transcribe` (one audio chunk ≤ 5 MiB / 60 s → text, never stored, metered at least by size), `/ramble/extract` (`{ text, draft }` → edited draft via add/update/remove operations, each task resolved to project/section/date/labels/assignee with issues), `/ramble/commit` (reviewed draft → tasks in one all-or-nothing batch through the sync engine, `SyncService.applyAll`). The model sees only names of projects the user can write to, framed as data; bearer tokens with `ai:use` (commit: `tasks:write`) work, for Android (A5) and API clients. Split out: **W8 UI** (mic capture, waveform, live draft, review panel, push-to-talk, Web Speech fallback; Sonnet) and **W8 live** (Realtime/Gemini Live through a server-side WebSocket relay; Opus). Not yet: subtasks, the MCP `ramble_text` tool.*
 
 #### W9 — AI features & decision models · L
 - Task Assist, Filter Assist, Smart add fallback, Reports & summaries (on-demand + scheduled email), Ask your tasks (read-only tools + confirmed writes), decision-capability features (§5.4) with Jev adapter + LLM fallback, confidence thresholds per user, "why?" explanations.
@@ -564,7 +565,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W7b ✅ | Provider adapters on top of W7a (OpenAI-compatible, Anthropic, Gemini, Ollama, …), streaming, retries, live model list, "test connection" | Sonnet | **Done 2026-10-07** (ADR 0007) | W10, W11 |
 | W7c | Admin + user AI settings UI | DeepSeek (Sonnet review) | W7a/W7b API shapes | Anything server-side |
 | W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | W7a; current provider docs and test accounts from the owner; ToS check | W10, W11 |
-| W8 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | W7a–W7b (STT/LLM providers) | W10, W11, W12 |
+| W8 🟡 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | **Server done 2026-10-07** (ADR 0014); UI and live pipeline open | W10, W11, W12 |
 | W9 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | W7; Ask-your-tasks tools reuse W10's MCP tool layer if built first | W10, W11, W12 |
 | W10a ✅ | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | **Done 2026-10-06** (ADR 0008, migration 0013) | W7, W11, W12 |
 | W10b | REST v1 + OpenAPI docs, scope matrix tests | Sonnet | W10a scopes | W7, W11 |
