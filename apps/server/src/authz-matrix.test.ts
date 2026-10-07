@@ -193,7 +193,8 @@ async function streamToString(stream: NodeJS.ReadableStream): Promise<string> {
   return out;
 }
 
-describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', () => {
+// Every route × every kind of caller: exhaustive by design, so allow more than the 5 s default.
+describe.skipIf(!TEST_DATABASE_URL)('authorization matrix', { timeout: 60_000 }, () => {
   let t: TestApp;
   let app: FastifyInstance;
   let routes: ApiRoute[];

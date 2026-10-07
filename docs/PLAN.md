@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ (2026-10-06) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ (2026-10-06) · A1 ✅ (2026-10-07) · **Next: W7b–W7d, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -486,6 +486,7 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 - Server URL entry + discovery (`/.well-known/bokydo`), OAuth 2.1 PKCE via Custom Tabs (so MFA + passkeys work exactly as on web), tokens in Android Keystore-backed encrypted storage, optional biometric app lock.
 - Room schema mirroring the sync model; command queue with temp IDs; WorkManager sync + foreground WebSocket.
 - Server side: serve `assetlinks.json` (from Admin → Android settings) for passkeys/app links.
+- *Done 2026-10-07 (see ADR 0010): `apps/android` with a pure-JVM `:core` (address rules, discovery checks, PKCE and redirect checks, HTTP client with serialised refresh, sync engine and merge rules; 19 JVM tests) and `:app` (Keystore vault, SQLite store, Custom Tabs sign-in with the first-party client `bkdc_bokydo-android-app-001`, WorkManager sync every 15 min, SSE live sync in the foreground, minimal connect/status screens). Server: `/.well-known/bokydo` discovery, the first-party client seeded on start, `/.well-known/assetlinks.json` from `android.certFingerprints`, consent marks first-party apps as verified. Verified end to end on an API 36 emulator (sign-in, sync, live updates, restart, sign-out revoking the grant, forged and replayed redirects). Deviations: plain SQLite instead of Room (no KSP with AGP 9's built-in Kotlin); SSE, not WebSocket; biometric app lock moved to A2. Build: AGP 9.4.1, Kotlin 2.2.10, Gradle 9.6.0 (wrapper pinned by checksum), JDK 17+; SDK at `~/Android/Sdk` (`local.properties`, gitignored). For A2: build screens on `SqliteStore` + `SyncEngine.enqueue` (commands are the web app's, IDs from `Ids.newId()`), add optimistic local updates.*
 
 #### A2 — Core screens · L
 - Inbox, Today, Upcoming, projects (list + board), filters, labels, task detail, comments, search, settings — all offline-capable.
@@ -534,9 +535,9 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 ## 12. Status & handoff (for the next contributor)
 
-*Updated 2026-10-06, after W10c (MCP).* Everything needed to pick up where work stopped.
+*Updated 2026-10-07, after A1.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6, W7a, W10a, W10c (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (main: T1–T88, T95–T107); design decisions are in `docs/adr/0001`–`0006`, `0008` and `0009`. The `w11-sonnet` branch is already reconciled with main — it merged it, renumbered its ADRs to `0011`/`0012` and adds threat rows T108–T120, so nothing needs renumbering and it merges cleanly (`git merge-tree main w11-sonnet` reports no conflicts).
+**Done:** F1–F4, W1–W6, W7a, W10a, W10c, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (main: T1–T88, T95–T107, T121–T124); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0010`. The `w11-sonnet` branch is already reconciled with main — it merged it, renumbered its ADRs to `0011`/`0012` and adds threat rows T108–T120, so nothing needs renumbering and it merges cleanly (`git merge-tree main w11-sonnet` reports no conflicts).
 
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
@@ -579,7 +580,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |
 | M1 | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | Needed by A3 | A1, A2 |
 | M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
-| A1 | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | W10a (OAuth AS); server `assetlinks.json`; note the server uses SSE pokes, not WebSocket (ADR 0003) | Web W11–W12 |
+| A1 ✅ | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | **Done 2026-10-07** (ADR 0010; SQLite instead of Room) | Web W11–W12 |
 | A2 | Android core screens, themes, time-zone picker, quick add (QuickJS spike vs server `/parse`) | Sonnet (Opus for the parser spike decision) | A1 | A4 later screens, web work |
 | A3 | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | A1; M1 | A2, A4 |
 | A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A1–A2 | A3, A5 |
@@ -588,7 +589,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
-- Now: **A1 Android foundation** (Opus; needs an Android SDK on the machine) or **W11a/W11e** (Opus) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a and W10c are done; W11 is in progress on branch `w11-sonnet`: when it merges it must renumber its migration (main has 0012–0013), its ADRs 0006–0007 and threat rows T82–T94 that clash with main.)
+- Now: **W11e backups/export** or **W11a Todoist import** (Opus) ‖ **A2 Android screens** (Sonnet) ‖ **W10d webhooks** (Sonnet) ‖ **W10b REST** and **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W10a, W10c and A1 are done; W11b/W11d/W12b are done on branch `w11-sonnet`, already reconciled with main, waiting to land.)
 - **W7a** (Opus) ‖ **W11c productivity** or **W11b templates** (DeepSeek/Sonnet). These touch no AI, auth or crypto code.
 - **W10a OAuth AS** (Opus) ‖ **W7b adapters** (Sonnet) ‖ **W7c settings UI** (DeepSeek).
 - **W11a Todoist import** or **W11e backups** (Opus) ‖ **W11d iCal**, **W12b accessibility** (Sonnet) ‖ **W12c string extraction** (DeepSeek).

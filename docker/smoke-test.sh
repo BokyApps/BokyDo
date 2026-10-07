@@ -375,6 +375,13 @@ check "MCP adds a task from natural language" \
   test "$(mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"text":"Smoke via MCP tomorrow p1"}}}' -H "authorization: Bearer $MCPT" | jq -r '.result.structuredContent.task | "\(.content) \(.priority)"')" = "Smoke via MCP p1"
 api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
 
+echo "== Android foundation (A1)"
+check "app discovery describes this instance" \
+  test "$(curl -s "$BASE/.well-known/bokydo" | jq -r '"\(.publicUrl) \(.android.clientId) \(.android.redirectUri)"')" = "$BASE bkdc_bokydo-android-app-001 com.bokyapps.bokydo:/oauth2redirect"
+check "Android app is a first-party OAuth client" \
+  bash -c "[[ \$(curl -s -o /dev/null -w '%{redirect_url}' '$BASE/oauth/authorize?response_type=code&client_id=bkdc_bokydo-android-app-001&redirect_uri=com.bokyapps.bokydo%3A%2Foauth2redirect&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=sync') == $BASE/oauth/consent#* ]]"
+check "asset links empty until fingerprints are configured" test "$(curl -s "$BASE/.well-known/assetlinks.json")" = "[]"
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5

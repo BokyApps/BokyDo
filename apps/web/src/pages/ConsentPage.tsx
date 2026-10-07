@@ -68,7 +68,9 @@ export function ConsentPage() {
         <p className="text-sm text-muted">
           Signed in as <strong className="text-fg">{session?.user.username}</strong>.{' '}
           {app.audience === 'mcp' && 'It will use BokyDo as an AI assistant connector (MCP). '}
-          The app named itself; BokyDo can't verify the name.
+          {app.verified
+            ? 'This is an official app registered by this server.'
+            : "The app named itself; BokyDo can't verify the name."}
         </p>
         <Alert tone="info">
           {app.redirectKind === 'web' ? (

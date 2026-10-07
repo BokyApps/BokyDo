@@ -76,6 +76,26 @@ export interface AuthorizedApp {
   lastUsedAt: string | null;
 }
 
+/** The official Android app: a first-party OAuth client every instance knows about. */
+export const ANDROID_PACKAGE = 'com.bokyapps.bokydo';
+export const ANDROID_CLIENT_ID = 'bkdc_bokydo-android-app-001';
+export const ANDROID_REDIRECT_URI = `${ANDROID_PACKAGE}:/oauth2redirect`;
+
+/** `GET /.well-known/bokydo`: how apps find this instance's endpoints. */
+export interface Discovery {
+  app: 'bokydo';
+  version: string;
+  publicUrl: string;
+  oauth: {
+    issuer: string;
+    authorizationEndpoint: string;
+    tokenEndpoint: string;
+    revocationEndpoint: string;
+  };
+  android: { clientId: string; redirectUri: string; scope: string };
+  api: { sync: string; events: string };
+}
+
 /** What the consent screen shows about a pending authorization. */
 export interface OAuthRequestInfo {
   clientName: string;
@@ -85,6 +105,8 @@ export interface OAuthRequestInfo {
   scopes: ApiScope[];
   audience: TokenAudience;
   registeredAt: string;
+  /** Registered by this instance (the official apps), not self-described by the client. */
+  verified: boolean;
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost']);

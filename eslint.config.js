@@ -6,7 +6,15 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'apps/server/drizzle/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      'apps/server/drizzle/**',
+      'apps/android/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strict,
   {

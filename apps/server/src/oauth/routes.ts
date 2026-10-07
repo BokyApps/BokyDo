@@ -75,6 +75,7 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
       scopes: row.oauth_requests.scopes as ApiScope[],
       audience: row.oauth_requests.audience,
       registeredAt: row.oauth_clients.createdAt.toISOString(),
+      verified: row.oauth_clients.registeredVia === 'admin',
     };
     return info;
   });
