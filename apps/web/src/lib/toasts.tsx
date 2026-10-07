@@ -17,9 +17,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback<Show>((t) => {
     const id = next++;
     setToasts((list) => [...list.slice(-2), { ...t, id }]);
-    setTimeout(() => setToasts((list) => list.filter((x) => x.id !== id)), t.action ? 6000 : 4000);
   }, []);
-  const dismiss = (id: number) => setToasts((list) => list.filter((x) => x.id !== id));
+  const dismiss = useCallback(
+    (id: number) => setToasts((list) => list.filter((x) => x.id !== id)),
+    [],
+  );
   // Ctrl/Cmd+Z runs the newest toast's action (Undo), as in Todoist.
   const latest = [...toasts].reverse().find((t) => t.action);
   useEffect(() => {
@@ -44,25 +46,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         aria-live="polite"
       >
         {toasts.map((t) => (
-          <div
-            key={t.id}
-            role={t.tone === 'error' ? 'alert' : 'status'}
-            className={`pointer-events-auto flex items-center gap-4 rounded-lg px-4 py-3 text-sm shadow-lg ${t.tone === 'error' ? 'bg-danger text-on-accent' : 'bg-fg text-bg'}`}
-          >
-            <span>{t.message}</span>
-            {t.action && (
-              <button
-                type="button"
-                className="font-semibold underline-offset-2 hover:underline"
-                onClick={() => {
-                  t.action?.onClick();
-                  dismiss(t.id);
-                }}
-              >
-                {t.action.label}
-              </button>
-            )}
-          </div>
+          <ToastView key={t.id} toast={t} dismiss={dismiss} />
         ))}
       </div>
     </ToastContext.Provider>
@@ -70,3 +54,49 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 export const useToast = () => useContext(ToastContext);
+
+/**
+ * One toast. It stays while the pointer is over it or focus is inside it, and an actionable one
+ * (Undo) lasts longer, so nobody is rushed (WCAG 2.2.1). The dismiss button closes it at once.
+ */
+function ToastView({ toast, dismiss }: { toast: Toast; dismiss: (id: number) => void }) {
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    if (paused) return;
+    const timer = setTimeout(() => dismiss(toast.id), toast.action ? 10_000 : 6_000);
+    return () => clearTimeout(timer);
+  }, [paused, toast.id, toast.action, dismiss]);
+  const error = toast.tone === 'error';
+  return (
+    <div
+      role={error ? 'alert' : 'status'}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+      className={`pointer-events-auto flex items-center gap-4 rounded-lg px-4 py-3 text-sm shadow-lg ${error ? 'bg-danger text-on-accent' : 'bg-fg text-bg'}`}
+    >
+      <span>{toast.message}</span>
+      {toast.action && (
+        <button
+          type="button"
+          className="font-semibold underline underline-offset-2"
+          onClick={() => {
+            toast.action?.onClick();
+            dismiss(toast.id);
+          }}
+        >
+          {toast.action.label}
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label="Dismiss notification"
+        className="-mr-2 rounded px-2 text-lg leading-none opacity-80 hover:opacity-100"
+        onClick={() => dismiss(toast.id)}
+      >
+        ×
+      </button>
+    </div>
+  );
+}

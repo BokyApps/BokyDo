@@ -271,6 +271,12 @@ function GeneralSettings({
             checked={prefs.smartDateRecognition}
             onChange={(e) => update({ smartDateRecognition: e.target.checked })}
           />
+          <Checkbox
+            label="Single-key keyboard shortcuts"
+            hint="Keys like q, /, g and j/k run commands when you aren't typing. Turn this off if speech input or assistive technology presses them by accident. Ctrl+K for search still works."
+            checked={prefs.keyboardShortcuts}
+            onChange={(e) => update({ keyboardShortcuts: e.target.checked })}
+          />
         </div>
       </Section>
     </>

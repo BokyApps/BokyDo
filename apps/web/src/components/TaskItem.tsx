@@ -1,12 +1,20 @@
 import { Avatar } from './Sharing.js';
 import type { Task } from '@bokydo/shared';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+import {
+  useId,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { useTaskActions } from '../lib/actions.js';
 import { describeDate, describeDue, TONE_CLASS } from '../lib/dates.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { todayIn } from '../lib/dates.js';
 import { useTaskUI } from '../lib/task-ui.js';
+import { taskMoves } from '../lib/task-moves.js';
 import { subtaskProgress } from '../lib/views.js';
 import {
   CalendarIcon,
@@ -40,17 +48,23 @@ export function TaskCheckbox({ task, onToggle }: { task: Task; onToggle: () => v
       type="button"
       role="checkbox"
       aria-checked={task.isCompleted}
-      aria-label={task.isCompleted ? `Reopen “${task.content}”` : `Complete “${task.content}”`}
+      // One name for both states: the checked state says whether it is done.
+      aria-label={`Complete “${task.content}”`}
       onClick={(e) => {
         e.stopPropagation();
         onToggle();
       }}
-      className={`group/check mt-0.5 flex size-[1.15rem] shrink-0 items-center justify-center rounded-full border-2 ${RING[task.priority]} ${PRIORITY_CLASS[task.priority]} ${task.isCompleted ? 'bg-current' : ''}`}
+      // The button is a 24px target (WCAG 2.5.8); the visible circle is smaller, inside it.
+      className="group/check -mt-0.5 -mr-1 -ml-1 flex size-6 shrink-0 items-center justify-center rounded-full"
     >
       <span
-        className={`scale-75 ${task.isCompleted ? 'text-bg' : 'opacity-0 group-hover/check:opacity-100'}`}
+        className={`flex size-[1.15rem] items-center justify-center rounded-full border-2 ${RING[task.priority]} ${PRIORITY_CLASS[task.priority]} ${task.isCompleted ? 'bg-current' : ''}`}
       >
-        <CheckIcon />
+        <span
+          className={`scale-75 ${task.isCompleted ? 'text-bg' : 'opacity-0 group-hover/check:opacity-100'}`}
+        >
+          <CheckIcon />
+        </span>
       </span>
     </button>
   );
@@ -66,7 +80,13 @@ export interface TaskItemProps {
   dragHandle?: {
     attributes: DraggableAttributes;
     listeners: DraggableSyntheticListeners | undefined;
+    /** Dragging here is pointer-only (the keyboard has another way): the grip stays out of the tab order. */
+    pointerOnly?: boolean;
   };
+  /** In a hand-ordered list: the menu offers Move up/down and nesting, as alternatives to dragging. */
+  reorderable?: boolean;
+  /** For a sortable list: the drag library's ref and transform go on the `<li>` itself. */
+  listItem?: { ref?: Ref<HTMLLIElement>; style?: CSSProperties; className?: string };
   children?: ReactNode;
 }
 
@@ -79,8 +99,11 @@ export function TaskItem({
   collapsed,
   onToggleCollapsed,
   dragHandle,
+  reorderable = false,
+  listItem,
   children,
 }: TaskItemProps) {
+  const uid = useId();
   const state = useSyncState();
   const prefs = usePreferences();
   const today = todayIn(useTimeZone());
@@ -92,6 +115,7 @@ export function TaskItem({
   const due = task.due ? describeDue(task.due, today, prefs) : null;
   const deadline = task.deadline ? describeDate(task.deadline, null, today, prefs) : null;
   const selected = ui.selected.has(task.id);
+  const moves = reorderable ? taskMoves(state, task) : null;
   const readOnly = project ? !['owner', 'admin', 'editor'].includes(project.role) : true;
   const firstLine = task.description.split('\n').find((l) => l.trim()) ?? '';
   const assignee = task.assigneeId ? state.collaborators.get(task.assigneeId) : undefined;
@@ -107,6 +131,9 @@ export function TaskItem({
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
+    // Letters and digits only act when single-key shortcuts are on (WCAG 2.1.4); arrow keys,
+    // Enter and Delete always work.
+    if (!prefs.keyboardShortcuts && e.key.length === 1) return;
     const rows = [...document.querySelectorAll<HTMLElement>('[data-task-row]')];
     const i = rows.indexOf(e.currentTarget);
     const move = (d: number) => rows[i + d]?.focus();
@@ -147,26 +174,42 @@ export function TaskItem({
   };
 
   return (
-    <li className="list-none">
+    <li
+      ref={listItem?.ref}
+      style={listItem?.style}
+      className={`list-none ${listItem?.className ?? ''}`}
+    >
       <div
         data-task-row
         tabIndex={0}
+        role="group"
+        aria-labelledby={`${uid}-title`}
+        aria-describedby={`${uid}-details`}
         onClick={onClick}
         onKeyDown={onKeyDown}
-        aria-selected={selected}
-        className={`group relative flex cursor-pointer items-start gap-2 border-b border-line px-1 py-[var(--bk-row-py)] outline-none focus-visible:bg-surface-alt ${selected ? 'bg-accent/10' : 'hover:bg-surface-alt/60'}`}
+        className={`group relative flex cursor-pointer items-start gap-2 border-b border-line px-1 py-[var(--bk-row-py)] focus-visible:bg-surface-alt focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${selected ? 'bg-accent/10' : 'hover:bg-surface-alt/60'}`}
         style={{ paddingLeft: `${0.25 + depth * 1.75}rem` }}
       >
         {dragHandle && !readOnly ? (
-          <span
+          <button
+            type="button"
             {...dragHandle.attributes}
             {...dragHandle.listeners}
             aria-label="Drag to reorder"
-            className="absolute top-2 -left-5 cursor-grab text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            {...(dragHandle.pointerOnly
+              ? {
+                  tabIndex: -1,
+                  'aria-hidden': true,
+                  role: undefined,
+                  'aria-describedby': undefined,
+                  'aria-roledescription': undefined,
+                }
+              : {})}
+            className="absolute top-1 -left-6 flex size-6 cursor-grab items-center justify-center rounded text-muted opacity-0 group-hover:opacity-100 hover:text-fg focus-visible:opacity-100"
             onClick={(e) => e.stopPropagation()}
           >
             <GripIcon />
-          </span>
+          </button>
         ) : null}
         {onToggleCollapsed ? (
           <button
@@ -195,12 +238,17 @@ export function TaskItem({
         />
         <div className="min-w-0 flex-1">
           <div
+            id={`${uid}-title`}
             className={`text-sm leading-snug break-words ${task.isCompleted ? 'text-muted line-through' : ''}`}
           >
             <InlineMarkdown text={task.content} />
           </div>
           {firstLine && <div className="truncate text-xs text-muted">{firstLine}</div>}
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
+          <div
+            id={`${uid}-details`}
+            className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted"
+          >
+            {selected && <span className="sr-only">Selected.</span>}
             {due && (
               <span className={`inline-flex items-center gap-1 ${TONE_CLASS[due.tone]}`}>
                 <CalendarIcon /> {due.label}
@@ -307,6 +355,31 @@ export function TaskItem({
                   >
                     Copy link
                   </MenuItem>
+                  {moves && (moves.up || moves.down || moves.indent || moves.outdent) && (
+                    <>
+                      <div className="my-1 border-t border-line" />
+                      {(
+                        [
+                          ['Move up', moves.up],
+                          ['Move down', moves.down],
+                          ['Make sub-task of the task above', moves.indent],
+                          ['Move out of parent task', moves.outdent],
+                        ] as const
+                      ).map(([label, to]) =>
+                        to ? (
+                          <MenuItem
+                            key={label}
+                            onClick={() => {
+                              actions.place(task, to);
+                              close();
+                            }}
+                          >
+                            {label}
+                          </MenuItem>
+                        ) : null,
+                      )}
+                    </>
+                  )}
                   <div className="my-1 flex gap-1 px-3">
                     {[1, 2, 3, 4].map((p) => (
                       <button

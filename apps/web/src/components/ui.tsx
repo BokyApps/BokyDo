@@ -333,6 +333,7 @@ export function Popover({
   panelClassName = '',
 }: {
   trigger: (props: {
+    id: string;
     onClick: () => void;
     'aria-expanded': boolean;
     'aria-haspopup': 'dialog';
@@ -347,6 +348,12 @@ export function Popover({
   const open = controlled ?? uncontrolled;
   const setOpen = (v: boolean) => (onOpenChange ? onOpenChange(v) : setUncontrolled(v));
   const ref = useRef<HTMLDivElement>(null);
+  const triggerId = useId();
+  /** Closing from the keyboard puts focus back where it came from, not on the page body. */
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    queueMicrotask(() => document.getElementById(triggerId)?.focus());
+  };
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -355,7 +362,7 @@ export function Popover({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        setOpen(false);
+        closeAndRestoreFocus();
       }
     };
     document.addEventListener('mousedown', onDown);
@@ -365,7 +372,7 @@ export function Popover({
       document.removeEventListener('keydown', onKey, true);
     };
   });
-  const close = () => setOpen(false);
+  const close = closeAndRestoreFocus;
   // Keep the panel on screen: open towards whichever side has room (CSSOM, so CSP-safe).
   const panel = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -386,11 +393,17 @@ export function Popover({
   }, [open, align]);
   return (
     <div ref={ref} className="relative inline-block">
-      {trigger({ onClick: () => setOpen(!open), 'aria-expanded': open, 'aria-haspopup': 'dialog' })}
+      {trigger({
+        id: triggerId,
+        onClick: () => setOpen(!open),
+        'aria-expanded': open,
+        'aria-haspopup': 'dialog',
+      })}
       {open && (
         <div
           ref={panel}
           role="dialog"
+          aria-labelledby={triggerId}
           className={`absolute z-40 mt-1 min-w-48 rounded-xl border border-line bg-surface p-1 text-sm shadow-lg ${align === 'right' ? 'right-0' : 'left-0'} ${panelClassName}`}
         >
           {typeof children === 'function' ? children(close) : children}

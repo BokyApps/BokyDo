@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { contrast, ensureContrast } from './contrast.js';
+import { contrast, ensureContrast, mix } from './contrast.js';
 import { FAMILIES, VARIANTS } from './palettes.js';
-import { THEMES } from './tokens.js';
+import { THEMES, TINTS } from './tokens.js';
 
 describe('theme catalogue', () => {
   it('has the ten terminal families plus BokyDo, each with a light and a dark default', () => {
@@ -38,9 +38,29 @@ describe.each(THEMES.map((t) => [t.id, t] as const))('%s meets WCAG AA', (_id, t
     expect(atLeast(t.muted, 4.5)).toBe(true);
     expect(atLeast(t.danger, 4.5)).toBe(true);
   });
-  it('accent ≥ 3:1 on the page and its text ≥ 4.5:1 on the accent', () => {
-    expect(atLeast(t.accent, 3, [t.bg, t.surface])).toBe(true);
+  it('colours used as text (due labels, flags, errors) ≥ 4.5:1', () => {
+    for (const [name, c] of Object.entries({
+      danger: t.danger,
+      warning: t.warning,
+      success: t.success,
+      p1: t.p1,
+      p2: t.p2,
+      p3: t.p3,
+    }))
+      expect(atLeast(c, 4.5), `${name} ${c}`).toBe(true);
+  });
+  it('accent text (links) ≥ 4.5:1, and a button label ≥ 4.5:1 on the accent', () => {
+    expect(atLeast(t.accent, 4.5)).toBe(true);
     expect(contrast(t.accentFg, t.accent)).toBeGreaterThanOrEqual(4.5);
+  });
+  it('coloured text also reads on a tint of its own colour (badges, selected rows)', () => {
+    for (const [name, alphas] of Object.entries(TINTS) as [keyof typeof TINTS, number[]][])
+      for (const bg of backgrounds)
+        for (const a of alphas)
+          expect(
+            contrast(t[name], mix(bg, t[name], a)),
+            `${name} on ${a} tint`,
+          ).toBeGreaterThanOrEqual(4.5);
   });
   it('priority flags and project colours ≥ 3:1', () => {
     for (const c of [t.p1, t.p2, t.p3, t.p4, t.warning, t.success, ...Object.values(t.project)]) {
@@ -72,6 +92,7 @@ describe('fidelity', () => {
         if (theme.tokens[key] === def.raw[key]) kept++;
       }
     }
-    expect(kept / total).toBeGreaterThan(0.7);
+    // Accents are link text, so more of them are nudged to 4.5:1 than were at the old 3:1.
+    expect(kept / total).toBeGreaterThan(0.6);
   });
 });

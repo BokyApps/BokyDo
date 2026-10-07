@@ -21,11 +21,19 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useState, type ReactNode } from 'react';
 import { useTaskActions } from '../lib/actions.js';
+import { announcementsFor, taskName } from '../lib/dnd-announcements.js';
 import { describeDate, describeDue, TONE_CLASS, todayIn } from '../lib/dates.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { useTaskUI, type AddDefaults } from '../lib/task-ui.js';
 import { subtaskProgress } from '../lib/views.js';
-import { CalendarIcon, ChevronIcon, CommentIcon, DeadlineIcon, SubtaskIcon } from './icons.js';
+import {
+  CalendarIcon,
+  ChevronIcon,
+  CommentIcon,
+  DeadlineIcon,
+  GripIcon,
+  SubtaskIcon,
+} from './icons.js';
 import { InlineMarkdown } from './Markdown.js';
 import { ProjectDot } from './pickers.js';
 import { InlineAdd } from './TaskEditor.js';
@@ -89,6 +97,14 @@ export function Board({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   const byId = new Map(columns.map((c) => [c.id, c]));
+  const announcements = announcementsFor((id) => {
+    const key = String(id);
+    const task = columns.flatMap((c) => c.tasks).find((t) => t.id === key);
+    if (task) return taskName(task.content);
+    const column = byId.get(key.replace(/^column:/, ''));
+    if (!column) return null;
+    return `the column “${column.label ?? (typeof column.title === 'string' ? column.title : 'column')}”`;
+  });
 
   const onDragStart = ({ active }: DragStartEvent) =>
     setDragging((active.data.current?.task as Task | undefined) ?? null);
@@ -130,6 +146,7 @@ export function Board({
       collisionDetection={closestCorners}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      accessibility={{ announcements }}
       onDragCancel={() => setDragging(null)}
     >
       <div className="-mx-4 flex items-start gap-3 overflow-x-auto px-4 pb-4 sm:-mx-6 sm:px-6">
@@ -245,21 +262,36 @@ function SortableCard({
   showProject: boolean;
   disabled: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: task.id,
-    data: { task },
-    disabled,
-  });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: task.id, data: { task }, disabled });
+  // Pointers can drag the whole card. Keyboard dragging starts from a real button (the handle),
+  // so the card itself holds no focusable role and its checkbox and title stay ordinary controls.
   return (
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={`rounded-lg focus-visible:outline-2 focus-visible:outline-accent ${isDragging ? 'opacity-40' : ''}`}
-      {...attributes}
+      className={`group/card relative rounded-lg ${isDragging ? 'opacity-40' : ''}`}
       {...listeners}
-      aria-roledescription="draggable task card"
-      aria-label={task.content}
     >
+      {!disabled && (
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          {...attributes}
+          aria-label={`Move “${task.content}”`}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-1 right-1 z-10 rounded p-1 text-muted opacity-0 group-hover/card:opacity-100 hover:text-fg focus-visible:opacity-100"
+        >
+          <GripIcon />
+        </button>
+      )}
       <TaskCard task={task} showProject={showProject} />
     </li>
   );
@@ -298,7 +330,7 @@ export function TaskCard({
         />
         <button
           type="button"
-          className="min-w-0 flex-1 text-left break-words"
+          className="min-h-6 min-w-0 flex-1 text-left break-words"
           onClick={(e) => {
             e.stopPropagation();
             ui.openTask(task.id);

@@ -5,14 +5,13 @@ import {
   MAX_TEMPLATE_DEPTH,
   parseTemplateCsv,
   serializeTemplateCsv,
-  type Command,
   type CommandType,
-  type SyncResponse,
   type Template,
   type TemplateTask,
 } from '@bokydo/shared';
-import { emptyState, SyncStore, type SyncState } from '@bokydo/sync-client';
+import { emptyState, type SyncState } from '@bokydo/sync-client';
 import { describe, expect, it } from 'vitest';
+import { storeWith } from '../test-store.js';
 import { exportDate, projectToTemplate } from './export-project.js';
 import { GALLERY } from './gallery.js';
 import { planImport, type ImportTarget, type PlannedCommand } from './import-plan.js';
@@ -41,62 +40,6 @@ const task = (content: string, over: Partial<TemplateTask> = {}): TemplateTask =
   comments: [],
   ...over,
 });
-
-const USER = {
-  id: 'u1',
-  username: 'alice',
-  isAdmin: false,
-  inboxProjectId: 'inbox',
-  preferences: DEFAULT_PREFERENCES,
-};
-const signedIn = (): SyncResponse => ({
-  cursor: '1',
-  fullSync: true,
-  user: USER,
-  projects: [],
-  sections: [],
-  tasks: [],
-  labels: [],
-  filters: [],
-  comments: [],
-  removed: {
-    projects: [],
-    sections: [],
-    tasks: [],
-    labels: [],
-    filters: [],
-    comments: [],
-    reminders: [],
-  },
-  collaborators: [],
-  members: [],
-  invitations: [],
-  notifications: [],
-  unreadNotifications: 0,
-  workspaces: [],
-  workspaceMembers: [],
-  folders: [],
-  reminders: [],
-  results: {},
-});
-
-/**
- * BokyDo's own client state after these commands: a signed-in user, and a store that applies
- * commands optimistically and never reaches a server (its second request just waits).
- */
-async function storeWith(
-  commands: PlannedCommand[],
-  before: PlannedCommand[] = [],
-): Promise<SyncState> {
-  let calls = 0;
-  const store = new SyncStore({
-    sync: () => (++calls === 1 ? Promise.resolve(signedIn()) : new Promise(() => undefined)),
-  });
-  await store.pull();
-  for (const c of [...before, ...commands])
-    store.enqueue({ ...c, uuid: crypto.randomUUID() } as Command);
-  return store.state;
-}
 
 function plan(
   template: Template,

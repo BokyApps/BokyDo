@@ -63,7 +63,9 @@ export function TemplatesPage() {
           return (
             <li key={g.id}>
               <Card className="flex h-full flex-col">
-                <h3 className="font-semibold">{g.title}</h3>
+                <h3 id={`tpl-${g.id}`} className="font-semibold">
+                  {g.title}
+                </h3>
                 <p className="mt-1 flex-1 text-sm text-muted">{g.summary}</p>
                 <p className="mt-2 text-xs text-muted">
                   {counts.sections > 0 && `${counts.sections} sections · `}
@@ -71,6 +73,8 @@ export function TemplatesPage() {
                 </p>
                 <div className="mt-3 flex gap-2">
                   <Button
+                    id={`tpl-use-${g.id}`}
+                    aria-labelledby={`tpl-use-${g.id} tpl-${g.id}`}
                     onClick={() =>
                       setChoice({
                         template: g.template,
@@ -78,16 +82,16 @@ export function TemplatesPage() {
                         defaultName: g.template.name,
                       })
                     }
-                    aria-label={`Use the ${g.title} template`}
                   >
                     Use template
                   </Button>
                   <Button
                     variant="ghost"
+                    id={`tpl-csv-${g.id}`}
+                    aria-labelledby={`tpl-csv-${g.id} tpl-${g.id}`}
                     onClick={() =>
                       downloadText(safeFilename(g.title), serializeTemplateCsv(g.template))
                     }
-                    aria-label={`Download ${g.title} as CSV`}
                   >
                     Download CSV
                   </Button>

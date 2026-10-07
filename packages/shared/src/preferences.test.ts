@@ -55,3 +55,18 @@ describe('notification preferences', () => {
     ).toBe(true);
   });
 });
+
+describe('keyboard shortcuts preference', () => {
+  it('is on by default, including for rows stored before it existed', () => {
+    expect(DEFAULT_PREFERENCES.keyboardShortcuts).toBe(true);
+    expect(resolvePreferences({ timezone: 'Asia/Phnom_Penh' }).keyboardShortcuts).toBe(true);
+  });
+
+  it('can be turned off with a patch, and only with a boolean', () => {
+    expect(preferencesPatchSchema.parse({ keyboardShortcuts: false })).toEqual({
+      keyboardShortcuts: false,
+    });
+    expect(resolvePreferences({ keyboardShortcuts: false }).keyboardShortcuts).toBe(false);
+    expect(preferencesPatchSchema.safeParse({ keyboardShortcuts: 'no' }).success).toBe(false);
+  });
+});

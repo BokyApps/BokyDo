@@ -12,7 +12,7 @@ export function AdminSettingsPage() {
   const { data: settings } = useQuery(adminSettingsQuery);
   if (!settings) return null;
   return (
-    <main className="mx-auto max-w-2xl space-y-6 px-4 py-8">
+    <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
       <h1 className="text-2xl font-semibold">Admin settings</h1>
       <Section title="Instance">
         <InstanceForm settings={settings} />
@@ -23,7 +23,7 @@ export function AdminSettingsPage() {
       <Section title="Email">
         <EmailSettingsForm settings={settings} />
       </Section>
-    </main>
+    </div>
   );
 }
 

@@ -8,6 +8,7 @@ import {
   redirect,
 } from '@tanstack/react-router';
 import { AppShell } from './components/AppShell.js';
+import { RouteAnnouncer } from './components/RouteAnnouncer.js';
 import { Spinner } from './components/ui.js';
 import { instanceQuery, queryClient, sessionQuery } from './lib/queries.js';
 import { AccountSecurityPage } from './pages/AccountSecurityPage.js';
@@ -63,7 +64,13 @@ async function guard(path: string, opts: { adminOnly?: boolean } = {}) {
   if (opts.adminOnly && !session?.user.isAdmin) throw redirect({ to: '/' });
 }
 
-const rootRoute = createRootRoute({ component: Outlet, pendingComponent: Spinner });
+const RootLayout = () => (
+  <>
+    <RouteAnnouncer />
+    <Outlet />
+  </>
+);
+const rootRoute = createRootRoute({ component: RootLayout, pendingComponent: Spinner });
 const page = (path: string, component: () => React.ReactNode, opts?: { adminOnly?: boolean }) =>
   createRoute({
     getParentRoute: () => rootRoute,
