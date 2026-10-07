@@ -362,6 +362,20 @@ check "an import can't write into a project the user can't edit" \
 as_admin
 check "the Templates page is served by the web app" test "$(http_code -H 'accept: text/html' "$BASE/templates")" = 200
 
+echo "== accessibility (W12b)"
+# Single-key shortcuts can be turned off (WCAG 2.1.4): the server stores a boolean and only a boolean.
+shortcuts_off() { jq -e '.user.preferences.keyboardShortcuts == false' <<<"$1"; }
+shortcuts_on() { jq -e '.user.preferences.keyboardShortcuts == true' <<<"$1"; }
+check "single-key shortcuts are on by default" shortcuts_on "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+C_OFF=$(cmd user_update_preferences '{"keyboardShortcuts":false}')
+check "turning them off is accepted" result_is "$(body_of "$(sync_cmds "$C_OFF")")" "$(jq -r .uuid <<<"$C_OFF")" true
+check "and persists" shortcuts_off "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+C_BAD=$(cmd user_update_preferences '{"keyboardShortcuts":"no"}')
+check "a non-boolean value is refused" result_is "$(body_of "$(sync_cmds "$C_BAD")")" "$(jq -r .uuid <<<"$C_BAD")" false
+C_ON=$(cmd user_update_preferences '{"keyboardShortcuts":true}')
+sync_cmds "$C_ON" >/dev/null
+check "and they can be turned back on" shortcuts_on "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
+
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
 sleep 5

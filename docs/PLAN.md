@@ -570,7 +570,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W11e | Export everything, scheduled encrypted backups + restore, account deletion | Opus | None | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
 | W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Best after UI churn from W7–W11 settles; caching must not break the push service worker | W10, W11 |
-| W12b | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | None (repeat after big UI changes) | Everything |
+| W12b ✅ | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | **Done 2026-10-07** ([docs/accessibility.md](accessibility.md)): axe and keyboard audit passes (`docker/a11y-audit.mjs`, repeat after big UI changes); real screen-reader testing still open for W13 | Everything |
 | W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Do after most UI exists (late W11) to avoid churn | Server work |
 | W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |
 | M1 | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | Needed by A3 | A1, A2 |
