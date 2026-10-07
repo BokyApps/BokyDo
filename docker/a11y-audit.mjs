@@ -169,6 +169,7 @@ async function axePass({ browser, project, filter, csrfOf }) {
       ['/settings', 'Settings: appearance'],
       ['/settings/notifications', 'Settings: notifications'],
       ['/settings/calendar', 'Settings: calendar'],
+      ['/settings/apps', 'Settings: apps & tokens'],
     ]) {
       await page.goto(BASE + url);
       await scan(page, tag(name));
