@@ -10,7 +10,7 @@ import { requireSession } from '../http/access.js';
 import type { SyncService } from '../sync/sync-service.js';
 import type { Delivery } from './delivery.js';
 import { readUnsubscribeToken } from './unsubscribe.js';
-import { encryptPayload, pushEndpointAllowed, type VapidKeys } from './webpush.js';
+import { encryptPayload, type VapidKeys } from './webpush.js';
 
 const MAX_SUBSCRIPTIONS_PER_USER = 20;
 
@@ -54,7 +54,7 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
     const body = subscriptionSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'validation_failed' });
     const { endpoint, keys } = body.data;
-    if (!pushEndpointAllowed(endpoint))
+    if (!deps.delivery.acceptsPushEndpoint(endpoint))
       return reply.status(400).send({ error: 'unsupported_push_service' });
     try {
       encryptPayload(Buffer.from('{}'), keys); // proves the keys are usable

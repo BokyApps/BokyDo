@@ -279,6 +279,16 @@ check "push key is a P-256 public key" \
 r=$(api POST /api/v1/push/subscriptions '{"endpoint":"https://169.254.169.254/latest/meta-data/","keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}}') # gitleaks:allow (RFC 8291 example keys)
 check "push endpoints outside known push services are refused (SSRF)" \
   bash -c "[[ $(status_of "$r") == 400 ]] && jq -e '.error == \"unsupported_push_service\"' <<<'$(body_of "$r")'"
+UP_SUB='{"endpoint":"https://push.example.com/upSmoke?up=1","keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}}' # gitleaks:allow (RFC 8291 example keys)
+check "UnifiedPush server refused until the admin lists it (M1)" \
+  test "$(status_of "$(api POST /api/v1/push/subscriptions "$UP_SUB")")" = 400
+check "push allow-list rejects IP addresses and bare domains" \
+  test "$(status_of "$(api PATCH /api/v1/admin/settings '{"push.allowedHosts":["10.0.0.5","*.com"]}')")" = 400
+api PATCH /api/v1/admin/settings '{"push.allowedHosts":["push.example.com"]}' >/dev/null
+check "listed UnifiedPush server accepted" \
+  test "$(status_of "$(api POST /api/v1/push/subscriptions "$UP_SUB")")" = 201
+api DELETE /api/v1/push/subscriptions '{"endpoint":"https://push.example.com/upSmoke?up=1"}' >/dev/null
+api PATCH /api/v1/admin/settings '{"push.allowedHosts":[]}' >/dev/null
 # A real reminder: due two minutes from now (the smoke admin's zone), reminded one minute before.
 DUE_DAY=$(TZ=Asia/Phnom_Penh date -d '+2 min' +%F); DUE_TIME=$(TZ=Asia/Phnom_Penh date -d '+2 min' +%H:%M)
 REM_TASK=$(uuid)
@@ -389,6 +399,8 @@ check "private network unreachable until allow-listed (SSRF)" \
 api PATCH /api/v1/admin/settings '{"network.privateAllowlist":["mailpit"]}' >/dev/null
 check "allow-listed private host is reached (and answers 404)" \
   bash -c "jq -e '.error == \"unexpected_status\" and .status == 404' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
+check "a real model call through the allow-listed host fails cleanly (W7b)" \
+  bash -c "jq -e '.ok == false and (.status == 404 or .status == 405)' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/try" '{"model":"smoke-model","kind":"chat"}')")'"
 check "metadata address refused even for admins" \
   test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://169.254.169.254/latest"}')")" = 400
 r=$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"Mine","baseUrl":"https://mailpit:8025/v1"}')

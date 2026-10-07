@@ -7,6 +7,7 @@ import {
   sendPush,
   VapidKeys,
 } from './webpush.js';
+import { OutboundError, type OutboundFetch } from '../net/outbound.js';
 
 const b = (s: string) => Buffer.from(s.replace(/\s/g, ''), 'base64url');
 
@@ -134,27 +135,54 @@ describe('push endpoints', () => {
       auth: Buffer.alloc(16).toString('base64url'),
     };
     const calls: string[] = [];
-    const fake = (status: number) =>
-      (async (url: string | URL | Request) => {
-        calls.push(String(url));
-        return new Response(null, { status });
-      }) as typeof fetch;
+    const fake =
+      (status: number): OutboundFetch =>
+      async (url) => {
+        calls.push(url);
+        return {
+          status,
+          headers: {},
+          body: (async function* () {})(),
+          text: async () => '',
+          json: async () => null,
+          cancel: () => undefined,
+        };
+      };
+    const failing: OutboundFetch = async () => {
+      throw new OutboundError('blocked_address');
+    };
     const msg = { title: 't', body: 'b', url: '/today' };
-    expect(
-      await sendPush({ endpoint: 'https://10.0.0.5/x', ...keys }, msg, vapid, 's', {
-        fetchImpl: fake(201),
-      }),
-    ).toBe('gone');
+    const send = (endpoint: string, fetch: OutboundFetch, extraHosts: string[] = []) =>
+      sendPush({ endpoint, ...keys }, msg, vapid, 's', { fetch, extraHosts });
+    expect(await send('https://10.0.0.5/x', fake(201))).toBe('gone');
+    expect(await send('https://ntfy.example.com/up1', fake(201))).toBe('gone');
     expect(calls).toEqual([]);
     const ep = 'https://fcm.googleapis.com/fcm/send/abc';
-    expect(
-      await sendPush({ endpoint: ep, ...keys }, msg, vapid, 's', { fetchImpl: fake(201) }),
-    ).toBe('sent');
-    expect(
-      await sendPush({ endpoint: ep, ...keys }, msg, vapid, 's', { fetchImpl: fake(410) }),
-    ).toBe('gone');
-    expect(
-      await sendPush({ endpoint: ep, ...keys }, msg, vapid, 's', { fetchImpl: fake(500) }),
-    ).toBe('failed');
+    expect(await send(ep, fake(201))).toBe('sent');
+    expect(await send(ep, fake(410))).toBe('gone');
+    expect(await send(ep, fake(500))).toBe('failed');
+    expect(await send(ep, failing)).toBe('failed');
+    expect(await send('https://ntfy.example.com/up1', fake(201), ['ntfy.example.com'])).toBe(
+      'sent',
+    );
+  });
+
+  it.each([
+    ['https://ntfy.example.com/upAbc?up=1', ['ntfy.example.com'], true],
+    ['https://NTFY.example.com./upAbc', ['ntfy.example.com'], true],
+    ['https://ntfy.example.com:8443/up', ['ntfy.example.com:8443'], true],
+    ['https://ntfy.example.com:8443/up', ['ntfy.example.com'], false],
+    ['https://ntfy.example.com/up', ['ntfy.example.com:8443'], false],
+    ['https://a.push.example.org/x', ['*.push.example.org'], true],
+    ['https://push.example.org/x', ['*.push.example.org'], false],
+    ['https://ntfy.example.com.evil.example/up', ['ntfy.example.com'], false],
+    ['https://evilntfy.example.com/up', ['ntfy.example.com'], false],
+    ['http://ntfy.example.com/up', ['ntfy.example.com'], false],
+    ['https://user@ntfy.example.com/up', ['ntfy.example.com'], false],
+    ['https://ntfy.example.com/up', [], false],
+    // The vendors keep their rules whatever the list says.
+    ['https://fcm.googleapis.com:8443/x', ['ntfy.example.com'], false],
+  ])('%s with %j → %s', (url, hosts, ok) => {
+    expect(pushEndpointAllowed(url, hosts)).toBe(ok);
   });
 });

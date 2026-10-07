@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { aiRoutingSchema, privateAllowlistEntrySchema } from './ai.js';
 import { timeZoneSchema } from './preferences.js';
+import { pushHostEntrySchema } from './push.js';
 
 /**
  * Normalise an instance public URL to its origin. Sub-path hosting is not supported (cookies,
@@ -197,6 +198,16 @@ export const settingDefinitions = {
    */
   'network.privateAllowlist': {
     schema: z.array(privateAllowlistEntrySchema).max(20),
+    default: [],
+    secret: false,
+  },
+  /**
+   * Push services besides the browser vendors' (FCM, Mozilla, Apple, Windows) that devices may
+   * register with: UnifiedPush distributors such as ntfy, or a self-hosted push server. Only
+   * list servers you trust to relay notifications; their private addresses become reachable.
+   */
+  'push.allowedHosts': {
+    schema: z.array(pushHostEntrySchema).max(20),
     default: [],
     secret: false,
   },

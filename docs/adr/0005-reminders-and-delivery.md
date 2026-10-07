@@ -49,6 +49,12 @@ VAPID keys and RFC 8291 payload encryption. The server must POST to URLs that cl
 - Precision is about 10 seconds; fine for minute-granular reminders.
 - Push only reaches browsers whose vendor push service is on the allow-list. UnifiedPush and
   self-hosted push servers (for the Android app) will need an admin-managed allow-list (A-phase).
+  _Update 2026-10-07 (M1):_ that list is the admin setting `push.allowedHosts` (Admin → Settings →
+  Push services): hostnames, optionally with a port or a `*.` prefix, HTTPS only, empty by
+  default. Endpoints are checked against it when registered and again at every send, and push is
+  now sent through the SSRF-safe outbound client (ADR 0006): a listed name may resolve to a
+  private address (a self-hosted ntfy), never to loopback, link-local or metadata addresses.
+  UnifiedPush endpoints receive the same RFC 8291/8292 Web Push messages as browsers.
 - Quiet hours drop rather than defer; the inbox keeps everything, so nothing is lost.
 - At-most-once delivery was chosen over at-least-once: a duplicate reminder email is worse than
   a rare missing one when the in-app copy always exists.

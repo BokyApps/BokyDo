@@ -146,6 +146,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
     log: app.log,
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    ...(deps.resolver ? { resolver: deps.resolver } : {}),
   });
   jobs.add(
     {

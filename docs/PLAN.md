@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ (2026-10-07) · **Next: W7c, W7d, W8, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ (2026-10-07) · **Next: W7c, W7d, W8, W10b, W10d.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -546,7 +546,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 **Open items:**
 - F-029: add a pnpm override `source-map-js: ^1.2.2` once 1.2.2 passes the 7-day release-age gate (on/after 2026-10-07 14:08 UTC), re-run osv-scanner, mark F-029 fixed.
 - Push delivery was verified by tests (RFC 8291 vector, real decryption) but not in a real browser (the dev browser blocks notification permission). Check on a real HTTPS install.
-- Push only goes to the browser vendors' push services; UnifiedPush/self-hosted push needs an admin allow-list (Android phase, ADR 0005).
+- Push goes to the browser vendors' push services and to the hosts in the admin setting `push.allowedHosts` (M1, ADR 0005 update), through the SSRF-safe outbound client. For A3: UnifiedPush endpoints get the same Web Push (RFC 8291/8292) messages as browsers; `/api/v1/push/subscriptions` is still session-only and ties a subscription to a session, so the Android app needs a token-friendly variant tied to its OAuth grant (likely a migration).
 - Multi-replica would need LISTEN/NOTIFY pokes and shared rate limiters (ADR 0003); jobs already use `SKIP LOCKED`.
 
 **Open work, classified** (*added 2026-10-06*). Model tiers:
@@ -580,7 +580,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W12b ✅ | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | **Done 2026-10-07** ([docs/accessibility.md](accessibility.md)): axe and keyboard audit passes (`docker/a11y-audit.mjs`, repeat after big UI changes); real screen-reader testing still open for W13 | Everything |
 | W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Do after most UI exists (late W11) to avoid churn | Server work |
 | W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |
-| M1 | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | Needed by A3 | A1, A2 |
+| M1 ✅ | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | **Done 2026-10-07** (`push.allowedHosts`, ADR 0005 update) | A1, A2 |
 | M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
 | A1 ✅ | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | **Done 2026-10-07** (ADR 0010; SQLite instead of Room) | Web W11–W12 |
 | A2 | Android core screens, themes, time-zone picker, quick add (QuickJS spike vs server `/parse`) | Sonnet (Opus for the parser spike decision) | A1 | A4 later screens, web work |
