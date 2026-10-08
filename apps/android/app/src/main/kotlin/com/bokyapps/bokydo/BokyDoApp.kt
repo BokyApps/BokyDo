@@ -17,7 +17,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.bokyapps.bokydo.core.AppState
 import com.bokyapps.bokydo.core.BokyDoClient
+import com.bokyapps.bokydo.core.ENTITY_TYPES
+import com.bokyapps.bokydo.core.Optimistic
+import com.bokyapps.bokydo.core.SNAPSHOT_KEYS
 import com.bokyapps.bokydo.core.DiscoveryCheck
 import com.bokyapps.bokydo.core.EventStream
 import com.bokyapps.bokydo.core.PendingAuth
@@ -36,6 +40,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -54,6 +61,7 @@ class BokyDoApp : Application() {
     lateinit var store: SqliteStore
     lateinit var client: BokyDoClient
     lateinit var engine: SyncEngine
+    lateinit var quickAddParser: QuickAddParser
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _screen = MutableStateFlow<AppScreen>(AppScreen.Connect())
@@ -69,6 +77,7 @@ class BokyDoApp : Application() {
         store = SqliteStore(this)
         client = BokyDoClient(sessions)
         engine = SyncEngine(client, store)
+        quickAddParser = QuickAddParser(this)
         Notifier.createChannels(this)
         UnifiedPush.load(this)
         if (sessions.load() != null) {
@@ -155,6 +164,28 @@ class BokyDoApp : Application() {
         ReminderAlarms.clear(this)
         WorkManager.getInstance(this).cancelUniqueWork(PERIODIC)
         _screen.value = AppScreen.Connect(message)
+    }
+
+    // ---- data ----
+
+    /** The last [appState] read, shown while the next one is decoded. */
+    @Volatile
+    var lastState: AppState = AppState.EMPTY
+        private set
+
+    /** What the screens show: the synced data with queued changes applied. Reads the database. */
+    fun appState(): AppState = Optimistic.apply(
+        AppState.decode(ENTITY_TYPES.associateWith { store.all(it) }, SNAPSHOT_KEYS.associateWith { store.snapshot(it) }),
+        store.pending(Int.MAX_VALUE),
+    ).also { lastState = it }
+
+    /** Queue a change on one entity (`{ id }` args) and send it as soon as possible. */
+    fun send(type: String, id: String) = sendAll(listOf(type to buildJsonObject { put("id", id) }))
+
+    /** Queue changes in order (shown at once, kept offline) and send them as soon as possible. */
+    fun sendAll(commands: List<Pair<String, JsonObject>>) {
+        for ((type, args) in commands) engine.enqueue(type, args)
+        syncNow()
     }
 
     // ---- sync ----

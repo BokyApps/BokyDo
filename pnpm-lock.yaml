@@ -356,7 +356,11 @@ importers:
         specifier: workspace:*
         version: link:../nlp
 
-  packages/nlp: {}
+  packages/nlp:
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/shared:
     dependencies:
