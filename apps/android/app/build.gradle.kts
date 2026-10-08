@@ -49,6 +49,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.browser)
     implementation(libs.androidx.work.runtime)
+    // Quick add runs the web's parser in the WebView's isolated V8 (ADR 0016).
+    implementation(libs.androidx.javascriptengine)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)

@@ -82,5 +82,3 @@ object Reminders {
     fun next(all: List<ScheduledReminder>, shown: Set<String>, now: Long): Long? =
         all.firstOrNull { it.fireAt > now && it.key !in shown }?.fireAt
 }
-
-private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content

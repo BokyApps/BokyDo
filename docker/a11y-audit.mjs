@@ -171,6 +171,7 @@ async function axePass({ browser, project, filter, csrfOf }) {
       ['/settings/calendar', 'Settings: calendar'],
       ['/settings/apps', 'Settings: apps & tokens'],
       ['/settings/data', 'Settings: your data'],
+      ['/settings/ai', 'Settings: AI'],
     ]) {
       await page.goto(BASE + url);
       await scan(page, tag(name));
@@ -241,6 +242,7 @@ async function axePass({ browser, project, filter, csrfOf }) {
     ['/templates', 'Templates'],
     ['/settings/calendar', 'Settings: calendar'],
     ['/settings/data', 'Settings: your data'],
+    ['/settings/ai', 'Settings: AI'],
   ]) {
     await pp.goto(BASE + url);
     await scan(pp, `${name} [phone]`);
