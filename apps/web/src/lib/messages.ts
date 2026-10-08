@@ -65,6 +65,8 @@ export function errorMessage(err: unknown): string {
       return "This month's AI budget is used up. It resets next month.";
     case 'ai_refused':
       return "The AI wouldn't turn that into tasks. Try rephrasing it.";
+    case 'ai_unusable':
+      return "Couldn't turn that into a filter. Try saying it differently.";
     case 'unsupported_media_type':
       return "This browser recorded audio in a format BokyDo can't read. Try typing instead.";
     case 'audio_too_long':

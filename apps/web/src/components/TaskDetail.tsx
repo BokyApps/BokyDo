@@ -12,6 +12,7 @@ import { CopyIcon, LinkIcon, TrashIcon } from './icons.js';
 import { Markdown } from './Markdown.js';
 import { DatePicker, LabelPicker, PriorityPicker, ProjectPicker } from './pickers.js';
 import { InlineAdd } from './TaskEditor.js';
+import { TaskAssist } from './TaskAssist.js';
 import { TaskCheckbox, TaskItem } from './TaskItem.js';
 import { Button, Dialog, inputClass } from './ui.js';
 
@@ -115,6 +116,7 @@ function TaskDetail({ task }: { task: Task }) {
             }}
           />
         </div>
+        {!task.isCompleted && <TaskAssist task={task} readOnly={readOnly} />}
         <div>
           {editingDescription ? (
             <textarea

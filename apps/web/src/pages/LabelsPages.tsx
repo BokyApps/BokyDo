@@ -1,7 +1,8 @@
 import { COLORS, type Color, type Filter, type Label } from '@bokydo/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { EditIcon, PlusIcon, StarIcon, TagIcon, TrashIcon } from '../components/icons.js';
+import { FilterAssist } from '../components/FilterAssist.js';
 import { ProjectDot } from '../components/pickers.js';
 import { Board } from '../components/Board.js';
 import { TaskCollection } from '../components/TaskViews.js';
@@ -364,6 +365,7 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
   const [name, setName] = useState(filter?.name ?? '');
   const [query, setQuery] = useState(filter?.query ?? '');
   const [color, setColor] = useState<Color>(filter?.color ?? 'charcoal');
+  const formRef = useRef<HTMLFormElement>(null);
   const result = useFilter(query.trim() || 'all');
   const valid = Boolean(query.trim()) && result.ok;
   const matches = result.ok
@@ -377,8 +379,13 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
     else send('filter_add', { id: newId(), name: name.trim(), query: query.trim(), color });
     onClose();
   };
+  // A suggested query goes into the field (it is not saved), and focus moves there to review it.
+  const useSuggested = (suggested: string) => {
+    setQuery(suggested);
+    formRef.current?.querySelector<HTMLInputElement>('input[name="query"]')?.focus();
+  };
   return (
-    <form onSubmit={submit} className="space-y-4">
+    <form ref={formRef} onSubmit={submit} className="space-y-4">
       <TextField
         label="Name"
         autoFocus
@@ -387,8 +394,10 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
+      <FilterAssist onUse={useSuggested} />
       <TextField
         label="Query"
+        name="query"
         required
         maxLength={1024}
         value={query}
