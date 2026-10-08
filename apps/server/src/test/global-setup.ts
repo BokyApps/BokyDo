@@ -15,7 +15,9 @@ const LOCK = 'bokydo:test-database';
 export default async function setup(): Promise<(() => Promise<void>) | undefined> {
   const url = process.env.BOKYDO_TEST_DATABASE_URL;
   if (!url) return undefined;
-  const sql = postgres(url, { max: 1 });
+  // One connection that lives as long as the run: postgres.js otherwise recycles connections after
+  // 30–60 minutes, which would silently drop the lock in the middle of a long run or wait.
+  const sql = postgres(url, { max: 1, max_lifetime: null });
   const rows = (await sql`
     select pg_try_advisory_lock(hashtext(${LOCK})) as taken
   `) as unknown as { taken: boolean }[];
