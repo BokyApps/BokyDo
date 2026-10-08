@@ -140,6 +140,8 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/ramble/commit': 'user/after',
   'POST /api/v1/assist/task': 'user/after',
   'POST /api/v1/assist/filter': 'user/after',
+  'POST /api/v1/assist/ask': 'user/after',
+  'POST /api/v1/assist/ask/confirm': 'user/after',
   'POST /api/v1/notifications/unsubscribe': 'public/after',
   'POST /api/v1/workspaces/:id/invites': 'user/after',
   'GET /api/v1/workspaces/:id/invites': 'user/after',

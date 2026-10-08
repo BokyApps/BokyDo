@@ -340,7 +340,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
   registerRambleRoutes(app, { db, settings, sync, ai });
-  registerAssistRoutes(app, { db, settings, ai });
+  registerAssistRoutes(app, { db, settings, ai, sync });
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   registerProductivityRoutes(app, { db, settings });

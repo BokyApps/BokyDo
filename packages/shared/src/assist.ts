@@ -46,3 +46,65 @@ export interface FilterAssistResponse {
   /** Open tasks it matches now (first list only), as a sanity check for the user. */
   matches: number;
 }
+
+// ---- Ask your tasks ----
+
+export const ASK_LIMITS = {
+  /** Messages in one conversation (the client keeps it and sends it each turn). */
+  messages: 20,
+  messageChars: 4000,
+  totalChars: 30_000,
+  /** Changes the assistant may propose in one answer. */
+  proposals: 10,
+} as const;
+
+export const askRequestSchema = z
+  .object({
+    messages: z
+      .array(
+        z
+          .object({
+            role: z.enum(['user', 'assistant']),
+            content: z.string().trim().min(1).max(ASK_LIMITS.messageChars),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(ASK_LIMITS.messages)
+      .refine((m) => m.at(-1)?.role === 'user', 'The last message must be the question')
+      .refine(
+        (m) => m.reduce((n, x) => n + x.content.length, 0) <= ASK_LIMITS.totalChars,
+        'The conversation is too long; start a new one',
+      ),
+  })
+  .strict();
+export type AskRequest = z.input<typeof askRequestSchema>;
+
+/** The write tools the assistant may propose; they run only when the user confirms. */
+export const ASK_WRITE_TOOLS = ['add_task', 'update_task', 'complete_task', 'add_comment'] as const;
+export type AskWriteTool = (typeof ASK_WRITE_TOOLS)[number];
+
+/** A change the assistant suggests. Nothing has happened yet: the user confirms or ignores it. */
+export interface AskProposal {
+  tool: AskWriteTool;
+  /** The tool's arguments, as the confirm endpoint takes them back. */
+  args: Record<string, unknown>;
+  /** What it would do, in plain words (written by the server, not the model). */
+  summary: string;
+}
+
+export interface AskResponse {
+  /** The assistant's answer. Plain text: show it as text, never as HTML. */
+  reply: string;
+  proposals: AskProposal[];
+  /** Read tools it used, for "how did it know?" */
+  used: string[];
+}
+
+export const askConfirmSchema = z
+  .object({
+    tool: z.enum(ASK_WRITE_TOOLS),
+    args: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+export type AskConfirm = z.input<typeof askConfirmSchema>;

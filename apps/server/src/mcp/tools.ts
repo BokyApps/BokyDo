@@ -79,7 +79,7 @@ const CHANGE = {
 
 // ---- helpers ----
 
-async function projectIndex(ctx: ToolContext) {
+export async function projectIndex(ctx: ToolContext) {
   const visible = await ctx.db.transaction((tx) => visibleProjects(tx, ctx.userId, ctx.projectIds));
   const ids = [...visible.keys()];
   const rows = ids.length
@@ -121,7 +121,7 @@ function present(ctx: ToolContext, t: Task, index: ProjectIndex) {
   };
 }
 
-async function visibleTask(ctx: ToolContext, taskId: string) {
+export async function visibleTask(ctx: ToolContext, taskId: string) {
   const index = await projectIndex(ctx);
   const [row] = await ctx.db
     .select()

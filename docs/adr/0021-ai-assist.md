@@ -1,6 +1,6 @@
-# ADR 0021: Task Assist and Filter Assist
+# ADR 0021: Task Assist, Filter Assist and Ask your tasks
 
-- Status: Accepted (2026-10-08), W9 slice 1
+- Status: Accepted (2026-10-08), W9 slices 1 and 2
 
 ## Context
 
@@ -31,9 +31,29 @@ their collaborators, so it is untrusted input to the model (PLAN §5.5).
   `projects:read` (Filter Assist); a task the caller can't see answers 404 before any model call.
   30 calls a minute per user; budgets and metering as for every AI call.
 
+## Ask your tasks (slice 2)
+
+- `POST /api/v1/assist/ask` takes the conversation (the client keeps it: up to 20 messages,
+  30,000 characters, ending with the question) and answers in plain text. Session only: an app
+  with a token has its own model and the MCP server.
+- **The MCP tool layer is the only data access.** Read tools (search, filters, a task, projects,
+  saved filters, the overview) run with the user's own visibility, exactly as over MCP; results
+  are cut at 12,000 characters each.
+- **Writes are proposals.** The write tools (add, update, complete, comment) are offered to the
+  model described as proposals. A call is checked (arguments, the task is visible, the project
+  writable) and returned to the client with a summary we write from the checked arguments, not
+  the model's words; nothing changes. The user confirms each one, which calls
+  `/assist/ask/confirm` and runs the same tool with their own rights. A task that injects
+  instructions can therefore only cause a visible proposal.
+- **Bounded loop:** at most 6 model rounds and 16 tool calls per question; the last round gets
+  no tools and must answer. Each round is metered and budgeted like any AI call.
+- **Exfiltration:** the model has no network or messaging tool, its reply goes only to the
+  person who asked, and the client shows it as text (no links, images or HTML), on top of the
+  CSP that only loads same-origin resources.
+
 ## Consequences
 
 - No "auto-apply": the decision-model features (§5.4) with confidence thresholds are later W9
-  slices, as are reports, Ask your tasks and the eval harness.
+  slices, as are reports and the eval harness.
 - Filter Assist needs a model good enough to write the language from the prompt's summary;
   small local models may need the correction round more often.
