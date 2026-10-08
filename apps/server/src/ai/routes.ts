@@ -1,13 +1,16 @@
 import {
   AI_FEATURES,
   AI_PROVIDERS,
+  AI_SIGN_IN_PROVIDERS,
   aiCredentialCreateSchema,
   aiCredentialUpdateSchema,
   aiModelSchema,
   aiRoutingSchema,
+  isSignInProvider,
   providerSupports,
   type AiFeature,
   type AiRouting,
+  type AiSignInProvider,
 } from '@bokydo/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -25,6 +28,12 @@ import {
   type CredentialOwner,
 } from './credentials.js';
 import type { AiService } from './service.js';
+import {
+  SIGN_IN_PROTOCOLS,
+  SignInExpiredError,
+  SignInFlows,
+  SignInProviderError,
+} from './sign-in.js';
 import { instanceUsageByUser, userUsageSummary } from './usage.js';
 
 export interface AiRouteDeps {
@@ -35,6 +44,11 @@ export interface AiRouteDeps {
 }
 
 const idParams = z.object({ id: z.uuid() });
+const signInStartBody = z.object({ credentialId: z.uuid().optional() }).strict();
+const signInProviderParams = z.object({
+  provider: z.enum(AI_SIGN_IN_PROVIDERS as [AiSignInProvider, ...AiSignInProvider[]]),
+});
+const flowParams = z.object({ flowId: z.uuid() });
 const tryBody = z
   .object({ model: aiModelSchema, kind: z.enum(['chat', 'transcribe', 'embed']) })
   .strict();
@@ -56,6 +70,21 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps): void 
     maxBackoffMs: 0,
   });
 
+  // Starting a sign-in asks the provider for a code; polling is paced by the flow itself.
+  const signInStarts = new RateLimiter({
+    windowMs: 10 * 60_000,
+    maxPerWindow: 5,
+    freeFailures: 0,
+    maxBackoffMs: 0,
+  });
+  const signInPolls = new RateLimiter({
+    windowMs: 60_000,
+    maxPerWindow: 60,
+    freeFailures: 0,
+    maxBackoffMs: 0,
+  });
+  const flows = new SignInFlows(() => ai.signInFetch());
+
   const actor = (req: FastifyRequest) => ({ userId: requireSession(req).user.id, ip: req.ip });
   const userKeysOff = (reply: FastifyReply) =>
     reply.status(403).send({ error: 'forbidden', message: 'user_keys_disabled' });
@@ -67,6 +96,11 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps): void 
     ownerOf: (req: FastifyRequest) => CredentialOwner,
     allowedToWrite: () => boolean,
     afterDelete: (req: FastifyRequest, id: string) => Promise<void>,
+    /** Runs before a delete; what it returns runs (best effort) once the delete is done. */
+    beforeDelete: (
+      req: FastifyRequest,
+      id: string,
+    ) => Promise<(() => Promise<void>) | null> = async () => null,
   ) => {
     app.get(prefix, opts, async (req) => ({ credentials: await credentials.list(ownerOf(req)) }));
 
@@ -99,9 +133,11 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps): void 
     app.delete(`${prefix}/:id`, opts, async (req, reply) => {
       const params = idParams.safeParse(req.params);
       if (!params.success) return reply.status(404).send({ error: 'not_found' });
+      const then = await beforeDelete(req, params.data.id);
       const deleted = await credentials.delete(ownerOf(req), params.data.id, actor(req));
       if (!deleted) return reply.status(404).send({ error: 'not_found' });
       await afterDelete(req, params.data.id);
+      if (then) void then().catch(() => undefined);
       return reply.status(204).send();
     });
 
@@ -142,7 +178,83 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps): void 
         .set({ aiRouting: withoutCredential(routing, id) })
         .where(eq(users.id, userId));
     },
+    // Removing a signed-in subscription also ends the sign-in at the provider.
+    async (req, id) => {
+      const userId = requireSession(req).user.id;
+      const provider = await credentials.owned(userId, id);
+      if (!provider || !isSignInProvider(provider)) return null;
+      const refreshToken = await credentials.signInRefreshToken(userId, id);
+      if (!refreshToken) return null;
+      return () => SIGN_IN_PROTOCOLS[provider].revoke(ai.signInFetch(), refreshToken);
+    },
   );
+
+  // ---- subscription sign-in (W7d, ADR 0017): personal only, so user routes only ----
+
+  const signInOff = (reply: FastifyReply) => reply.status(403).send({ error: 'sign_in_disabled' });
+  const signInAllowed = () => settings.get('ai.userKeys') && settings.get('ai.subscriptionSignIn');
+
+  app.post('/api/v1/ai/sign-in/:provider/start', user, async (req, reply) => {
+    if (!signInAllowed()) return signInOff(reply);
+    const params = signInProviderParams.safeParse(req.params);
+    if (!params.success) return reply.status(404).send({ error: 'not_found' });
+    const body = parseBody(signInStartBody, req.body ?? {}, reply);
+    if (!body) return;
+    const userId = requireSession(req).user.id;
+    // Signing in again: only into one's own credential of the same provider.
+    if (
+      body.credentialId &&
+      (await credentials.owned(userId, body.credentialId)) !== params.data.provider
+    )
+      return reply.status(404).send({ error: 'not_found' });
+    if (!signInStarts.attempt(userId).allowed)
+      return reply.status(429).send({ error: 'too_many_requests' });
+    try {
+      return await flows.start(userId, params.data.provider, body.credentialId ?? null);
+    } catch (err) {
+      if (err instanceof SignInProviderError)
+        return reply.status(502).send({ error: 'ai_provider_error', code: err.code });
+      throw err;
+    }
+  });
+
+  app.post('/api/v1/ai/sign-in/flows/:flowId/poll', user, async (req, reply) => {
+    const params = flowParams.safeParse(req.params);
+    if (!params.success) return reply.status(404).send({ error: 'not_found' });
+    const userId = requireSession(req).user.id;
+    if (!signInPolls.attempt(userId).allowed)
+      return reply.status(429).send({ error: 'too_many_requests' });
+    if (!signInAllowed()) {
+      flows.cancel(userId, params.data.flowId);
+      return signInOff(reply);
+    }
+    const result = await flows.poll(userId, params.data.flowId);
+    if (!result) return reply.status(404).send({ error: 'not_found' });
+    if (result.status !== 'done') return { status: result.status };
+    try {
+      const credential = await credentials.saveSignIn(
+        userId,
+        result.provider,
+        result.credentialId,
+        result.tokens,
+        actor(req),
+      );
+      // The credential being signed in again was deleted meanwhile.
+      if (!credential) return reply.status(404).send({ error: 'not_found' });
+      return { status: 'done', credential };
+    } catch (err) {
+      if (err instanceof SignInExpiredError) return { status: 'unavailable' };
+      return credentialError(err, reply);
+    }
+  });
+
+  app.delete('/api/v1/ai/sign-in/flows/:flowId', user, async (req, reply) => {
+    const params = flowParams.safeParse(req.params);
+    if (!params.success) return reply.status(404).send({ error: 'not_found' });
+    if (!flows.cancel(requireSession(req).user.id, params.data.flowId))
+      return reply.status(404).send({ error: 'not_found' });
+    return reply.status(204).send();
+  });
 
   credentialRoutes(
     '/api/v1/admin/ai/credentials',
@@ -175,7 +287,11 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps): void 
     return {
       providers: AI_PROVIDERS,
       features: AI_FEATURES,
-      policy: { userKeys: settings.get('ai.userKeys'), instance: ai.mayUseInstance(me) },
+      policy: {
+        userKeys: settings.get('ai.userKeys'),
+        signIn: signInAllowed(),
+        instance: ai.mayUseInstance(me),
+      },
       available: await ai.availableFeatures(me),
     };
   });

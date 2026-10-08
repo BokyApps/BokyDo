@@ -3,14 +3,17 @@ import {
   AI_FEATURE_KEYS,
   AI_PROVIDERS,
   AI_PROVIDER_KEYS,
+  AI_SIGN_IN_PROVIDERS,
+  isSignInProvider,
   providerSupports,
   type AiCredential,
   type AiFeature,
   type AiProvider,
   type AiRouting,
+  type AiSignInProvider,
 } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
 import { parseHeaderLines } from '../lib/ai-headers.js';
@@ -35,7 +38,7 @@ const ENDPOINTS = {
 } as const;
 
 interface Catalog {
-  policy: { userKeys: boolean; instance: boolean };
+  policy: { userKeys: boolean; signIn: boolean; instance: boolean };
   available: AiFeature[];
 }
 
@@ -108,6 +111,8 @@ function aiFailure(code: string | undefined, status?: number): string {
       return "The answer didn't look like this kind of provider.";
     case 'unsupported':
       return "This key's provider can't do that.";
+    case 'sign_in_expired':
+      return 'The sign-in has expired. Sign in again.';
     default:
       return `It didn't work (${code ?? 'error'}${status ? `, ${status}` : ''}).`;
   }
@@ -133,6 +138,7 @@ export function AiSettings() {
     queryFn: () => api<Catalog>('GET', '/api/v1/ai/catalog'),
   });
   const userKeys = catalog.data?.policy.userKeys ?? true;
+  const signIn = catalog.data?.policy.signIn ?? false;
   return (
     <div className="space-y-6">
       {!userKeys && (
@@ -141,7 +147,7 @@ export function AiSettings() {
           the instance's AI settings.
         </Alert>
       )}
-      <CredentialsPanel scope="user" canWrite={userKeys} />
+      <CredentialsPanel scope="user" canWrite={userKeys} signIn={signIn} />
       <RoutingPanel scope="user" canWrite={userKeys} />
       <UsagePanel />
     </div>
@@ -164,6 +170,7 @@ function AiPolicyForm() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery(adminSettingsQuery);
   const [userKeys, setUserKeys] = useState<boolean | null>(null);
+  const [signIn, setSignIn] = useState<boolean | null>(null);
   const [access, setAccess] = useState<string | null>(null);
   const [tokens, setTokens] = useState<string | null>(null);
   const [unlimitedTokens, setUnlimitedTokens] = useState<boolean | null>(null);
@@ -185,6 +192,7 @@ function AiPolicyForm() {
     e.preventDefault();
     save.mutate({
       'ai.userKeys': userKeys ?? settings['ai.userKeys'],
+      'ai.subscriptionSignIn': signIn ?? settings['ai.subscriptionSignIn'],
       'ai.instanceAccess': (access ?? settings['ai.instanceAccess']) as
         'off' | 'admins' | 'everyone',
       'ai.monthlyTokenBudget': tokensUnlimited ? null : Number(tokenValue),
@@ -248,6 +256,13 @@ function AiPolicyForm() {
         checked={userKeys ?? settings['ai.userKeys']}
         onChange={(e) => setUserKeys(e.target.checked)}
       />
+      <Checkbox
+        label="Let people sign in with their own AI subscription (experimental)"
+        hint="SuperGrok / X Premium instead of an API key. Each person signs in to their own account; it can't be shared or used for the instance. These sign-ins aren't official APIs and may stop working."
+        checked={signIn ?? settings['ai.subscriptionSignIn']}
+        disabled={!(userKeys ?? settings['ai.userKeys'])}
+        onChange={(e) => setSignIn(e.target.checked)}
+      />
       {save.isError && <Alert>{errorMessage(save.error)}</Alert>}
       {save.isSuccess && <Alert tone="success">Saved.</Alert>}
       <Button type="submit" busy={save.isPending}>
@@ -257,13 +272,26 @@ function AiPolicyForm() {
   );
 }
 
-function CredentialsPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean }) {
+function CredentialsPanel({
+  scope,
+  canWrite,
+  signIn = false,
+}: {
+  scope: Scope;
+  canWrite: boolean;
+  /** Subscription sign-in is allowed (own credentials only). */
+  signIn?: boolean;
+}) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const [form, setForm] = useState<{ open: boolean; credential: AiCredential | null }>({
     open: false,
     credential: null,
   });
+  const [signingIn, setSigningIn] = useState<{
+    provider: AiSignInProvider;
+    credentialId: string | null;
+  } | null>(null);
   const list = useQuery({
     queryKey: ['ai-credentials', scope],
     queryFn: () => api<{ credentials: AiCredential[] }>('GET', ENDPOINTS[scope].credentials),
@@ -316,7 +344,13 @@ function CredentialsPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean
               </p>
               <p className="text-xs text-muted">
                 {c.baseUrl ?? AI_PROVIDERS[c.provider].defaultBaseUrl ?? 'no address'} ·{' '}
-                {c.hasKey ? 'key set' : 'no key'}
+                {isSignInProvider(c.provider)
+                  ? c.hasKey
+                    ? 'signed in'
+                    : 'sign-in expired'
+                  : c.hasKey
+                    ? 'key set'
+                    : 'no key'}
                 {c.headerNames.length > 0 && ` · headers: ${c.headerNames.join(', ')}`}
                 {c.lastUsedAt && ` · last used ${new Date(c.lastUsedAt).toLocaleDateString()}`}
               </p>
@@ -337,14 +371,26 @@ function CredentialsPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean
               )}
             </div>
             <div className="flex shrink-0 gap-1">
-              <Button
-                variant="ghost"
-                busy={test.isPending && test.variables === c.id}
-                disabled={!canWrite}
-                onClick={() => test.mutate(c.id)}
-              >
-                Test
-              </Button>
+              {isSignInProvider(c.provider) && !c.hasKey ? (
+                <Button
+                  variant="ghost"
+                  disabled={!signIn || signingIn !== null}
+                  onClick={() =>
+                    setSigningIn({ provider: c.provider as AiSignInProvider, credentialId: c.id })
+                  }
+                >
+                  Sign in again
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  busy={test.isPending && test.variables === c.id}
+                  disabled={!canWrite}
+                  onClick={() => test.mutate(c.id)}
+                >
+                  Test
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 disabled={!canWrite}
@@ -373,11 +419,35 @@ function CredentialsPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean
       {remove.isError && <Alert>{errorMessage(remove.error)}</Alert>}
 
       {canWrite && !form.open && (
-        <div className="mt-4">
+        <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => setForm({ open: true, credential: null })}>
             Add a key
           </Button>
+          {own &&
+            signIn &&
+            signingIn === null &&
+            AI_SIGN_IN_PROVIDERS.map((p) => (
+              <Button
+                key={p}
+                variant="secondary"
+                onClick={() => setSigningIn({ provider: p, credentialId: null })}
+              >
+                Sign in to {AI_PROVIDERS[p].name.replace(/ sign-in\)$/, ')')}
+              </Button>
+            ))}
         </div>
+      )}
+      {signingIn && (
+        <SignInFlow
+          provider={signingIn.provider}
+          credentialId={signingIn.credentialId}
+          onDone={() => {
+            invalidate();
+            void queryClient.invalidateQueries({ queryKey: ['ai-catalog'] });
+            setSigningIn(null);
+          }}
+          onClose={() => setSigningIn(null)}
+        />
       )}
       {form.open && (
         <CredentialForm
@@ -413,12 +483,16 @@ function CredentialForm({
   const [headers, setHeaders] = useState('');
   const info = AI_PROVIDERS[provider];
   const needsBaseUrl = info.baseUrl === 'required';
+  // A signed-in subscription has no key or address to edit: only its name.
+  const renameOnly = isSignInProvider(provider);
 
   const save = useMutation({
     mutationFn: () => {
       const parsedHeaders = parseHeaderLines(headers);
       if (editing) {
         // Only send what changed; a blank key or header box keeps what is stored.
+        if (renameOnly)
+          return api('PATCH', `${ENDPOINTS[scope].credentials}/${credential.id}`, { label });
         return api('PATCH', `${ENDPOINTS[scope].credentials}/${credential.id}`, {
           label,
           ...(needsBaseUrl ? { baseUrl } : {}),
@@ -447,15 +521,20 @@ function CredentialForm({
       <h3 className="font-medium">{editing ? `Edit “${credential.label}”` : 'Add a key'}</h3>
       {editing ? (
         <p className="text-sm text-muted">
-          {AI_PROVIDERS[credential.provider].name}. The provider cannot be changed; add a new key
-          instead. Leave a field blank to keep what is stored.
+          {AI_PROVIDERS[credential.provider].name}.{' '}
+          {renameOnly
+            ? 'A signed-in subscription can only be renamed.'
+            : 'The provider cannot be changed; add a new key instead. Leave a field blank to keep what is stored.'}
         </p>
       ) : (
         <SelectField
           label="Provider"
           value={provider}
           onChange={(e) => setProvider(e.target.value as AiProvider)}
-          options={AI_PROVIDER_KEYS.map((key) => ({ value: key, label: AI_PROVIDERS[key].name }))}
+          options={AI_PROVIDER_KEYS.filter((key) => !isSignInProvider(key)).map((key) => ({
+            value: key,
+            label: AI_PROVIDERS[key].name,
+          }))}
           hint={info.capabilities.join(', ')}
         />
       )}
@@ -467,7 +546,7 @@ function CredentialForm({
         onChange={(e) => setLabel(e.target.value)}
         hint="How this key appears in the list and in each feature's settings."
       />
-      {needsBaseUrl ? (
+      {renameOnly ? null : needsBaseUrl ? (
         <TextField
           label="Base URL"
           type="url"
@@ -484,15 +563,17 @@ function CredentialForm({
           </p>
         )
       )}
-      <TextField
-        label="API key"
-        type="password"
-        autoComplete="off"
-        required={!editing && info.apiKey === 'required'}
-        value={apiKey}
-        onChange={(e) => setApiKey(e.target.value)}
-        hint={info.apiKey === 'optional' ? 'Optional for this provider.' : undefined}
-      />
+      {!renameOnly && (
+        <TextField
+          label="API key"
+          type="password"
+          autoComplete="off"
+          required={!editing && info.apiKey === 'required'}
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          hint={info.apiKey === 'optional' ? 'Optional for this provider.' : undefined}
+        />
+      )}
       {info.customHeaders && (
         <label className="block space-y-1">
           <span className="text-sm font-medium">
@@ -522,6 +603,158 @@ function CredentialForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+interface SignInStart {
+  flowId: string;
+  userCode: string;
+  verificationUrl: string;
+  expiresAt: string;
+  intervalSeconds: number;
+}
+
+type SignInStatus = 'pending' | 'done' | 'denied' | 'expired' | 'unavailable';
+
+const SIGN_IN_ENDED: Record<Exclude<SignInStatus, 'pending' | 'done'>, string> = {
+  denied: 'The sign-in was declined.',
+  expired: 'The code expired before it was approved. Start again.',
+  unavailable: "The provider didn't answer. Try again in a moment.",
+};
+
+/**
+ * Subscription sign-in (device flow): the server gets a code, you approve it on the provider's
+ * own site, and this page waits for the server to finish. Nothing is typed into this page.
+ */
+function SignInFlow({
+  provider,
+  credentialId,
+  onDone,
+  onClose,
+}: {
+  provider: AiSignInProvider;
+  credentialId: string | null;
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  const [flow, setFlow] = useState<SignInStart | null>(null);
+  const [ended, setEnded] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const start = useMutation({
+    mutationFn: () =>
+      api<SignInStart>(
+        'POST',
+        `/api/v1/ai/sign-in/${provider}/start`,
+        credentialId ? { credentialId } : {},
+      ),
+    onSuccess: (f) => {
+      setEnded(null);
+      setFlow(f);
+    },
+  });
+  const { mutate: begin } = start;
+  useEffect(() => begin(), [begin]);
+
+  useEffect(() => {
+    if (!flow) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      try {
+        const r = await api<{ status: SignInStatus }>(
+          'POST',
+          `/api/v1/ai/sign-in/flows/${flow.flowId}/poll`,
+        );
+        if (stopped) return;
+        if (r.status === 'done') return onDone();
+        if (r.status !== 'pending') {
+          setFlow(null);
+          return setEnded(SIGN_IN_ENDED[r.status]);
+        }
+      } catch {
+        if (stopped) return;
+        setFlow(null);
+        return setEnded("The sign-in couldn't finish. Start again.");
+      }
+      timer = setTimeout(() => void tick(), flow.intervalSeconds * 1000);
+    };
+    timer = setTimeout(() => void tick(), flow.intervalSeconds * 1000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [flow, onDone]);
+
+  const cancel = () => {
+    if (flow) void api('DELETE', `/api/v1/ai/sign-in/flows/${flow.flowId}`).catch(() => undefined);
+    onClose();
+  };
+  const site = flow ? new URL(flow.verificationUrl).host : '';
+
+  return (
+    <div className="mt-4 space-y-3 rounded-lg border border-line p-4">
+      <h3 className="font-medium">Sign in to {AI_PROVIDERS[provider].name}</h3>
+      {start.isPending && <p className="text-sm text-muted">Getting a sign-in code…</p>}
+      {start.isError && <Alert>{errorMessage(start.error)}</Alert>}
+      {flow && (
+        <>
+          <ol className="list-decimal space-y-2 pl-5 text-sm">
+            <li>
+              Open{' '}
+              <a
+                href={flow.verificationUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-accent underline"
+              >
+                {site}
+              </a>{' '}
+              and sign in to your own account there.
+            </li>
+            <li>
+              Check that it shows this code, then approve:{' '}
+              <code className="rounded bg-surface-alt px-2 py-0.5 font-mono text-base tracking-wider">
+                {flow.userCode}
+              </code>{' '}
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(flow.userCode)
+                    .then(() => setCopied(true))
+                    .catch(() => undefined)
+                }
+              >
+                {copied ? 'Copied' : 'Copy code'}
+              </Button>
+            </li>
+          </ol>
+          <p className="text-sm text-muted" role="status" aria-live="polite">
+            Waiting for you to approve… The code works until{' '}
+            {new Date(flow.expiresAt).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+            .
+          </p>
+          <p className="text-xs text-muted">
+            BokyDo stores the sign-in encrypted and uses it only for your own AI features. Only
+            approve a code you started here.
+          </p>
+        </>
+      )}
+      {ended && <Alert tone="warning">{ended}</Alert>}
+      <div className="flex gap-2">
+        {ended && (
+          <Button variant="secondary" onClick={() => begin()}>
+            Start again
+          </Button>
+        )}
+        <Button variant="secondary" onClick={cancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 

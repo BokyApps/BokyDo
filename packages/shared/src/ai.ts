@@ -37,7 +37,11 @@ export interface AiProviderInfo {
   /** fixed: always `defaultBaseUrl`; required: the credential must give one. */
   baseUrl: 'fixed' | 'required';
   defaultBaseUrl: string | null;
-  apiKey: 'required' | 'optional';
+  /**
+   * `sign-in`: no key; the user signs in to their own subscription (device flow, W7d) and the
+   * server keeps the tokens. Such credentials are personal: never instance-wide (ADR 0017).
+   */
+  apiKey: 'required' | 'optional' | 'sign-in';
   /** Extra request headers (gateways that need them). Only for custom endpoints. */
   customHeaders: boolean;
   capabilities: readonly AiCapability[];
@@ -46,8 +50,9 @@ export interface AiProviderInfo {
 const CHAT = ['chat.structured', 'chat.long'] as const;
 
 /**
- * Providers BokyDo can call. Subscription sign-in (ChatGPT, SuperGrok) arrives in W7d; more
- * API-key providers are a catalog entry each when they speak one of the dialects.
+ * Providers BokyDo can call. Subscription sign-in providers (`apiKey: 'sign-in'`) are
+ * experimental and switched on by the admin; more API-key providers are a catalog entry each
+ * when they speak one of the dialects.
  */
 export const AI_PROVIDERS = {
   openai: {
@@ -83,6 +88,15 @@ export const AI_PROVIDERS = {
     baseUrl: 'fixed',
     defaultBaseUrl: 'https://api.x.ai/v1',
     apiKey: 'required',
+    customHeaders: false,
+    capabilities: CHAT,
+  },
+  'xai-subscription': {
+    name: 'Grok (SuperGrok / X Premium sign-in)',
+    dialect: 'openai',
+    baseUrl: 'fixed',
+    defaultBaseUrl: 'https://api.x.ai/v1',
+    apiKey: 'sign-in',
     customHeaders: false,
     capabilities: CHAT,
   },
@@ -143,6 +157,16 @@ export const AI_PROVIDERS = {
 } as const satisfies Record<string, AiProviderInfo>;
 export type AiProvider = keyof typeof AI_PROVIDERS;
 export const AI_PROVIDER_KEYS = Object.keys(AI_PROVIDERS) as AiProvider[];
+
+/** Providers added by signing in to a subscription instead of with a key. */
+export type AiSignInProvider = {
+  [K in AiProvider]: (typeof AI_PROVIDERS)[K]['apiKey'] extends 'sign-in' ? K : never;
+}[AiProvider];
+export const AI_SIGN_IN_PROVIDERS = AI_PROVIDER_KEYS.filter(
+  (p): p is AiSignInProvider => AI_PROVIDERS[p].apiKey === 'sign-in',
+);
+export const isSignInProvider = (p: AiProvider): p is AiSignInProvider =>
+  AI_PROVIDERS[p].apiKey === 'sign-in';
 
 /**
  * Whether a provider can serve a capability. `decision` falls back to structured chat (an enum
@@ -275,6 +299,10 @@ export function credentialIssues(
 ): { path: string; message: string }[] {
   const info: AiProviderInfo = AI_PROVIDERS[provider];
   const issues: { path: string; message: string }[] = [];
+  if (info.apiKey === 'sign-in') {
+    issues.push({ path: 'provider', message: 'Add this provider by signing in' });
+    return issues;
+  }
   if (info.baseUrl === 'fixed' && c.baseUrl !== null)
     issues.push({ path: 'baseUrl', message: 'This provider has a fixed address' });
   if (info.baseUrl === 'required' && c.baseUrl === null)
@@ -286,7 +314,10 @@ export function credentialIssues(
   return issues;
 }
 
-/** A stored credential as the API shows it. The key and header values are never returned. */
+/**
+ * A stored credential as the API shows it. The key and header values are never returned. For a
+ * sign-in provider, `hasKey` means "signed in": false once the sign-in has expired or was revoked.
+ */
 export interface AiCredential {
   id: string;
   scope: 'instance' | 'user';
