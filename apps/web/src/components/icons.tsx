@@ -189,6 +189,12 @@ export const ActivityIcon = () => (
     <path d="M3 12h4l3-8 4 16 3-8h4" />
   </Icon>
 );
+export const AskIcon = () => (
+  <Icon>
+    <path d="M4 5h16v11H9l-5 4z" />
+    <path d="M10 9.5a2 2 0 1 1 2.5 1.9c-.3.1-.5.4-.5.7M12 13.5v.01" />
+  </Icon>
+);
 export const TemplateIcon = () => (
   <Icon>
     <path d="M8 3h10a2 2 0 0 1 2 2v12" />

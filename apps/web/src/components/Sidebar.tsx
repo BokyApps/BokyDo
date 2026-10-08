@@ -8,6 +8,7 @@ import { useTaskUI } from '../lib/task-ui.js';
 import { isOpen, liveTasks, projectTree, todayTasks, type ProjectNode } from '../lib/views.js';
 import {
   ArchiveIcon,
+  AskIcon,
   CheckIcon,
   ChevronIcon,
   TemplateIcon,
@@ -36,11 +37,14 @@ const active = { className: 'bg-accent/10 font-medium text-fg hover:bg-accent/15
 export function Sidebar({
   onSearch,
   onRamble,
+  onAsk,
   onNavigate,
 }: {
   onSearch: () => void;
   /** Shown only when the server offers Ramble to this user. */
   onRamble?: (() => void) | undefined;
+  /** Shown only when the server offers Ask your tasks to this user. */
+  onAsk?: (() => void) | undefined;
   onNavigate?: () => void;
 }) {
   const state = useSyncState();
@@ -83,6 +87,11 @@ export function Sidebar({
         {onRamble && (
           <button type="button" className={`${item} w-full`} onClick={onRamble}>
             <MicIcon /> Ramble
+          </button>
+        )}
+        {onAsk && (
+          <button type="button" className={`${item} w-full`} onClick={onAsk}>
+            <AskIcon /> Ask
           </button>
         )}
         <button type="button" className={`${item} w-full`} onClick={onSearch}>

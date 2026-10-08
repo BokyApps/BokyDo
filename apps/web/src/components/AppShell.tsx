@@ -10,6 +10,7 @@ import { PreferenceEffects, SyncProvider, usePreferences } from '../lib/sync.js'
 import { TaskUIProvider, useTaskUI } from '../lib/task-ui.js';
 import { ToastProvider } from '../lib/toasts.js';
 import { MenuIcon, PlusIcon, SettingsIcon } from './icons.js';
+import { AskDialog } from './Ask.js';
 import { RambleDialog } from './Ramble.js';
 import { BulkBar, QuickAddDialog, SearchDialog, ShortcutsDialog } from './Overlays.js';
 import { Sidebar } from './Sidebar.js';
@@ -46,11 +47,14 @@ function Layout() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [rambleOpen, setRambleOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
   const pendingG = useRef(false);
   // Ramble is offered only when the server says this user has the feature (ramble.extract).
   const catalog = useQuery(aiCatalogQuery);
   const ramble = catalog.data?.available.includes('ramble.extract') ?? false;
   const voice = catalog.data?.available.includes('ramble.transcribe') ?? false;
+  // Ask your tasks is offered only when the server says this user has the feature (ask).
+  const ask = catalog.data?.available.includes('ask') ?? false;
 
   // Push: re-attach this browser's subscription to the current session, and open what a
   // clicked notification points at (same-origin paths only).
@@ -152,6 +156,7 @@ function Layout() {
               <Sidebar
                 onSearch={() => setSearchOpen(true)}
                 onRamble={ramble ? () => setRambleOpen(true) : undefined}
+                onAsk={ask ? () => setAskOpen(true) : undefined}
                 onNavigate={() =>
                   !window.matchMedia('(min-width: 768px)').matches && setSidebarOpen(false)
                 }
@@ -169,6 +174,7 @@ function Layout() {
       {ramble && (
         <RambleDialog open={rambleOpen} onClose={() => setRambleOpen(false)} voice={voice} />
       )}
+      {ask && <AskDialog open={askOpen} onClose={() => setAskOpen(false)} />}
       <ShortcutsDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       <BulkBar />
     </div>

@@ -83,6 +83,8 @@ export function errorMessage(err: unknown): string {
       return 'The Todoist connection expired. Connect again to continue.';
     case 'import_running':
       return 'An import is already running. Wait for it to finish, then try again.';
+    case 'not_done':
+      return err.body?.message ?? "That change couldn't be made.";
     case 'invalid_choice':
       return 'Some of those choices no longer match. Check the form and try again.';
     case 'not_created':
