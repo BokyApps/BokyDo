@@ -1,53 +1,9 @@
 import type { AskResponse } from '@bokydo/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { OutboundFetch, OutboundResponse } from '../net/outbound.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
+import { fakeModel } from '../test/model.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
-
-type Reply = string | { calls: { name: string; args: Record<string, unknown> }[] };
-interface Sent {
-  messages: { role: string; content: string | null; tool_calls?: unknown[] }[];
-  tools?: { function: { name: string } }[];
-}
-
-/** An OpenAI-style endpoint that answers from a script: text, or tool calls. */
-function fakeModel() {
-  const replies: Reply[] = [];
-  const seen: Sent[] = [];
-  let n = 0;
-  const fetch: OutboundFetch = async (_url, init = {}) => {
-    seen.push(JSON.parse(String(init.body)) as Sent);
-    const next = replies.shift() ?? 'Done.';
-    const message =
-      typeof next === 'string'
-        ? { content: next }
-        : {
-            content: null,
-            tool_calls: next.calls.map((c) => ({
-              id: `call_${++n}`,
-              type: 'function',
-              function: { name: c.name, arguments: JSON.stringify(c.args) },
-            })),
-          };
-    const text = JSON.stringify({
-      choices: [{ message, finish_reason: typeof next === 'string' ? 'stop' : 'tool_calls' }],
-      usage: { prompt_tokens: 100, completion_tokens: 20 },
-    });
-    const res: OutboundResponse = {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-      body: (async function* () {
-        yield Buffer.from(text);
-      })(),
-      text: async () => text,
-      json: async () => JSON.parse(text) as unknown,
-      cancel: () => undefined,
-    };
-    return res;
-  };
-  return { fetch, replies, seen };
-}
 
 let t: TestApp;
 let model: ReturnType<typeof fakeModel>;

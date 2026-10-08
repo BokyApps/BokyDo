@@ -108,3 +108,29 @@ export const askConfirmSchema = z
   })
   .strict();
 export type AskConfirm = z.input<typeof askConfirmSchema>;
+
+// ---- Reports ----
+
+export const REPORT_KINDS = ['day', 'week', 'project'] as const;
+export type ReportKind = (typeof REPORT_KINDS)[number];
+
+export const reportRequestSchema = z
+  .object({
+    /** day: plan for today; week: last 7 days done and the next 7 ahead; project: one project. */
+    kind: z.enum(REPORT_KINDS),
+    projectId: z.uuid().optional(),
+  })
+  .strict()
+  .refine((r) => (r.kind === 'project') === (r.projectId !== undefined), {
+    message: 'A project report needs a project (and only it takes one)',
+    path: ['projectId'],
+  });
+export type ReportRequest = z.input<typeof reportRequestSchema>;
+
+export interface ReportResponse {
+  /** The summary. Plain text: show it as text, never as HTML. */
+  report: string;
+  /** What it was written from (so the user can judge it). */
+  counts: { overdue: number; today: number; upcoming: number; completed: number };
+  generatedAt: string;
+}

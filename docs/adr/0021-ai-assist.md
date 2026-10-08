@@ -1,6 +1,6 @@
-# ADR 0021: Task Assist, Filter Assist and Ask your tasks
+# ADR 0021: Task Assist, Filter Assist, Ask your tasks and reports
 
-- Status: Accepted (2026-10-08), W9 slices 1 and 2
+- Status: Accepted (2026-10-08), W9 slices 1 to 3a
 
 ## Context
 
@@ -51,9 +51,19 @@ their collaborators, so it is untrusted input to the model (PLAN §5.5).
   person who asked, and the client shows it as text (no links, images or HTML), on top of the
   CSP that only loads same-origin resources.
 
+## Reports (slice 3a)
+
+- `POST /api/v1/assist/report` with `day` (overdue, today), `week` (also the next 7 days and
+  what was done in the last 7, by whom) or `project` (one project, undated tasks too). The data
+  is gathered by the server from the projects the caller can see now (and a token's project
+  limit), at most 60 items per list, and sent as escaped JSON in a `<data>` block; the model only
+  writes prose, returned as plain text with the counts it was written from. A project the caller
+  can't see answers 404 before any model call. Scheduled report emails are the next slice: the
+  data will be gathered the same way at send time, so revoked access applies automatically.
+
 ## Consequences
 
 - No "auto-apply": the decision-model features (§5.4) with confidence thresholds are later W9
-  slices, as are reports and the eval harness.
+  slices, as are scheduled reports and the eval harness.
 - Filter Assist needs a model good enough to write the language from the prompt's summary;
   small local models may need the correction round more often.

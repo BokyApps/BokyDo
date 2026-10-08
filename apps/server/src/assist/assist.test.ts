@@ -1,42 +1,9 @@
 import type { FilterAssistResponse, TaskAssistResponse } from '@bokydo/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { OutboundFetch, OutboundResponse } from '../net/outbound.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
+import { fakeModel } from '../test/model.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
-
-/** An OpenAI-style chat endpoint that answers from a script and records what it was sent. */
-function fakeModel() {
-  const replies: string[] = [];
-  const seen: { system: string; user: string; messages: { role: string; content: string }[] }[] =
-    [];
-  const fetch: OutboundFetch = async (_url, init = {}) => {
-    const body = JSON.parse(String(init.body)) as {
-      messages: { role: string; content: string }[];
-    };
-    seen.push({
-      system: body.messages.find((m) => m.role === 'system')?.content ?? '',
-      user: body.messages.find((m) => m.role === 'user')?.content ?? '',
-      messages: body.messages,
-    });
-    const text = JSON.stringify({
-      choices: [{ message: { content: replies.shift() ?? '{}' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 50, completion_tokens: 20 },
-    });
-    const res: OutboundResponse = {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-      body: (async function* () {
-        yield Buffer.from(text);
-      })(),
-      text: async () => text,
-      json: async () => JSON.parse(text) as unknown,
-      cancel: () => undefined,
-    };
-    return res;
-  };
-  return { fetch, replies, seen };
-}
 
 let t: TestApp;
 let model: ReturnType<typeof fakeModel>;
