@@ -18,7 +18,7 @@ export async function reminderAdd(
     .from(tasks)
     .where(and(eq(tasks.id, args.taskId), isNull(tasks.deletedAt)));
   if (!task) return fail('not_found', 'task');
-  await requireProject(ctx.tx, ctx.userId, task.projectId, 'view');
+  await requireProject(ctx.tx, ctx.userId, task.projectId, 'view', ctx.projectIds);
   if (args.type === 'relative' && !task.due?.time)
     fail('invalid', 'relative reminders need a task with a due time');
 

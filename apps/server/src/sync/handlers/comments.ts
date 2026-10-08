@@ -16,10 +16,22 @@ async function commentTarget(ctx: CommandContext, args: CommandArgs<'comment_add
       .from(tasks)
       .where(and(eq(tasks.id, args.taskId), isNull(tasks.deletedAt)));
     if (!task) return fail('not_found', 'task');
-    const project = await requireProject(ctx.tx, ctx.userId, task.projectId, 'comment');
+    const project = await requireProject(
+      ctx.tx,
+      ctx.userId,
+      task.projectId,
+      'comment',
+      ctx.projectIds,
+    );
     return { project, task };
   }
-  const project = await requireProject(ctx.tx, ctx.userId, args.projectId ?? '', 'comment');
+  const project = await requireProject(
+    ctx.tx,
+    ctx.userId,
+    args.projectId ?? '',
+    'comment',
+    ctx.projectIds,
+  );
   return { project, task: null };
 }
 
@@ -131,7 +143,7 @@ async function requireComment(ctx: CommandContext, id: string) {
     .from(comments)
     .where(and(eq(comments.id, id), isNull(comments.deletedAt)));
   if (!comment) return fail('not_found', 'comment');
-  const access = await projectAccess(ctx.tx, ctx.userId, comment.projectId);
+  const access = await projectAccess(ctx.tx, ctx.userId, comment.projectId, ctx.projectIds);
   if (!access) return fail('not_found', 'comment');
   return { comment, role: access.role, archived: access.project.isArchived };
 }

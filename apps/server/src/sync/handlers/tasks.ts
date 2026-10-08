@@ -19,7 +19,7 @@ async function requireTask(ctx: CommandContext, id: string): Promise<TaskRow> {
     .from(tasks)
     .where(and(eq(tasks.id, id), isNull(tasks.deletedAt)));
   if (!task) return fail('not_found', 'task');
-  const project = await requireProject(ctx.tx, ctx.userId, task.projectId, 'edit');
+  const project = await requireProject(ctx.tx, ctx.userId, task.projectId, 'edit', ctx.projectIds);
   if (project.isArchived) fail('invalid', 'project is archived');
   return task;
 }
@@ -100,7 +100,7 @@ export async function taskAdd(ctx: CommandContext, args: CommandArgs<'task_add'>
   }
   projectId ??= await ensureInbox(ctx);
 
-  const project = await requireProject(ctx.tx, ctx.userId, projectId, 'edit');
+  const project = await requireProject(ctx.tx, ctx.userId, projectId, 'edit', ctx.projectIds);
   if (project.isArchived) fail('invalid', 'project is archived');
   if (sectionId) {
     const section = await requireSection(ctx, sectionId);
@@ -248,7 +248,7 @@ export async function taskMove(ctx: CommandContext, args: CommandArgs<'task_move
     parentId = args.parentId === null || relocated ? null : task.parentId;
   }
 
-  const project = await requireProject(ctx.tx, ctx.userId, projectId, 'edit');
+  const project = await requireProject(ctx.tx, ctx.userId, projectId, 'edit', ctx.projectIds);
   if (project.isArchived) fail('invalid', 'project is archived');
   if (sectionId) {
     const section = await requireSection(ctx, sectionId);

@@ -93,7 +93,7 @@ export function registerInviteRoutes(app: FastifyInstance, deps: Deps): void {
     id: string,
     role?: GrantableRole,
   ): Promise<Target> {
-    const project = await requireProject(tx, userId, id, 'manage');
+    const project = await requireProject(tx, userId, id, 'manage', null);
     if (project.isInbox) throw new CommandFailure('invalid', 'the inbox cannot be shared');
     if (role && PROJECT_RANK[role] >= PROJECT_RANK.admin && project.role !== 'owner')
       throw new CommandFailure('forbidden', 'only the owner can invite admins');

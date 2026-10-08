@@ -14,7 +14,7 @@ import { AiBudgetExceededError } from '../ai/usage.js';
 import { RateLimiter } from '../auth/rate-limiter.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { requireUser } from '../http/access.js';
+import { callerScope, requireUser } from '../http/access.js';
 import { parseBody } from '../http/validation.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import type { SyncService } from '../sync/sync-service.js';
@@ -129,7 +129,12 @@ export function registerRambleRoutes(app: FastifyInstance, deps: RambleRouteDeps
     const body = parseBody(rambleExtractRequestSchema, req.body, reply);
     if (!body) return;
     if (!extractions.attempt(me.id).allowed) return tooMany(reply);
-    const ctx = await loadRambleContext(db, me.id, settings.get('instance.defaultTimezone'));
+    const ctx = await loadRambleContext(
+      db,
+      me.id,
+      settings.get('instance.defaultTimezone'),
+      callerScope(req),
+    );
     try {
       const result: RambleExtractResponse = await extract(
         ai,
@@ -154,7 +159,12 @@ export function registerRambleRoutes(app: FastifyInstance, deps: RambleRouteDeps
       const body = parseBody(rambleCommitRequestSchema, req.body, reply);
       if (!body) return;
       if (!commits.attempt(me.id).allowed) return tooMany(reply);
-      const ctx = await loadRambleContext(db, me.id, settings.get('instance.defaultTimezone'));
+      const ctx = await loadRambleContext(
+        db,
+        me.id,
+        settings.get('instance.defaultTimezone'),
+        callerScope(req),
+      );
       const created: RambleCommitResponse['created'] = [];
       const commands = body.tasks.map((t) => {
         const r = resolveDraftTask(t, ctx, t.projectId);
@@ -176,7 +186,7 @@ export function registerRambleRoutes(app: FastifyInstance, deps: RambleRouteDeps
         };
       });
       // The sync engine re-checks each task: write access to the project, assignee membership.
-      const result = await sync.applyAll(me.id, commands);
+      const result = await sync.applyAll(me.id, commands, callerScope(req));
       if (!result.ok)
         return reply.status(result.result.ok ? 500 : 400).send({
           error: 'not_created',

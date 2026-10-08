@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { AiService, AiUser } from '../ai/service.js';
 import type { Database } from '../db/client.js';
 import { labels, projectMembers, projects, sections, users } from '../db/schema.js';
-import { visibleProjects } from '../sync/policy.js';
+import { visibleProjects, type ProjectScope } from '../sync/policy.js';
 
 const WRITABLE = new Set(['owner', 'admin', 'editor']);
 
@@ -33,8 +33,9 @@ export async function loadRambleContext(
   db: Database,
   userId: string,
   defaultTimeZone: string,
+  scope: ProjectScope = null,
 ): Promise<RambleContext> {
-  const visible = await db.transaction((tx) => visibleProjects(tx, userId));
+  const visible = await db.transaction((tx) => visibleProjects(tx, userId, scope));
   const writableIds = [...visible].filter(([, v]) => WRITABLE.has(v.role)).map(([id]) => id);
   const [userRow] = await db
     .select({ preferences: users.preferences })

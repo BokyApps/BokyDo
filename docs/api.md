@@ -35,6 +35,12 @@ allowed only if the token holds every scope it needs:
 A token missing a scope gets `403 {"error":"insufficient_scope"}`; a bad or unknown token gets
 `401`. Anything you cannot see answers `404`, the same as something that does not exist.
 
+A personal access token can also be **limited to some projects** ("Only the projects I choose").
+Everything outside them answers `404`, as if it did not exist, on REST and MCP alike. A limited
+token can't create projects (`403`), change sharing, or touch labels, filters or settings; tick
+sub-projects and the Inbox explicitly if it should reach them. Full access (`sync`) can't be
+limited. See [ADR 0019](adr/0019-project-limited-tokens.md).
+
 ## The contract
 
 The OpenAPI 3.1 document is the source of truth and is generated from the same Zod schemas the

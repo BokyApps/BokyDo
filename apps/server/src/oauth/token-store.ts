@@ -12,6 +12,7 @@ import { newToken, tokenId } from '../auth/tokens.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { apiTokens, oauthClients, oauthGrants, pushSubscriptions, users } from '../db/schema.js';
+import { visibleProjects } from '../sync/policy.js';
 import type { SettingsService } from '../settings/settings-service.js';
 
 /**
@@ -33,6 +34,8 @@ export interface TokenPrincipal {
   kind: 'pat' | 'access';
   user: SessionUserRow;
   scopes: ApiScope[];
+  /** A personal access token limited to these projects; null = every project the user can see. */
+  projectIds: ReadonlySet<string> | null;
   grantId: string | null;
   clientId: string | null;
 }
@@ -46,6 +49,8 @@ export interface IssuedTokens {
 }
 
 export class PatLimitError extends Error {}
+/** A token was to be limited to a project the user can't see, or with whole-account `sync`. */
+export class PatProjectError extends Error {}
 
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 
@@ -81,6 +86,7 @@ export class ApiTokenStore {
         id: apiTokens.id,
         kind: apiTokens.kind,
         scopes: apiTokens.scopes,
+        projectIds: apiTokens.projectIds,
         audience: apiTokens.audience,
         expiresAt: apiTokens.expiresAt,
         revokedAt: apiTokens.revokedAt,
@@ -122,6 +128,7 @@ export class ApiTokenStore {
       id: row.id,
       kind,
       scopes: row.scopes as ApiScope[],
+      projectIds: row.projectIds ? new Set(row.projectIds) : null,
       grantId: row.grantId,
       clientId: row.clientId,
       user: {
@@ -151,6 +158,12 @@ export class ApiTokenStore {
         .from(apiTokens)
         .where(activePats(userId))) as [{ n: number }];
       if (n >= MAX_PATS_PER_USER) throw new PatLimitError();
+      const projectIds = input.projectIds ? [...new Set(input.projectIds)] : null;
+      if (projectIds) {
+        if (input.scopes.includes('sync')) throw new PatProjectError();
+        const visible = await visibleProjects(tx, userId);
+        if (!projectIds.every((p) => visible.has(p))) throw new PatProjectError();
+      }
       const [inserted] = await tx
         .insert(apiTokens)
         .values({
@@ -160,6 +173,7 @@ export class ApiTokenStore {
           userId,
           name: input.name,
           scopes: [...new Set(input.scopes)],
+          projectIds,
           audience: null,
           expiresAt,
         })
@@ -470,6 +484,7 @@ function toPat(row: typeof apiTokens.$inferSelect): PersonalAccessToken {
     id: row.id,
     name: row.name ?? '',
     scopes: row.scopes as ApiScope[],
+    projectIds: row.projectIds,
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt?.toISOString() ?? null,
     lastUsedAt: row.lastUsedAt?.toISOString() ?? null,

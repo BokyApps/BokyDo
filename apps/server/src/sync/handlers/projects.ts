@@ -69,7 +69,7 @@ async function requireParent(
   parentId: string,
   ownerId: string,
 ): Promise<ProjectRow> {
-  const parent = await requireProject(ctx.tx, ctx.userId, parentId, 'manage');
+  const parent = await requireProject(ctx.tx, ctx.userId, parentId, 'manage', ctx.projectIds);
   if (parent.isInbox) fail('invalid', 'the inbox cannot have sub-projects');
   if (parent.ownerId !== ownerId)
     fail('invalid', 'sub-projects must have the same owner as their parent');
@@ -164,7 +164,13 @@ export async function projectUpdate(
 ): Promise<void> {
   const { id, isFavorite, ...shared } = args;
   const hasShared = Object.keys(shared).length > 0;
-  const project = await requireProject(ctx.tx, ctx.userId, id, hasShared ? 'manage' : 'view');
+  const project = await requireProject(
+    ctx.tx,
+    ctx.userId,
+    id,
+    hasShared ? 'manage' : 'view',
+    ctx.projectIds,
+  );
   if (project.isInbox && shared.name !== undefined) fail('invalid', 'the inbox cannot be renamed');
 
   if (isFavorite !== undefined) {
@@ -192,7 +198,7 @@ export async function projectMove(
   ctx: CommandContext,
   args: CommandArgs<'project_move'>,
 ): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, args.id, 'manage');
+  const project = await requireProject(ctx.tx, ctx.userId, args.id, 'manage', ctx.projectIds);
   if (project.isInbox) fail('invalid', 'the inbox cannot be moved');
   if (args.parentId) {
     if (args.parentId === project.id) fail('invalid', 'a project cannot be its own parent');
@@ -225,7 +231,7 @@ export async function projectMove(
 }
 
 async function setArchived(ctx: CommandContext, id: string, isArchived: boolean): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, id, 'manage');
+  const project = await requireProject(ctx.tx, ctx.userId, id, 'manage', ctx.projectIds);
   if (project.isInbox) fail('invalid', 'the inbox cannot be archived');
   const ids = [project.id, ...(await descendantProjects(ctx.tx, project.id))];
   await ctx.tx
@@ -248,7 +254,7 @@ export async function projectDelete(
   ctx: CommandContext,
   args: CommandArgs<'project_delete'>,
 ): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, args.id, 'delete');
+  const project = await requireProject(ctx.tx, ctx.userId, args.id, 'delete', ctx.projectIds);
   if (project.isInbox) fail('invalid', 'the inbox cannot be deleted');
   // Sections and tasks become invisible with their project; clients drop them locally.
   const ids = [project.id, ...(await descendantProjects(ctx.tx, project.id))];
@@ -267,7 +273,7 @@ export async function projectMoveWorkspace(
   ctx: CommandContext,
   args: CommandArgs<'project_move_workspace'>,
 ): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, args.id, 'delete');
+  const project = await requireProject(ctx.tx, ctx.userId, args.id, 'delete', ctx.projectIds);
   if (project.isInbox) fail('invalid', 'the inbox stays personal');
   if (project.parentId) fail('invalid', 'move the top-level project instead');
   if (args.workspaceId === project.workspaceId) return;

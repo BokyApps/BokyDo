@@ -53,8 +53,8 @@ export interface McpDeps {
 /**
  * The MCP endpoint (Streamable HTTP, stateless): JSON-RPC over POST, answered with JSON. Every
  * request needs an OAuth access token for the `/mcp` resource or a personal access token; tools
- * are offered and run only within the token's scopes, and every read and write goes through the
- * same visibility and permission checks as the app.
+ * are offered and run only within the token's scopes (and projects, for a project-limited token),
+ * and every read and write goes through the same visibility and permission checks as the app.
  */
 export function registerMcpServer(app: FastifyInstance, deps: McpDeps): void {
   const { settings, tokens } = deps;
@@ -123,10 +123,14 @@ export function registerMcpServer(app: FastifyInstance, deps: McpDeps): void {
       sync: deps.sync,
       userId: token.user.id,
       scopes: token.scopes,
+      projectIds: token.projectIds,
       baseUrl: settings.get('instance.publicUrl') ?? '',
       defaultTimeZone: settings.get('instance.defaultTimezone'),
     };
-    const allowed = TOOLS.filter((t) => t.scopes.every((s) => token.scopes.includes(s)));
+    const allowed = TOOLS.filter(
+      (t) =>
+        t.scopes.every((s) => token.scopes.includes(s)) && !(t.accountWide && token.projectIds),
+    );
     switch (msg.method) {
       case 'initialize': {
         const asked = msg.params?.protocolVersion;

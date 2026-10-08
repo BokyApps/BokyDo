@@ -848,6 +848,8 @@ export const apiTokens = pgTable(
     /** Personal access tokens only. */
     name: text('name'),
     scopes: jsonb('scopes').$type<string[]>().notNull(),
+    /** Personal access tokens limited to some projects (null = all the user can see). */
+    projectIds: jsonb('project_ids').$type<string[]>(),
     /** null for personal access tokens (valid for every audience). */
     audience: text('audience', { enum: ['api', 'mcp'] }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

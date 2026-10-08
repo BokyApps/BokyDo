@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Database } from '../db/client.js';
 import { tasks } from '../db/schema.js';
 import { requireSession } from '../http/access.js';
-import { visibleProjects } from '../sync/policy.js';
+import { visibleProjects, type ProjectScope } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
 import { runFilter } from './filter-sql.js';
 
@@ -139,11 +139,12 @@ export async function searchTasks(
   userId: string,
   q: string,
   limit: number,
+  scope: ProjectScope = null,
 ): Promise<Task[]> {
   const tsquery = toPrefixQuery(q);
   if (!tsquery) return [];
   return db.transaction(async (tx) => {
-    const visible = [...(await visibleProjects(tx, userId)).keys()];
+    const visible = [...(await visibleProjects(tx, userId, scope)).keys()];
     if (visible.length === 0) return [];
     const vector = sql`to_tsvector('simple', ${tasks.content} || ' ' || ${tasks.description})`;
     const query = sql`to_tsquery('simple', ${tsquery})`;

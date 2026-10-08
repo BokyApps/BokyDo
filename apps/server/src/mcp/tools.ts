@@ -15,7 +15,7 @@ import {
   users,
 } from '../db/schema.js';
 import { taskToWire } from '../sync/serialize.js';
-import { visibleProjects } from '../sync/policy.js';
+import { visibleProjects, type ProjectScope } from '../sync/policy.js';
 import type { SyncService } from '../sync/sync-service.js';
 import { runFilter } from '../tasks/filter-sql.js';
 import { searchTasks } from '../tasks/routes.js';
@@ -26,6 +26,8 @@ export interface ToolContext {
   sync: SyncService;
   userId: string;
   scopes: readonly ApiScope[];
+  /** The projects a project-limited token may reach; null = all the user can see. */
+  projectIds: ProjectScope;
   baseUrl: string;
   defaultTimeZone: string;
 }
@@ -36,6 +38,8 @@ export interface ToolDefinition {
   description: string;
   /** The token needs every one of these. */
   scopes: readonly ApiScope[];
+  /** Reads account-wide data, so it isn't offered to a project-limited token. */
+  accountWide?: true;
   inputSchema: Record<string, unknown>;
   annotations: {
     readOnlyHint: boolean;
@@ -76,7 +80,7 @@ const CHANGE = {
 // ---- helpers ----
 
 async function projectIndex(ctx: ToolContext) {
-  const visible = await ctx.db.transaction((tx) => visibleProjects(tx, ctx.userId));
+  const visible = await ctx.db.transaction((tx) => visibleProjects(tx, ctx.userId, ctx.projectIds));
   const ids = [...visible.keys()];
   const rows = ids.length
     ? await ctx.db
@@ -139,7 +143,7 @@ async function preferences(ctx: ToolContext) {
 
 /** Writes go through the sync engine: the same permission checks and history as the app. */
 async function command(ctx: ToolContext, type: CommandType, args: Record<string, unknown>) {
-  const result = await ctx.sync.apply(ctx.userId, type, newId(), args as never);
+  const result = await ctx.sync.apply(ctx.userId, type, newId(), args as never, ctx.projectIds);
   if (!result.ok)
     throw new ToolError(`Not done: ${result.error}${result.message ? ` (${result.message})` : ''}`);
 }
@@ -190,7 +194,7 @@ export const TOOLS: ToolDefinition[] = [
     args: searchArgs,
     run: async (ctx, a: z.output<typeof searchArgs>) => {
       const index = await projectIndex(ctx);
-      const found = await searchTasks(ctx.db, ctx.userId, a.query, a.limit);
+      const found = await searchTasks(ctx.db, ctx.userId, a.query, a.limit, ctx.projectIds);
       return { tasks: found.map((t) => present(ctx, t, index)) };
     },
   },
@@ -209,6 +213,7 @@ export const TOOLS: ToolDefinition[] = [
         runFilter(tx, ctx.userId, a.query, {
           limit: a.limit,
           defaultTimeZone: ctx.defaultTimeZone,
+          scope: ctx.projectIds,
         }),
       );
       if (!result.ok) throw new ToolError(`Invalid filter: ${result.error.message}`);
@@ -296,6 +301,7 @@ export const TOOLS: ToolDefinition[] = [
     title: 'List saved filters',
     description: "The user's saved filters (use run_filter with a filter's query).",
     scopes: ['projects:read'],
+    accountWide: true,
     inputSchema: schema({}),
     annotations: READ,
     args: noArgs,
@@ -322,7 +328,11 @@ export const TOOLS: ToolDefinition[] = [
       // One query each: a combined `a | b | c` filter leaves out empty lists.
       const list = async (query: string) => {
         const result = await ctx.db.transaction((tx) =>
-          runFilter(tx, ctx.userId, query, { limit: 50, defaultTimeZone: ctx.defaultTimeZone }),
+          runFilter(tx, ctx.userId, query, {
+            limit: 50,
+            defaultTimeZone: ctx.defaultTimeZone,
+            scope: ctx.projectIds,
+          }),
         );
         if (!result.ok) throw new ToolError('Report unavailable');
         return (result.lists[0]?.tasks ?? []).map((t) => present(ctx, t, index));

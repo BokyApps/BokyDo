@@ -14,7 +14,13 @@ export async function requireSection(ctx: CommandContext, id: string): Promise<S
     .from(sections)
     .where(and(eq(sections.id, id), isNull(sections.deletedAt)));
   if (!section) return fail('not_found', 'section');
-  const project = await requireProject(ctx.tx, ctx.userId, section.projectId, 'edit');
+  const project = await requireProject(
+    ctx.tx,
+    ctx.userId,
+    section.projectId,
+    'edit',
+    ctx.projectIds,
+  );
   if (project.isArchived) fail('invalid', 'project is archived');
   return section;
 }
@@ -26,7 +32,7 @@ export async function sectionAdd(
   ctx: CommandContext,
   args: CommandArgs<'section_add'>,
 ): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, args.projectId, 'edit');
+  const project = await requireProject(ctx.tx, ctx.userId, args.projectId, 'edit', ctx.projectIds);
   if (project.isArchived) fail('invalid', 'project is archived');
   const [existing] = await ctx.tx
     .select({ n: count() })
@@ -69,7 +75,7 @@ export async function sectionMove(
   const section = await requireSection(ctx, args.id);
   const toProject = args.projectId ?? section.projectId;
   if (toProject !== section.projectId) {
-    const target = await requireProject(ctx.tx, ctx.userId, toProject, 'edit');
+    const target = await requireProject(ctx.tx, ctx.userId, toProject, 'edit', ctx.projectIds);
     if (target.isArchived) fail('invalid', 'project is archived');
   }
   await ctx.tx

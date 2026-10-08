@@ -59,7 +59,13 @@ export async function projectMemberUpdate(
   ctx: CommandContext,
   args: CommandArgs<'project_member_update'>,
 ): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, args.projectId, 'manage');
+  const project = await requireProject(
+    ctx.tx,
+    ctx.userId,
+    args.projectId,
+    'manage',
+    ctx.projectIds,
+  );
   const target = await memberRole(ctx.tx, project.id, args.userId);
   if (!target) return fail('not_found', 'member');
   if (target === 'owner') fail('forbidden', 'transfer ownership instead');
@@ -96,7 +102,7 @@ export async function projectMemberRemove(
   args: CommandArgs<'project_member_remove'>,
 ): Promise<void> {
   const leaving = args.userId === ctx.userId;
-  const access = await projectAccess(ctx.tx, ctx.userId, args.projectId);
+  const access = await projectAccess(ctx.tx, ctx.userId, args.projectId, ctx.projectIds);
   if (!access) return fail('not_found', 'project');
   const target = leaving ? access.role : await memberRole(ctx.tx, args.projectId, args.userId);
   if (!target) return fail('not_found', 'member');
@@ -155,7 +161,13 @@ export async function projectTransfer(
   ctx: CommandContext,
   args: CommandArgs<'project_transfer'>,
 ): Promise<void> {
-  const project = await requireProject(ctx.tx, ctx.userId, args.projectId, 'delete');
+  const project = await requireProject(
+    ctx.tx,
+    ctx.userId,
+    args.projectId,
+    'delete',
+    ctx.projectIds,
+  );
   if (args.userId === ctx.userId) return;
   if (project.isInbox) fail('invalid', 'the inbox cannot be transferred');
   const target = await memberRole(ctx.tx, project.id, args.userId);

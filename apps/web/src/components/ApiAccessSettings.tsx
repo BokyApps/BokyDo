@@ -11,6 +11,8 @@ import { api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
 import { errorMessage } from '../lib/messages.js';
 import { useSensitive } from '../lib/reauth.js';
+import { useSyncState } from '../lib/sync.js';
+import { flattenTree, projectTree } from '../lib/views.js';
 import { Alert, Button, Card, Checkbox, SecretList, SelectField, TextField } from './ui.js';
 
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
@@ -84,7 +86,19 @@ function PersonalTokens() {
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Set<ApiScope>>(new Set(['tasks:read']));
   const [expires, setExpires] = useState('90');
+  // null = every project; otherwise the projects the token is limited to.
+  const [limitTo, setLimitTo] = useState<Set<string> | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  const state = useSyncState();
+  const inbox = state.user ? state.projects.get(state.user.inboxProjectId) : undefined;
+  const projects = [
+    ...(inbox ? [{ project: inbox, depth: 0 }] : []),
+    ...flattenTree(projectTree(state)),
+  ];
+  const projectName = (id: string) => state.projects.get(id)?.name ?? 'a deleted project';
+  // Full access is the whole account (settings, labels, notifications): it can't be limited.
+  const limitable = !scopes.has('sync');
+  const limited = limitable ? limitTo : null;
   const tokens = useQuery({
     queryKey: ['account-tokens'],
     queryFn: () => api<{ tokens: PersonalAccessToken[] }>('GET', '/api/v1/account/tokens'),
@@ -97,11 +111,13 @@ function PersonalTokens() {
           name,
           scopes: [...scopes],
           expiresInDays: expires === 'never' ? null : Number(expires),
+          projectIds: limited ? [...limited] : null,
         }),
       ),
     onSuccess: async ({ token }) => {
       setCreated(token);
       setName('');
+      setLimitTo(null);
       await refresh();
     },
   });
@@ -119,6 +135,13 @@ function PersonalTokens() {
       const next = new Set(prev);
       if (next.has(s)) next.delete(s);
       else next.add(s);
+      return next;
+    });
+  const toggleProject = (id: string) =>
+    setLimitTo((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
@@ -143,6 +166,11 @@ function PersonalTokens() {
                 {t.scopes.join(', ')} · expires {t.expiresAt ? day(t.expiresAt) : 'never'} · last
                 used {day(t.lastUsedAt)}
               </p>
+              {t.projectIds && (
+                <p className="text-xs break-words text-muted">
+                  Only {t.projectIds.map(projectName).join(', ')}
+                </p>
+              )}
             </div>
             <Button
               variant="secondary"
@@ -181,6 +209,44 @@ function PersonalTokens() {
             />
           ))}
         </fieldset>
+        <fieldset className="space-y-2">
+          <legend className="mb-1 text-sm font-medium">Which projects</legend>
+          {limitable ? (
+            <>
+              <SelectField
+                label="Projects"
+                hideLabel
+                value={limitTo ? 'some' : 'all'}
+                onChange={(e) => setLimitTo(e.target.value === 'some' ? new Set() : null)}
+                options={[
+                  { value: 'all', label: 'All my projects, including new ones' },
+                  { value: 'some', label: 'Only the projects I choose' },
+                ]}
+              />
+              {limitTo && (
+                <div className="max-h-60 space-y-2 overflow-y-auto rounded border border-line p-2">
+                  {projects.map(({ project, depth }) => (
+                    <div key={project.id} style={{ paddingLeft: `${depth * 1.25}rem` }}>
+                      <Checkbox
+                        label={project.name}
+                        checked={limitTo.has(project.id)}
+                        onChange={() => toggleProject(project.id)}
+                      />
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted">
+                    It can’t see or change anything else: not your other projects, labels, filters
+                    or settings, and it can’t create projects. Sub-projects need ticking too.
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-muted">
+              Full access covers your whole account, so it can’t be limited to projects.
+            </p>
+          )}
+        </fieldset>
         <SelectField
           label="Expires"
           value={expires}
@@ -194,7 +260,11 @@ function PersonalTokens() {
           ]}
         />
         {create.isError && <Alert tone="error">{errorMessage(create.error)}</Alert>}
-        <Button type="submit" busy={create.isPending} disabled={!name.trim() || scopes.size === 0}>
+        <Button
+          type="submit"
+          busy={create.isPending}
+          disabled={!name.trim() || scopes.size === 0 || limited?.size === 0}
+        >
           Create token
         </Button>
       </form>

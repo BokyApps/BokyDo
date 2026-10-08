@@ -16,8 +16,8 @@ import { z } from 'zod';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { projects, tasks } from '../db/schema.js';
-import { requireUser } from '../http/access.js';
-import { visibleProjects } from '../sync/policy.js';
+import { callerScope, requireUser } from '../http/access.js';
+import { visibleProjects, type ProjectScope } from '../sync/policy.js';
 import { projectToWire, taskToWire } from '../sync/serialize.js';
 import type { SyncService } from '../sync/sync-service.js';
 
@@ -327,7 +327,7 @@ function docsHtml(): string {
 <body>
 <h1>BokyDo REST API</h1>
 <p>Authenticate with <code>Authorization: Bearer &lt;token&gt;</code>. Each operation needs the scope shown.
-Results are limited to what the token's owner can see.</p>
+Results are limited to what the token's owner can see (and, for a token limited to some projects, to those).</p>
 <ul>
 ${items}
 </ul>
@@ -349,9 +349,9 @@ export function registerRestRoutes(
   const projectsWrite = { access: 'user', scopes: ['projects:write'] } as const;
 
   /** A task the caller can see, as it looks now: writes answer with the real resulting state. */
-  const readTask = (userId: string, taskId: string) =>
+  const readTask = (userId: string, scope: ProjectScope, taskId: string) =>
     db.transaction(async (tx) => {
-      const visible = await visibleProjects(tx, userId);
+      const visible = await visibleProjects(tx, userId, scope);
       const row = (
         await tx
           .select()
@@ -363,9 +363,9 @@ export function registerRestRoutes(
     });
 
   /** A project the caller can see, as it looks now. */
-  const readProject = (userId: string, projectId: string) =>
+  const readProject = (userId: string, scope: ProjectScope, projectId: string) =>
     db.transaction(async (tx) => {
-      const visible = await visibleProjects(tx, userId);
+      const visible = await visibleProjects(tx, userId, scope);
       const member = visible.get(projectId);
       if (!member) return null;
       const row = (await tx.select().from(projects).where(eq(projects.id, projectId)).limit(1)).at(
@@ -375,8 +375,8 @@ export function registerRestRoutes(
     });
 
   /** Apply one command through the sync engine and translate its vocabulary into HTTP. */
-  const run = async (userId: string, type: CommandType, args: unknown) => {
-    const result = await sync.apply(userId, type, newId(), args);
+  const run = async (userId: string, scope: ProjectScope, type: CommandType, args: unknown) => {
+    const result = await sync.apply(userId, type, newId(), args, scope);
     return result.ok ? null : result.error;
   };
 
@@ -386,7 +386,7 @@ export function registerRestRoutes(
     const { projectId, completed, limit, cursor } = parsed.data;
     const userId = requireUser(req).id;
     return db.transaction(async (tx) => {
-      const visible = await visibleProjects(tx, userId);
+      const visible = await visibleProjects(tx, userId, callerScope(req));
       if (projectId && !visible.has(projectId))
         return reply.status(404).send({ error: 'not_found' });
       const scope = projectId ? [projectId] : [...visible.keys()];
@@ -414,7 +414,7 @@ export function registerRestRoutes(
   app.get('/api/v1/tasks/:id', { config: tasksRead }, async (req, reply) => {
     const id = idSchema.safeParse((req.params as { id?: string }).id);
     if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
-    const task = await readTask(requireUser(req).id, id.data);
+    const task = await readTask(requireUser(req).id, callerScope(req), id.data);
     if (!task) return reply.status(404).send({ error: 'not_found' });
     return { task };
   });
@@ -425,9 +425,9 @@ export function registerRestRoutes(
       return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
     const userId = requireUser(req).id;
     const taskId = newId();
-    const failure = await run(userId, 'task_add', { ...body.data, id: taskId });
+    const failure = await run(userId, callerScope(req), 'task_add', { ...body.data, id: taskId });
     if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
-    const task = await readTask(userId, taskId);
+    const task = await readTask(userId, callerScope(req), taskId);
     if (!task) return reply.status(404).send({ error: 'not_found' });
     return reply.status(201).send({ task });
   });
@@ -439,9 +439,12 @@ export function registerRestRoutes(
     if (!body.success)
       return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
     const userId = requireUser(req).id;
-    const failure = await run(userId, 'task_update', { id: id.data, ...body.data });
+    const failure = await run(userId, callerScope(req), 'task_update', {
+      id: id.data,
+      ...body.data,
+    });
     if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
-    const task = await readTask(userId, id.data);
+    const task = await readTask(userId, callerScope(req), id.data);
     if (!task) return reply.status(404).send({ error: 'not_found' });
     return { task };
   });
@@ -454,9 +457,9 @@ export function registerRestRoutes(
       const id = idSchema.safeParse((req.params as { id?: string }).id);
       if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
       const userId = requireUser(req).id;
-      const failure = await run(userId, type, { id: id.data });
+      const failure = await run(userId, callerScope(req), type, { id: id.data });
       if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
-      const task = await readTask(userId, id.data);
+      const task = await readTask(userId, callerScope(req), id.data);
       if (!task) return reply.status(404).send({ error: 'not_found' });
       return { task };
     });
@@ -465,7 +468,9 @@ export function registerRestRoutes(
   app.delete('/api/v1/tasks/:id', { config: tasksWrite }, async (req, reply) => {
     const id = idSchema.safeParse((req.params as { id?: string }).id);
     if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
-    const failure = await run(requireUser(req).id, 'task_delete', { id: id.data });
+    const failure = await run(requireUser(req).id, callerScope(req), 'task_delete', {
+      id: id.data,
+    });
     if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
     return reply.status(204).send();
   });
@@ -473,7 +478,7 @@ export function registerRestRoutes(
   app.get('/api/v1/projects', { config: projectsRead }, async (req) => {
     const userId = requireUser(req).id;
     return db.transaction(async (tx) => {
-      const visible = await visibleProjects(tx, userId);
+      const visible = await visibleProjects(tx, userId, callerScope(req));
       const ids = [...visible.keys()];
       if (ids.length === 0) return { projects: [] };
       const rows = await tx.select().from(projects).where(inArray(projects.id, ids));
@@ -489,7 +494,7 @@ export function registerRestRoutes(
   app.get('/api/v1/projects/:id', { config: projectsRead }, async (req, reply) => {
     const id = idSchema.safeParse((req.params as { id?: string }).id);
     if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
-    const project = await readProject(requireUser(req).id, id.data);
+    const project = await readProject(requireUser(req).id, callerScope(req), id.data);
     if (!project) return reply.status(404).send({ error: 'not_found' });
     return { project };
   });
@@ -500,9 +505,12 @@ export function registerRestRoutes(
       return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
     const userId = requireUser(req).id;
     const projectId = newId();
-    const failure = await run(userId, 'project_add', { ...body.data, id: projectId });
+    const failure = await run(userId, callerScope(req), 'project_add', {
+      ...body.data,
+      id: projectId,
+    });
     if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
-    const project = await readProject(userId, projectId);
+    const project = await readProject(userId, callerScope(req), projectId);
     if (!project) return reply.status(404).send({ error: 'not_found' });
     return reply.status(201).send({ project });
   });
@@ -514,9 +522,12 @@ export function registerRestRoutes(
     if (!body.success)
       return reply.status(400).send({ error: 'invalid', message: body.error.issues[0]?.message });
     const userId = requireUser(req).id;
-    const failure = await run(userId, 'project_update', { id: id.data, ...body.data });
+    const failure = await run(userId, callerScope(req), 'project_update', {
+      id: id.data,
+      ...body.data,
+    });
     if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
-    const project = await readProject(userId, id.data);
+    const project = await readProject(userId, callerScope(req), id.data);
     if (!project) return reply.status(404).send({ error: 'not_found' });
     return { project };
   });
@@ -524,7 +535,9 @@ export function registerRestRoutes(
   app.delete('/api/v1/projects/:id', { config: projectsWrite }, async (req, reply) => {
     const id = idSchema.safeParse((req.params as { id?: string }).id);
     if (!id.success) return reply.status(400).send({ error: 'validation_failed' });
-    const failure = await run(requireUser(req).id, 'project_delete', { id: id.data });
+    const failure = await run(requireUser(req).id, callerScope(req), 'project_delete', {
+      id: id.data,
+    });
     if (failure) return reply.status(COMMAND_STATUS[failure]).send({ error: failure });
     return reply.status(204).send();
   });

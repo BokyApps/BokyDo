@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { idSchema } from './model.js';
 
 /**
  * What an API token may do. Shown on the consent screen and the token form, so the
@@ -46,21 +47,35 @@ export function parseScopeString(input: string): ApiScope[] | null {
   return [...out];
 }
 
+/** Most projects one token can be limited to. */
+export const MAX_TOKEN_PROJECTS = 100;
+
 export const patCreateSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     scopes: z.array(apiScopeSchema).min(1).max(API_SCOPE_KEYS.length),
     /** Days until it stops working; null = never (not recommended, but integrations need it). */
     expiresInDays: z.number().int().min(1).max(366).nullable(),
+    /**
+     * Limit the token to these projects; null (the default) = every project the user can see.
+     * `sync` is whole-account access (settings, labels, notifications), so it can't be limited.
+     */
+    projectIds: z.array(idSchema).min(1).max(MAX_TOKEN_PROJECTS).nullable().default(null),
   })
-  .strict();
-export type PatCreate = z.output<typeof patCreateSchema>;
+  .strict()
+  .refine((t) => !(t.projectIds && t.scopes.includes('sync')), {
+    message: 'Full access (sync) can’t be limited to projects',
+    path: ['projectIds'],
+  });
+export type PatCreate = z.input<typeof patCreateSchema>;
 
 /** A personal access token as listed. The secret itself is only returned once, on creation. */
 export interface PersonalAccessToken {
   id: string;
   name: string;
   scopes: ApiScope[];
+  /** The projects it is limited to, or null for all of them. */
+  projectIds: string[] | null;
   createdAt: string;
   expiresAt: string | null;
   lastUsedAt: string | null;

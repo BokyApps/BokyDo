@@ -18,7 +18,7 @@ import { requireRecentAuth, requireSession } from '../http/access.js';
 import { clientMeta, parseBody } from '../http/validation.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import { codeId, CODE_TTL_MS, issuer, requestHandleId, withParams } from './server.js';
-import { PatLimitError, redirectHost, type ApiTokenStore } from './token-store.js';
+import { PatLimitError, PatProjectError, redirectHost, type ApiTokenStore } from './token-store.js';
 
 const handleSchema = z.object({ request: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
 const decisionSchema = z
@@ -191,13 +191,19 @@ export function registerOAuthRoutes(app: FastifyInstance, deps: OAuthRouteDeps):
         targetType: 'api_token',
         targetId: created.pat.id,
         ip: req.ip,
-        meta: { scopes: created.pat.scopes, expiresAt: created.pat.expiresAt },
+        meta: {
+          scopes: created.pat.scopes,
+          projectIds: created.pat.projectIds,
+          expiresAt: created.pat.expiresAt,
+        },
       });
       notifier.security(userId, 'api_token_created', clientMeta(req));
       return reply.status(201).send(created);
     } catch (err) {
       if (err instanceof PatLimitError)
         return reply.status(409).send({ error: 'conflict', message: 'token_limit' });
+      if (err instanceof PatProjectError)
+        return reply.status(400).send({ error: 'validation_failed', message: 'unknown_project' });
       throw err;
     }
   });

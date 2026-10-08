@@ -5,6 +5,7 @@ import { REAUTH_WINDOW_MS, type SessionContext, type SessionStore } from '../aut
 import type { SessionUserRow } from '../auth/sessions.js';
 import type { ApiTokenStore, TokenPrincipal } from '../oauth/token-store.js';
 import type { SettingsService } from '../settings/settings-service.js';
+import type { ProjectScope } from '../sync/policy.js';
 
 /**
  * Who may call a route:
@@ -151,6 +152,12 @@ export function registerAccessControl(app: FastifyInstance, deps: AccessDeps): v
       challenge('insufficient_scope', `, scope="${scopes.join(' ')}"`);
       return deny(reply, 403, 'insufficient_scope');
     }
+    // `sync` is whole-account access: a project-limited token can't be created with it, and
+    // never reaches a route that needs it even if one were stored.
+    if (token.projectIds && scopes.includes('sync')) {
+      challenge('insufficient_scope', `, scope="${scopes.join(' ')}"`);
+      return deny(reply, 403, 'insufficient_scope');
+    }
     req.token = token;
   }
 }
@@ -238,6 +245,14 @@ export function requireUser(req: FastifyRequest): SessionUserRow {
   const user = req.session?.user ?? req.token?.user;
   if (!user) throw new Error(`No caller on ${req.method} ${req.url}`);
   return user;
+}
+
+/**
+ * The projects a request may reach: those of a project-limited token, or null (no limit) for
+ * sessions and unrestricted tokens. Pass it to every project lookup on a token route.
+ */
+export function callerScope(req: FastifyRequest): ProjectScope {
+  return req.token?.projectIds ?? null;
 }
 
 /**

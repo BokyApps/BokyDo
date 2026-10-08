@@ -36,12 +36,13 @@ import {
   WRITE_LOCK,
   type CommandContext,
   type Tx,
+  fail,
 } from './context.js';
 import { pgCode } from './handlers/common.js';
 import { pendingInvites } from '../projects/invites.js';
 import { latestNotifications } from '../notifications/notify.js';
 import * as h from './handlers/index.js';
-import { visibleProjects, type VisibleProjects } from './policy.js';
+import { visibleProjects, type ProjectScope, type VisibleProjects } from './policy.js';
 import {
   commentToWire,
   filterToWire,
@@ -106,6 +107,59 @@ const HANDLERS: Record<CommandType, Handler> = {
   reminder_delete: h.reminderDelete,
 };
 
+/**
+ * What a project-limited token may run. Only commands confined to existing projects: nothing that
+ * creates projects, changes who has access, or touches account-wide data (labels, filters,
+ * preferences, workspaces, notifications). A new command type is refused until it is listed here.
+ */
+const SCOPED_COMMANDS: Record<CommandType, boolean> = {
+  project_add: false,
+  project_update: true,
+  project_move: false,
+  project_archive: true,
+  project_unarchive: true,
+  project_delete: true,
+  section_add: true,
+  section_update: true,
+  section_move: true,
+  section_archive: true,
+  section_unarchive: true,
+  section_delete: true,
+  task_add: true,
+  task_update: true,
+  task_move: true,
+  task_complete: true,
+  task_uncomplete: true,
+  task_delete: true,
+  label_add: false,
+  label_update: false,
+  label_delete: false,
+  filter_add: false,
+  filter_update: false,
+  filter_delete: false,
+  user_update_preferences: false,
+  project_member_update: false,
+  project_member_remove: false,
+  project_transfer: false,
+  comment_add: true,
+  comment_update: true,
+  comment_delete: true,
+  reaction_toggle: true,
+  notifications_mark_read: false,
+  workspace_add: false,
+  workspace_update: false,
+  workspace_delete: false,
+  workspace_member_update: false,
+  workspace_member_remove: false,
+  workspace_transfer: false,
+  folder_add: false,
+  folder_update: false,
+  folder_delete: false,
+  project_move_workspace: false,
+  reminder_add: true,
+  reminder_delete: true,
+};
+
 export interface Affected {
   projectIds: Set<string>;
   userIds: Set<string>;
@@ -118,8 +172,20 @@ export class SyncService {
     private readonly defaultTimeZone: () => string = () => 'UTC',
   ) {}
 
-  private context(tx: Tx, userId: string, changes: ChangeRecorder): CommandContext {
-    return { tx, userId, now: new Date(), changes, defaultTimeZone: this.defaultTimeZone() };
+  private context(
+    tx: Tx,
+    userId: string,
+    changes: ChangeRecorder,
+    projectIds: ProjectScope = null,
+  ): CommandContext {
+    return {
+      tx,
+      userId,
+      projectIds,
+      now: new Date(),
+      changes,
+      defaultTimeZone: this.defaultTimeZone(),
+    };
   }
 
   /**
@@ -149,12 +215,16 @@ export class SyncService {
     return { ...(await this.read(userId, request.cursor ?? null)), results };
   }
 
-  /** Apply one command in its own transaction. Replaying a command UUID returns the first result. */
+  /**
+   * Apply one command in its own transaction. Replaying a command UUID returns the first result.
+   * `scope` limits it to some projects (a restricted token): anything outside is `not_found`.
+   */
   async apply(
     userId: string,
     type: CommandType,
     uuid: string,
     rawArgs: unknown,
+    scope: ProjectScope = null,
   ): Promise<CommandResult> {
     const recorder = new ChangeRecorder();
     const result = await this.db.transaction(async (tx) => {
@@ -175,7 +245,7 @@ export class SyncService {
           message: issue ? `${issue.path.join('.')}: ${issue.message}` : undefined,
         } as CommandResult;
       } else {
-        result = await this.runHandler(tx, userId, type, parsed.data, recorder);
+        result = await this.runHandler(tx, userId, type, parsed.data, recorder, scope);
       }
       if (result.ok) {
         await this.afterWrite(tx, recorder);
@@ -198,6 +268,7 @@ export class SyncService {
   async applyAll(
     userId: string,
     commands: { type: CommandType; args: unknown }[],
+    scope: ProjectScope = null,
   ): Promise<{ ok: true } | { ok: false; index: number; result: CommandResult }> {
     const recorder = new ChangeRecorder();
     class Abort extends Error {
@@ -214,7 +285,7 @@ export class SyncService {
         for (const [index, c] of commands.entries()) {
           const parsed = commandArgs[c.type].safeParse(c.args);
           const result = parsed.success
-            ? await this.runHandler(tx, userId, c.type, parsed.data, recorder)
+            ? await this.runHandler(tx, userId, c.type, parsed.data, recorder, scope)
             : ({ ok: false, error: 'invalid' } as CommandResult);
           if (!result.ok) throw new Abort(index, result);
         }
@@ -241,11 +312,19 @@ export class SyncService {
     type: CommandType,
     args: unknown,
     recorder: ChangeRecorder,
+    scope: ProjectScope,
   ): Promise<CommandResult> {
+    if (scope && !SCOPED_COMMANDS[type])
+      return { ok: false, error: 'forbidden', message: 'not allowed for a project-limited token' };
     try {
       // Savepoint: a failing command rolls back its own partial writes only.
       await tx.transaction(async (sp) => {
-        await HANDLERS[type](this.context(sp, userId, recorder), args as never);
+        await HANDLERS[type](this.context(sp, userId, recorder, scope), args as never);
+        // Backstop for a handler that forgets the scope: every write is logged against the
+        // projects it touched (that is how clients learn of it), so a limited caller's command
+        // that reached any other project (a cascade into a sub-project, say) is undone.
+        if (scope && [...recorder.projectScopes].some((id) => !scope.has(id)))
+          fail('not_found', 'project');
       });
       return { ok: true };
     } catch (err) {

@@ -19,7 +19,7 @@ import {
   workspaceMembers,
   workspaces,
 } from '../db/schema.js';
-import { visibleProjects } from '../sync/policy.js';
+import { visibleProjects, type ProjectScope } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
 
 /**
@@ -117,7 +117,7 @@ export async function runFilter(
   tx: Tx,
   userId: string,
   query: string,
-  opts: { limit: number; defaultTimeZone: string; now?: Date },
+  opts: { limit: number; defaultTimeZone: string; now?: Date; scope?: ProjectScope },
 ): Promise<FilterRun> {
   const [user] = await tx
     .select({ preferences: users.preferences })
@@ -133,7 +133,7 @@ export async function runFilter(
   });
   if (!parsed.ok) return parsed;
 
-  const visible = [...(await visibleProjects(tx, userId)).keys()];
+  const visible = [...(await visibleProjects(tx, userId, opts.scope ?? null)).keys()];
   const projectRows = visible.length
     ? await tx
         .select({

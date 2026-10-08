@@ -62,8 +62,7 @@ scripts and tools such as n8n want personal access tokens. The plan named `oidc-
 
 ## Consequences
 
-- Personal access tokens can't yet be limited to some projects (PLAN §6 mentions it). That
-  needs per-route enforcement and comes with the REST routes in W10b.
+- Personal access tokens can be limited to some projects since ADR 0019 (2026-10-08).
 - Browser-based OAuth clients can't call the token endpoint cross-origin (no CORS). The
   expected clients (MCP connectors' servers, native and CLI apps, Android) don't need it.
 - One instance, one issuer: OAuth needs the public URL set and changes if it changes.

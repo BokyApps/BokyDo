@@ -2,6 +2,7 @@ import type { CommandError } from '@bokydo/shared';
 import { sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { changes } from '../db/schema.js';
+import type { ProjectScope } from './policy.js';
 
 /** All sync writers take this lock, so `changes.seq` is committed strictly in order (ADR 0003). */
 export const WRITE_LOCK = sql`select pg_advisory_xact_lock(hashtext('bokydo:sync-write'))`;
@@ -79,6 +80,8 @@ export class ChangeRecorder {
 export interface CommandContext {
   tx: Tx;
   userId: string;
+  /** Projects the caller is limited to (a restricted token); null = all the user can see. */
+  projectIds: ProjectScope;
   now: Date;
   changes: ChangeRecorder;
   /** The instance default, for users who haven't chosen a time zone. */
