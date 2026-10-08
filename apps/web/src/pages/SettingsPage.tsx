@@ -12,7 +12,8 @@ import { usePreferences, useSend } from '../lib/sync.js';
 import { CalendarSettings } from './CalendarSettings.js';
 import { NotificationSettings } from './NotificationSettings.js';
 
-type Tab = 'appearance' | 'general' | 'notifications' | 'calendar' | 'apps' | 'ai' | 'webhooks' | 'data';
+type Tab =
+  'appearance' | 'general' | 'notifications' | 'calendar' | 'apps' | 'ai' | 'webhooks' | 'data';
 const TAB_LABEL: Record<Tab, string> = {
   appearance: 'Appearance',
   general: 'General',

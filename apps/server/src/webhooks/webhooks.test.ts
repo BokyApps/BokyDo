@@ -195,6 +195,25 @@ describe.skipIf(!TEST_DATABASE_URL)('webhooks: managing subscriptions', () => {
     expect(stale.statusCode).toBe(403);
     expect((stale.json() as { error: string }).error).toBe('reauth_required');
   });
+
+  it('requires recent re-authentication to point a webhook at a new URL, not to change events', async () => {
+    const hook = await createWebhook(aliceHttp, { url: URL_OK, events: ['task_added'] });
+    await t.db.db.execute(`update sessions set reauthenticated_at = now() - interval '1 hour'`);
+    const moved = await aliceHttp.patch(`/api/v1/webhooks/${hook.id}`, {
+      url: 'https://attacker.example.net/collect',
+    });
+    expect(moved.statusCode).toBe(403);
+    expect((moved.json() as { error: string }).error).toBe('reauth_required');
+    const [row] = await t.db.db
+      .select()
+      .from(webhookSubscriptions)
+      .where(eq(webhookSubscriptions.id, hook.id));
+    expect(row?.url).toBe(URL_OK);
+    expect(
+      (await aliceHttp.patch(`/api/v1/webhooks/${hook.id}`, { events: ['task_completed'] }))
+        .statusCode,
+    ).toBe(204);
+  });
 });
 
 describe.skipIf(!TEST_DATABASE_URL)('webhooks: delivery', () => {
@@ -287,6 +306,25 @@ describe.skipIf(!TEST_DATABASE_URL)('webhooks: delivery', () => {
     const list = await bobHttp.get('/api/v1/webhooks');
     expect((list.json() as { webhooks: unknown[] }).webhooks).toHaveLength(1);
     expect(bobWebhook.id).toBeDefined();
+  });
+
+  it("never queues one project's events for members of another project in the same batch", async () => {
+    const shared = id();
+    const secret = id();
+    await alice.ok(cmd('project_add', { id: shared, name: 'Shared' }));
+    await alice.ok(cmd('project_add', { id: secret, name: 'Private' }));
+    await grantProjectAccess(t.db.db, shared, bob.userId, 'viewer');
+    await createWebhook(bobHttp, { url: URL_OK, events: ['task_added'] });
+    const { posts, fetch } = captureWebhook();
+    t.app.services.webhooks.fetch = fetch;
+    // Both events land in one enqueue batch.
+    await alice.ok(cmd('task_add', { id: id(), projectId: shared, content: 'Visible' }));
+    await alice.ok(cmd('task_add', { id: id(), projectId: secret, content: 'Not for Bob' }));
+    await runWebhooks();
+    const rows = await t.db.db.select().from(webhookDeliveries);
+    expect(rows.map((r) => r.payload.project?.id)).toEqual([shared]);
+    expect(posts).toHaveLength(1);
+    expect(JSON.stringify(rows)).not.toContain('Not for Bob');
   });
 
   it('retries with backoff, then dead-letters after the last attempt', async () => {

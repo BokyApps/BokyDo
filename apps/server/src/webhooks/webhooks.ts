@@ -106,10 +106,13 @@ export class Webhooks {
       }
       if (!this.enabled) {
         // Skip past everything that happened while disabled, without queueing anything.
+        const [head] = await tx
+          .select({ maxId: sql<number>`coalesce(max(${activity.id}), 0)` })
+          .from(activity);
         await tx
           .update(webhookState)
           .set({
-            lastActivityId: sql`greatest(${webhookState.lastActivityId}, coalesce((select max(${activity.id}) from ${activity}), 0))`,
+            lastActivityId: sql`greatest(${webhookState.lastActivityId}, ${Number(head?.maxId ?? 0)}::bigint)`,
           })
           .where(eq(webhookState.id, 1));
         return 0;
@@ -125,7 +128,7 @@ export class Webhooks {
           .limit(ENQUEUE_BATCH);
         if (rows.length === 0) break;
         await this.fanOut(tx, rows, now);
-        last = rows[rows.length - 1]!.id;
+        last = rows.at(-1)?.id ?? last;
         processed += rows.length;
         if (rows.length < ENQUEUE_BATCH) break;
       }
@@ -138,6 +141,9 @@ export class Webhooks {
   /** One delivery row per (activity row, subscription) pair, payload frozen at enqueue time. */
   private async fanOut(tx: Tx, rows: (typeof activity.$inferSelect)[], now: Date): Promise<void> {
     const projectIds = [...new Set(rows.map((r) => r.projectId))];
+    // Members per project: an event is only ever queued for members of its own project, never
+    // for someone who merely shares another project in the same batch.
+    const membersOf = new Map<string, Set<string>>();
     const memberIds = new Set<string>();
     for (const projectId of projectIds) {
       const members = await tx
@@ -145,6 +151,7 @@ export class Webhooks {
         .from(projectMembers)
         .innerJoin(users, eq(users.id, projectMembers.userId))
         .where(and(eq(projectMembers.projectId, projectId), isNull(users.disabledAt)));
+      membersOf.set(projectId, new Set(members.map((m) => m.userId)));
       for (const m of members) memberIds.add(m.userId);
     }
     if (memberIds.size === 0) return;
@@ -163,9 +170,10 @@ export class Webhooks {
     );
     const inserts: (typeof webhookDeliveries.$inferInsert)[] = [];
     for (const row of rows) {
+      const members = membersOf.get(row.projectId);
       const matching = subscriptions.filter(
         (s) =>
-          memberIds.has(s.userId) &&
+          members?.has(s.userId) === true &&
           s.events.includes(row.type as WebhookEventName) &&
           s.createdAt <= row.at,
       );
@@ -196,7 +204,8 @@ export class Webhooks {
 
   /** Keeps the frozen body within the size cap by dropping the snapshot if it is huge. */
   private sizePayload(payload: WebhookDeliveryPayload): WebhookDeliveryPayload {
-    if (JSON.stringify(payload).length <= MAX_PAYLOAD_BYTES) return payload;
+    // Bytes, not characters: non-ASCII text takes up to three bytes a character.
+    if (Buffer.byteLength(JSON.stringify(payload)) <= MAX_PAYLOAD_BYTES) return payload;
     return { ...payload, data: {}, truncated: true };
   }
 
@@ -232,9 +241,10 @@ export class Webhooks {
     const payload = delivery.payload;
 
     // Access is judged at delivery time, never at enqueue time only (the feed rule, T110/T78).
-    if (payload.project) {
+    const project = payload.project;
+    if (project) {
       const access = await this.db.transaction((tx) =>
-        projectAccess(tx, subscription.userId, payload.project!.id),
+        projectAccess(tx, subscription.userId, project.id),
       );
       if (!access) {
         await this.finish(delivery.id, { status: 'dropped', error: 'access_lost', now });
@@ -385,7 +395,7 @@ export class Webhooks {
         lastError: reason,
         responseStatus: responseStatus ?? null,
         nextAttemptAt: new Date(
-          now.getTime() + BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)]!,
+          now.getTime() + (BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)] ?? 86_400_000),
         ),
       })
       .where(eq(webhookDeliveries.id, delivery.id));

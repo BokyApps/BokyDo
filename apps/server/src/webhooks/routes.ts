@@ -40,6 +40,18 @@ export function registerWebhookRoutes(app: FastifyInstance, deps: WebhookRouteDe
     freeFailures: 1_000_000,
     maxBackoffMs: 0,
   });
+  // Creating, re-pointing and rotating are rare; a burst means a script or a stolen session.
+  const changes = new RateLimiter({
+    windowMs: 3_600_000,
+    maxPerWindow: 30,
+    freeFailures: 1_000_000,
+    maxBackoffMs: 0,
+  });
+  const tooMany = (reply: FastifyReply, retryAfterSeconds: number) =>
+    reply
+      .header('retry-after', String(retryAfterSeconds))
+      .status(429)
+      .send({ error: 'rate_limited' });
   const send = (reply: FastifyReply, out: Out) =>
     out.body === undefined
       ? reply.status(out.status).send()
@@ -97,6 +109,8 @@ export function registerWebhookRoutes(app: FastifyInstance, deps: WebhookRouteDe
     const body = parseBody(webhookCreateSchema, req.body, reply);
     if (!body) return;
     const me = requireSession(req).user;
+    const allowed = changes.attempt(me.id);
+    if (!allowed.allowed) return tooMany(reply, allowed.retryAfterSeconds);
     const secret = newWebhookSecret();
     const id = newId();
     const out = await db.transaction(async (tx): Promise<Out> => {
@@ -135,7 +149,12 @@ export function registerWebhookRoutes(app: FastifyInstance, deps: WebhookRouteDe
     if (!body) return;
     if (!settings.get('api.webhooksEnabled'))
       return reply.status(409).send({ error: 'webhooks_disabled' });
+    // Pointing an existing webhook somewhere else is as sensitive as creating one: it redirects
+    // a standing data-export channel. Changing only the events is not.
+    if (body.url !== undefined && !requireRecentAuth(req, reply)) return;
     const me = requireSession(req).user;
+    const allowed = changes.attempt(me.id);
+    if (!allowed.allowed) return tooMany(reply, allowed.retryAfterSeconds);
     const out = await db.transaction(async (tx): Promise<Out> => {
       const [row] = await tx
         .update(webhookSubscriptions)
@@ -171,6 +190,8 @@ export function registerWebhookRoutes(app: FastifyInstance, deps: WebhookRouteDe
     if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
     if (!requireRecentAuth(req, reply)) return;
     const me = requireSession(req).user;
+    const allowed = changes.attempt(me.id);
+    if (!allowed.allowed) return tooMany(reply, allowed.retryAfterSeconds);
     const secret = newWebhookSecret();
     const out = await db.transaction(async (tx): Promise<Out> => {
       const [row] = await tx

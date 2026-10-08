@@ -92,8 +92,8 @@ export function WebhookSettings() {
       <h2 className="mb-1 font-semibold">Webhooks</h2>
       <p className="mb-4 text-sm text-muted">
         BokyDo POSTs a signed JSON payload to your endpoint for each event you choose, in projects
-        you can see. Verify the <code>X-BokyDo-Signature</code> header; see the webhook docs on
-        your server for examples. Endpoints must be public https addresses.
+        you can see. Verify the <code>X-BokyDo-Signature</code> header; see the webhook docs on your
+        server for examples. Endpoints must be public https addresses.
       </p>
       {created && (
         <div className="mb-4 space-y-2">

@@ -59,11 +59,10 @@ carries:
 Verify like this (Node.js):
 
 ```js
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 const expected =
-  "sha256=" +
-  createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex");
+  'sha256=' + createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
 const ok =
   expected.length === signature.length &&
   timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
