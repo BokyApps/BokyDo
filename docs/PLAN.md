@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · R2 ✅ W10d ✅ W11c ✅ A2 slice 1 W7d slice 1 W10a project-limited tokens ✅ W11a server+UI W8 UI ✅ (2026-10-08) · **Next: W7d ChatGPT, W8 UI/live, W9, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · R2 ✅ W10d ✅ W11c ✅ A2 slice 1 W7d slice 1 W10a project-limited tokens ✅ W11a server+UI W8 UI ✅ W9 assist (2026-10-08) · **Next: W7d ChatGPT, W8 UI/live, W9, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -443,6 +443,8 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Eval harness: fixture sets per feature, run against configured models, pass-rate report (so users can pick a model that actually works locally, e.g. small Ollama models).
 - **Security gate:** cross-project data leakage in reports (only visible projects), injection → unintended writes, scheduled reports respect revoked access.
 
+- *W9 slice 1 done 2026-10-08 (ADR 0021, T188–T189): `POST /api/v1/assist/task` (clearer title, next steps as sub-tasks, due date and priority, each date re-read by BokyDo's parser; existing and repeated steps dropped) and `/assist/filter` (a sentence to a query the real filter parser accepts, one correction round, the match count and unknown names as a check). Suggestions only: the client applies what the user accepts through sync commands. Next: reports, Ask your tasks, decision models, eval harness.*
+
 #### W10 — Public API, OAuth AS & MCP · L
 - REST v1 + OpenAPI docs, PATs with scopes, OAuth 2.1 AS (DCR, PKCE, metadata, consent, revocation), MCP server (§6), webhooks, recipes for Claude/ChatGPT/Grok/Hermes.
 - **Security gate:** scope enforcement per tool/route (matrix), DCR abuse (redirect URI validation, open redirect, client impersonation), token leakage in logs, consent-screen clickjacking, PKCE downgrade, refresh-token reuse detection, webhook SSRF + signature verification docs, MCP tool output injection framing.
@@ -576,7 +578,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W7c ✅ | Admin + user AI settings UI | DeepSeek (Sonnet review) | **Done 2026-10-07** (PR #2) | Anything server-side |
 | W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | SuperGrok slice done 2026-10-08 (ADR 0017); ChatGPT next, owner tests it | W10, W11 |
 | W8 🟡 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | **Server done 2026-10-07** (ADR 0014), **UI done 2026-10-08**; live pipeline open | W10, W11, W12 |
-| W9 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | W7; Ask-your-tasks tools reuse W10's MCP tool layer if built first | W10, W11, W12 |
+| W9 🟡 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | **Task/Filter Assist done 2026-10-08** (ADR 0021); reports, Ask your tasks (reuse the MCP tool layer), decision models, eval harness open | W10, W11, W12 |
 | W10a ✅ | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | **Done 2026-10-06** (ADR 0008, migration 0013); project-limited tokens 2026-10-08 (ADR 0019, migration 0018) | W7, W11, W12 |
 | W10b ✅ | REST v1 + OpenAPI docs, scope matrix tests | Sonnet | **Done 2026-10-07** (PR #1) | W7, W11 |
 | W10c ✅ | MCP server | Opus | **Done 2026-10-06** (ADR 0009) | W11, W12 |

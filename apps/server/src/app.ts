@@ -49,6 +49,7 @@ import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerProductivityRoutes } from './productivity/routes.js';
+import { registerAssistRoutes } from './assist/routes.js';
 import { registerImportRoutes } from './import/routes.js';
 import { TodoistImporter } from './import/todoist-import.js';
 import { registerRambleRoutes } from './ramble/routes.js';
@@ -339,6 +340,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
   registerRambleRoutes(app, { db, settings, sync, ai });
+  registerAssistRoutes(app, { db, settings, ai });
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   registerProductivityRoutes(app, { db, settings });

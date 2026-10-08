@@ -1,5 +1,6 @@
 export * from './ai.js';
 export * from './api-auth.js';
+export * from './assist.js';
 export * from './auth.js';
 export * from './csv.js';
 export * from './errors.js';
