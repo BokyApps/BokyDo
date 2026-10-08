@@ -69,6 +69,20 @@ export function errorMessage(err: unknown): string {
       return "This browser recorded audio in a format BokyDo can't read. Try typing instead.";
     case 'audio_too_long':
       return 'That recording was too long. Record shorter pieces.';
+    case 'todoist_unauthorized':
+      return "Todoist didn't accept that token.";
+    case 'todoist_unavailable':
+      return "Todoist couldn't be reached just now. Try again in a moment.";
+    case 'todoist_invalid_response':
+      return "Todoist sent an answer BokyDo couldn't read. Try again later.";
+    case 'todoist_too_large':
+      return 'That Todoist account is too big to import in one go.';
+    case 'session_expired':
+      return 'The Todoist connection expired. Connect again to continue.';
+    case 'import_running':
+      return 'An import is already running. Wait for it to finish, then try again.';
+    case 'invalid_choice':
+      return 'Some of those choices no longer match. Check the form and try again.';
     case 'not_created':
       return 'Nothing was created, because one task could not be saved.';
     case 'conflict':

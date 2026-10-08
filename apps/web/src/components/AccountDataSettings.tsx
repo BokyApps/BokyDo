@@ -4,6 +4,7 @@ import { api, ApiError } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { sessionQuery } from '../lib/queries.js';
 import { useSensitive } from '../lib/reauth.js';
+import { TodoistImport } from './TodoistImport.js';
 import { Alert, Button, Card, Dialog, TextField } from './ui.js';
 
 interface Blockers {
@@ -17,6 +18,7 @@ export function AccountDataSettings() {
   return (
     <div className="space-y-6">
       <ExportCard />
+      <TodoistImport />
       <DeleteCard />
     </div>
   );
