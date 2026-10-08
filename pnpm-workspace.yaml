@@ -20,3 +20,5 @@ strictPeerDependencies: true
 overrides:
   # drizzle-kit → @esbuild-kit pins esbuild 0.18 (GHSA-67mh-4wv8-2f99). Dev-only, but keep audits clean.
   '@esbuild-kit/core-utils>esbuild': ^0.25.0
+  # F-029 (GHSA-68fv-2mgg-jv7q): Vite/PostCSS pin 1.2.1. Build-time only; keep audits clean.
+  source-map-js: ^1.2.2

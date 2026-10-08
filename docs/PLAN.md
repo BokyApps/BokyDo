@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · **Next: W7d, W8 UI/live, W9, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · R2 ✅ (2026-10-08) · **Next: W7d, W8 UI/live, W9, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -549,7 +549,6 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
 **Open items:**
-- F-029: add a pnpm override `source-map-js: ^1.2.2` once 1.2.2 passes the 7-day release-age gate (on/after 2026-10-07 14:08 UTC), re-run osv-scanner, mark F-029 fixed.
 - Push delivery was verified by tests (RFC 8291 vector, real decryption) but not in a real browser (the dev browser blocks notification permission). Check on a real HTTPS install.
 - Push goes to the browser vendors' push services and to the hosts in the admin setting `push.allowedHosts` (M1, ADR 0005 update), through the SSRF-safe outbound client. For A3: UnifiedPush endpoints get the same Web Push (RFC 8291/8292) messages as browsers; `/api/v1/push/subscriptions` is still session-only and ties a subscription to a session, so the Android app needs a token-friendly variant tied to its OAuth grant (likely a migration).
 - Multi-replica would need LISTEN/NOTIFY pokes and shared rate limiters (ADR 0003); jobs already use `SKIP LOCKED`.
@@ -562,7 +561,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | ID | Task | Model | Blockers | Can run alongside |
 |---|---|---|---|---|
 | R1 ✅ | Finish the review of the DeepSeek change (global Completed view + COEP `require-corp`, F-008): one thumbnail check with COEP on, then commit and push | Sonnet | **Done 2026-10-06**: thumbnails render with COEP on (`crossOriginIsolated`, no console errors); committed | Everything |
-| R2 | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | Release-age gate: not before 2026-10-07 14:08 UTC | Everything |
+| R2 ✅ | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | **Done 2026-10-08**: override, osv-scanner clean, ignore removed | Everything |
 | R3 ✅ | Completed-tasks paging skips tasks that share a completion timestamp (parent + sub-tasks, ms-truncated cursor): use a `(completed_at, id)` cursor, scoped to visible projects, plus a test | Sonnet | **Done 2026-10-06** (F-034): opaque `<completed_at>_<id>` cursor, strict validation, regression + mutation-checked tests | Everything |
 | R4 | Verify Web Push in a real browser on an HTTPS install (enable, test push, click-through, sign-out removes it) | Sonnet (guided) | Needs an HTTPS deployment and a person with a real browser | Everything |
 | W7a ✅ | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | **Done 2026-10-06** (ADR 0006; catalog lives in `packages/shared/src/ai.ts`, not a new package) | W10a, W11b–W11e, W12a |
