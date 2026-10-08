@@ -59,6 +59,18 @@ export function errorMessage(err: unknown): string {
       return 'Subscription sign-in is switched off on this instance.';
     case 'ai_provider_error':
       return "The AI provider didn't answer as expected. Try again in a moment.";
+    case 'ai_not_configured':
+      return 'AI is not set up yet. An administrator can configure it, or you can add your own key in Settings → AI.';
+    case 'ai_budget_exceeded':
+      return "This month's AI budget is used up. It resets next month.";
+    case 'ai_refused':
+      return "The AI wouldn't turn that into tasks. Try rephrasing it.";
+    case 'unsupported_media_type':
+      return "This browser recorded audio in a format BokyDo can't read. Try typing instead.";
+    case 'audio_too_long':
+      return 'That recording was too long. Record shorter pieces.';
+    case 'not_created':
+      return 'Nothing was created, because one task could not be saved.';
     case 'conflict':
       return CONFLICTS[err.body?.message ?? ''] ?? 'That conflicts with the current state.';
     default:

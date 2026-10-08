@@ -1,6 +1,7 @@
 import {
   instanceStatusSchema,
   sessionInfoSchema,
+  type AiFeature,
   type InstanceStatus,
   type PublicSettings,
   type SessionInfo,
@@ -46,4 +47,15 @@ export const setupQuery = queryOptions({
 export const adminSettingsQuery = queryOptions({
   queryKey: ['admin', 'settings'],
   queryFn: () => api<PublicSettings>('GET', '/api/v1/admin/settings'),
+});
+
+/** The AI features this user can use right now. AI settings invalidate the same key after edits. */
+export interface AiCatalog {
+  policy: { userKeys: boolean; signIn: boolean; instance: boolean };
+  available: AiFeature[];
+}
+
+export const aiCatalogQuery = queryOptions({
+  queryKey: ['ai-catalog'],
+  queryFn: () => api<AiCatalog>('GET', '/api/v1/ai/catalog'),
 });

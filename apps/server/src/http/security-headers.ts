@@ -38,9 +38,12 @@ export async function registerSecurityHeaders(
     referrerPolicy: { policy: 'no-referrer' },
   });
   app.addHook('onSend', async (req, reply) => {
+    // The microphone is for Ramble (voice to tasks). It is a dialog in the single-page app, so a
+    // per-route policy can't work (the document's policy covers every route): this origin may
+    // ask (the browser still prompts), frames and other origins never.
     reply.header(
       'Permissions-Policy',
-      'camera=(), geolocation=(), microphone=(), payment=(), usb=()',
+      'camera=(), geolocation=(), microphone=(self), payment=(), usb=()',
     );
     // API responses carry user data: never let browsers or proxies store them.
     if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');

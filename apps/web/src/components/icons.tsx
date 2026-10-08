@@ -20,6 +20,13 @@ function Icon({ children, ...props }: SVGProps<SVGSVGElement> & { children: Reac
   );
 }
 
+export const MicIcon = () => (
+  <Icon>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+  </Icon>
+);
+
 export const InboxIcon = () => (
   <Icon>
     <path d="M3 13h5l2 3h4l2-3h5" />

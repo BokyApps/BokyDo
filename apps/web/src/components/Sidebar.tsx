@@ -12,6 +12,7 @@ import {
   ChevronIcon,
   TemplateIcon,
   InboxIcon,
+  MicIcon,
   PlusIcon,
   SearchIcon,
   TagIcon,
@@ -34,9 +35,12 @@ const active = { className: 'bg-accent/10 font-medium text-fg hover:bg-accent/15
 
 export function Sidebar({
   onSearch,
+  onRamble,
   onNavigate,
 }: {
   onSearch: () => void;
+  /** Shown only when the server offers Ramble to this user. */
+  onRamble?: (() => void) | undefined;
   onNavigate?: () => void;
 }) {
   const state = useSyncState();
@@ -76,6 +80,11 @@ export function Sidebar({
           </span>{' '}
           Add task
         </button>
+        {onRamble && (
+          <button type="button" className={`${item} w-full`} onClick={onRamble}>
+            <MicIcon /> Ramble
+          </button>
+        )}
         <button type="button" className={`${item} w-full`} onClick={onSearch}>
           <SearchIcon /> Search
         </button>

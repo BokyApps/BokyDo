@@ -5,11 +5,12 @@ import { useEffect, useRef, useState } from 'react';
 import { resyncPush } from '../lib/push.js';
 import { api, clearCsrfToken } from '../lib/api.js';
 import { ConfirmProvider } from '../lib/confirm.js';
-import { sessionQuery } from '../lib/queries.js';
+import { aiCatalogQuery, sessionQuery } from '../lib/queries.js';
 import { PreferenceEffects, SyncProvider, usePreferences } from '../lib/sync.js';
 import { TaskUIProvider, useTaskUI } from '../lib/task-ui.js';
 import { ToastProvider } from '../lib/toasts.js';
 import { MenuIcon, PlusIcon, SettingsIcon } from './icons.js';
+import { RambleDialog } from './Ramble.js';
 import { BulkBar, QuickAddDialog, SearchDialog, ShortcutsDialog } from './Overlays.js';
 import { Sidebar } from './Sidebar.js';
 import { TaskDetailDialog } from './TaskDetail.js';
@@ -44,7 +45,12 @@ function Layout() {
   );
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [rambleOpen, setRambleOpen] = useState(false);
   const pendingG = useRef(false);
+  // Ramble is offered only when the server says this user has the feature (ramble.extract).
+  const catalog = useQuery(aiCatalogQuery);
+  const ramble = catalog.data?.available.includes('ramble.extract') ?? false;
+  const voice = catalog.data?.available.includes('ramble.transcribe') ?? false;
 
   // Push: re-attach this browser's subscription to the current session, and open what a
   // clicked notification points at (same-origin paths only).
@@ -145,6 +151,7 @@ function Layout() {
             <aside className="absolute inset-y-0 left-0 z-30 w-72 border-r border-line bg-surface md:static md:z-auto md:w-64 md:bg-bg">
               <Sidebar
                 onSearch={() => setSearchOpen(true)}
+                onRamble={ramble ? () => setRambleOpen(true) : undefined}
                 onNavigate={() =>
                   !window.matchMedia('(min-width: 768px)').matches && setSidebarOpen(false)
                 }
@@ -159,6 +166,9 @@ function Layout() {
       <TaskDetailDialog />
       <QuickAddDialog />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+      {ramble && (
+        <RambleDialog open={rambleOpen} onClose={() => setRambleOpen(false)} voice={voice} />
+      )}
       <ShortcutsDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       <BulkBar />
     </div>

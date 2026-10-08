@@ -41,17 +41,13 @@ export async function api<T>(
   return data as T;
 }
 
-/** Upload a file as raw bytes (it streams to disk on the server; no multipart). */
-export async function uploadFile<T>(path: string, file: File): Promise<T> {
-  const headers: Record<string, string> = {
-    'content-type': 'application/octet-stream',
-    'x-filename': encodeURIComponent(file.name),
-  };
+/** POST a raw body with its own content type; the CSRF header and error type are as in `api`. */
+async function sendRaw<T>(path: string, body: Blob, headers: Record<string, string>): Promise<T> {
   if (csrfToken) headers[CSRF_HEADER] = csrfToken;
   const res = await fetch(path, {
     method: 'POST',
     headers,
-    body: file,
+    body,
     credentials: 'same-origin',
   });
   const data: unknown = await res.json().catch(() => null);
@@ -60,6 +56,19 @@ export async function uploadFile<T>(path: string, file: File): Promise<T> {
     throw new ApiError(res.status, err?.error ?? 'error', err);
   }
   return data as T;
+}
+
+/** Upload a file as raw bytes (it streams to disk on the server; no multipart). */
+export function uploadFile<T>(path: string, file: File): Promise<T> {
+  return sendRaw<T>(path, file, {
+    'content-type': 'application/octet-stream',
+    'x-filename': encodeURIComponent(file.name),
+  });
+}
+
+/** POST one audio chunk (raw `audio/*` body, not JSON) and parse the JSON answer. */
+export function postRaw<T>(path: string, body: Blob, contentType: string): Promise<T> {
+  return sendRaw<T>(path, body, { 'content-type': contentType });
 }
 
 export function clearCsrfToken(): void {
