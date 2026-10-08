@@ -24,6 +24,7 @@ import { ActivityList, CommentThread } from '../components/Comments.js';
 import { CalendarView } from '../components/Calendar.js';
 import { CompletedList } from '../components/CompletedList.js';
 import { ProjectDialog } from '../components/ProjectDialog.js';
+import { ReportPanel } from '../components/ReportPanel.js';
 import { Avatar, ShareDialog, useMembers } from '../components/Sharing.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { SortableTaskList, TaskDnd } from '../components/TaskTree.js';
@@ -116,6 +117,15 @@ export function ProjectView({ projectId }: { projectId: string }) {
           )
         }
       />
+      {/* Not on the Inbox (no share or menu there either), nor on archived projects (no live tasks). */}
+      {!project.isInbox && !project.isArchived && (
+        <ReportPanel
+          key={projectId}
+          target={{ kind: 'project', projectId }}
+          label="Status report"
+          className="mb-4"
+        />
+      )}
       {project.isArchived && (
         <div className="mb-4">
           <Alert tone="info">This project is archived and read-only.</Alert>

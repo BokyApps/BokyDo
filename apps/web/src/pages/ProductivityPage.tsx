@@ -1,6 +1,7 @@
 import type { ProductivitySummary } from '@bokydo/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
+import { ReportPanel } from '../components/ReportPanel.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
 import { Alert, Button, Card, TextField } from '../components/ui.js';
 import { api } from '../lib/api.js';
@@ -30,6 +31,7 @@ export function ProductivityPage() {
     <Page>
       <ViewHeader title="Productivity" />
       <div className="mx-auto max-w-2xl space-y-6">
+        <ReportPanel target={{ kind: 'week' }} label="Review my week" />
         {summary.isError && <Alert>{errorMessage(summary.error)}</Alert>}
         {!data && !summary.isError && <p className="text-sm text-muted">Loading…</p>}
         {data && (

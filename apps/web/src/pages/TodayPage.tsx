@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { DatePicker } from '../components/pickers.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { PlainTaskList } from '../components/TaskTree.js';
+import { ReportPanel } from '../components/ReportPanel.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { useTaskActions } from '../lib/actions.js';
 import { formatDate, makeDue, todayIn } from '../lib/dates.js';
@@ -39,6 +40,7 @@ export function TodayPage() {
         options={options}
         setOptions={setOptions}
       />
+      <ReportPanel target={{ kind: 'day' }} label="Plan my day" className="mb-6" />
       {overdue.length > 0 && (
         <section aria-label="Overdue" className="mb-6">
           <div className="flex items-center justify-between border-b border-line pb-1">
