@@ -103,6 +103,9 @@ export function Sidebar({
           </span>{' '}
           Completed
         </Link>
+        <Link to="/productivity" className={item} activeProps={active}>
+          <span className="text-muted">▤</span> Productivity
+        </Link>
         {state.invitations.length > 0 && (
           <Link to="/invitations" className={item} activeProps={active}>
             <span className="text-accent">✉</span> Invitations{' '}

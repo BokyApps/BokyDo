@@ -28,10 +28,15 @@ export interface ProductivityInput {
 
 /** The level `karma` sits in, and how far it is towards the next one. */
 export function levelFor(karma: number): ProductivitySummary['level'] {
-  let index = 0;
-  for (let i = 0; i < KARMA_LEVELS.length; i++) if (karma >= KARMA_LEVELS[i]!.at) index = i;
-  const level = KARMA_LEVELS[index]!;
-  const next = KARMA_LEVELS[index + 1];
+  let level: (typeof KARMA_LEVELS)[number] = KARMA_LEVELS[0];
+  let next: (typeof KARMA_LEVELS)[number] | undefined;
+  for (const candidate of KARMA_LEVELS) {
+    if (karma >= candidate.at) level = candidate;
+    else {
+      next = candidate;
+      break;
+    }
+  }
   return {
     name: level.name,
     at: level.at,

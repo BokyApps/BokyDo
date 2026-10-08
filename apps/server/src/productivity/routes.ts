@@ -64,7 +64,10 @@ export function registerProductivityRoutes(
         ),
       );
 
-    const completions: Completion[] = recent.map((r) => ({ at: r.at!, priority: r.priority }));
+    // `isNotNull` guarantees `at`, but keep the narrow rather than asserting it.
+    const completions: Completion[] = recent.flatMap((r) =>
+      r.at === null ? [] : [{ at: r.at, priority: r.priority }],
+    );
     return summariseProductivity({
       completions,
       karma: Number(totals?.karma ?? 0),

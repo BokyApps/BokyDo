@@ -16,6 +16,7 @@ import { AdminSettingsPage } from './pages/AdminSettingsPage.js';
 import { AdminUsersPage } from './pages/AdminUsersPage.js';
 import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
 import { CompletedPage } from './pages/CompletedPage.js';
+import { ProductivityPage } from './pages/ProductivityPage.js';
 import { ArchivedPage, FilterPage, FiltersLabelsPage, LabelPage } from './pages/LabelsPages.js';
 import { TemplatesPage } from './pages/TemplatesPage.js';
 import { InboxPage, ProjectView } from './pages/ProjectPage.js';
@@ -167,6 +168,7 @@ const routeTree = rootRoute.addChildren([
     appPage('/today', TodayPage),
     appPage('/upcoming', UpcomingPage),
     appPage('/completed', CompletedPage),
+    appPage('/productivity', ProductivityPage),
     appPage('/filters-labels', FiltersLabelsPage),
     appPage('/templates', TemplatesPage),
     appPage('/archived', ArchivedPage),
