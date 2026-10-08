@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · **Next: W7d, W8 UI/live, W9, W10b, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · **Next: W7d, W8 UI/live, W9, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -496,6 +496,7 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 #### A2 — Core screens · L
 - Inbox, Today, Upcoming, projects (list + board), filters, labels, task detail, comments, search, settings — all offline-capable.
 - Quick add with live NLP highlighting. Option: run `packages/nlp` in an embedded JS engine (QuickJS) to keep **one** parser; fall back to server `/parse`. (Decide in A2 spike.)
+  *Decided 2026-10-07 (ADR 0016): `packages/nlp` runs in AndroidX `JavaScriptSandbox` (WebView's V8, no native code), bundle generated into `app/src/main/assets/nlp.js` with a CI freshness check; ≈3.4 ms per parse after a ≈0.6 s cold start, output identical to Node's. Plain-text quick add where the sandbox isn't supported; no server `/parse`.*
 - Themes and fonts from §4a via a generated Compose `ColorScheme` and bundled font families; follows the user's synced appearance and the system light/dark mode; optional Material You dynamic color as an extra choice.
 - Time-zone picker with the same detection and smart search as the web (§4b), plus the travel prompt.
 
@@ -587,7 +588,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | M1 ✅ | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | **Done 2026-10-07** (`push.allowedHosts`, ADR 0005 update) | A1, A2 |
 | M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
 | A1 ✅ | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | **Done 2026-10-07** (ADR 0010; SQLite instead of Room) | Web W11–W12 |
-| A2 | Android core screens, themes, time-zone picker, quick add (QuickJS spike vs server `/parse`) | Sonnet (Opus for the parser spike decision) | A1 | A4 later screens, web work |
+| A2 | Android core screens, themes, time-zone picker, quick add (parser decided: ADR 0016, `JavaScriptSandbox`) | Sonnet | A1 | A4 later screens, web work |
 | A3 ✅ | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | **Done 2026-10-07** (ADR 0015, migration 0016) | A2, A4 |
 | A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A1–A2 | A3, A5 |
 | A5 | Ramble on Android | Sonnet | W8, A1 | A4 |
