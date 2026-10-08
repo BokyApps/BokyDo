@@ -41,6 +41,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.bokyapps.bokydo.core.ServerAddress
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -49,8 +51,8 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * A1's screens: connect to a server, wait for the browser sign-in, and a status page that shows
- * the synced data. The real task screens come in A2.
+ * Connect to a server, wait for the browser sign-in, then the app itself ([AppShell]). Settings
+ * shows the account, sync status and notifications.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,7 +64,7 @@ class MainActivity : ComponentActivity() {
                     when (val s = screen) {
                         is AppScreen.Connect -> ConnectScreen(s.message)
                         is AppScreen.WaitingForBrowser -> WaitingScreen(s.host)
-                        AppScreen.Home -> HomeScreen()
+                        AppScreen.Home -> AppShell()
                     }
                 }
             }
@@ -144,7 +146,7 @@ private fun WaitingScreen(host: String) {
 }
 
 @Composable
-private fun HomeScreen() {
+fun SettingsScreen() {
     val context = LocalContext.current
     val app = context.app
     val scope = rememberCoroutineScope()
@@ -163,8 +165,7 @@ private fun HomeScreen() {
         )
     }
     val host = app.sessions.load()?.origin ?: ""
-    Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("BokyDo", style = MaterialTheme.typography.headlineMedium)
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Signed in to $host" + (summary.username?.let { " as $it" } ?: ""))
         Text("${summary.projects} projects · ${summary.tasks} tasks")
         Text(
@@ -179,7 +180,6 @@ private fun HomeScreen() {
             OutlinedButton(onClick = { scope.launch { app.signOut() } }) { Text("Sign out") }
         }
         NotificationsSection()
-        Text("Task lists, quick add and widgets arrive in the next releases.", style = MaterialTheme.typography.bodySmall)
     }
 }
 

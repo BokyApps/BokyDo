@@ -44,7 +44,7 @@ import { Delivery } from './delivery/delivery.js';
 import { AiCredentialStore } from './ai/credentials.js';
 import { registerAiRoutes } from './ai/routes.js';
 import { AiService } from './ai/service.js';
-import type { Resolver } from './net/outbound.js';
+import type { OutboundFetch, Resolver } from './net/outbound.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
@@ -68,6 +68,8 @@ export interface AppDeps {
   onRestored?: () => void;
   /** DNS for the SSRF-safe outbound client; injectable for tests. */
   resolver?: Resolver;
+  /** Tests only: the network for users' own AI credentials and subscription sign-in. */
+  aiUserFetch?: OutboundFetch;
 }
 
 export interface AppServices {
@@ -187,6 +189,17 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     settings,
     credentials: aiCredentials,
     ...(deps.resolver ? { resolver: deps.resolver } : {}),
+    ...(deps.aiUserFetch ? { userFetch: deps.aiUserFetch } : {}),
+  });
+  let lastSignInKeepAlive = 0;
+  jobs.add({
+    name: 'ai-sign-in-keepalive',
+    run: async (now) => {
+      // Hourly: renew subscription sign-ins idle for 3 days, so their refresh tokens stay alive.
+      if (now.getTime() - lastSignInKeepAlive < 3600_000) return;
+      lastSignInKeepAlive = now.getTime();
+      await ai.renewIdleSignIns(now, 3 * 86_400_000);
+    },
   });
   const services: AppServices = {
     settings,

@@ -42,6 +42,9 @@ jobs:
         env:
           BOKYDO_TEST_DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/bokydo_test
       - run: pnpm build
+      # The Android app runs this parser (ADR 0016): the committed bundle must be the current one.
+      - run: pnpm --filter @bokydo/nlp build:android
+      - run: git diff --exit-code -- apps/android/app/src/main/assets/nlp.js
 
   android:
     name: Android (core tests, lint, build)

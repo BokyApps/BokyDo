@@ -1,9 +1,4 @@
 # osv-scanner reads this file from the lockfile's directory. Every entry must name its finding in
 # docs/security/findings.md and expire on its own, so an ignore can't outlive its reason.
 
-[[IgnoredVulns]]
-# F-029: build-time only (Vite/PostCSS/Tailwind on our own sources), not in the image. The fix
-# (1.2.2) clears the 7-day minimumReleaseAge gate at 2026-10-07 14:08 UTC; then a pnpm override.
-id = "GHSA-68fv-2mgg-jv7q"
-ignoreUntil = 2026-10-08T14:00:00Z
-reason = "F-029: build-time only; fix is under the release-age gate until 2026-10-07 14:08 UTC"
+# No ignores at the moment (F-029 was fixed with a pnpm override on 2026-10-08).

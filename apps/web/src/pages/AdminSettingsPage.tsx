@@ -6,6 +6,7 @@ import {
 } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { AiAdminSettings } from '../components/AiSettings.js';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import {
@@ -38,6 +39,9 @@ export function AdminSettingsPage() {
       </Section>
       <Section title="Push services">
         <PushHostsForm settings={settings} />
+      </Section>
+      <Section title="AI">
+        <AiAdminSettings />
       </Section>
     </div>
   );

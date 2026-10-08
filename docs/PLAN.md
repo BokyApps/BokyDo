@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ (2026-10-07) · **Next: W7c, W7d, W8 UI/live, W9, W10b, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · R2 ✅ A2 slice 1 W7d slice 1 (2026-10-08) · **Next: W7d ChatGPT, W8 UI/live, W9, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -243,7 +243,7 @@ Every provider declares capabilities; features ask for a capability, the router 
 | Provider | Auth | Notes |
 |---|---|---|
 | OpenAI | API key **or** "Sign in with ChatGPT" (OAuth) | ChatGPT-plan usage for open-source/self-hosted tools uses a dynamic client ID and a loopback redirect; we'll implement the "paste the redirect URL back" pattern for a server-side app. Plan usage has restrictions (`stream: true`, `store: false`, no `temperature`). **Experimental flag**, verify ToS at implementation time. |
-| xAI / Grok | API key **or** SuperGrok/X Premium OAuth (device-code flow, RFC 8628) | Device flow fits a server app perfectly (show code, user approves on x.ai). **Experimental flag.** |
+| xAI / Grok | API key **or** SuperGrok/X Premium OAuth (device-code flow, RFC 8628) | Device flow fits a server app perfectly (show code, user approves on x.ai). **Experimental flag.** Personal only (ADR 0017). |
 | Anthropic | API key | |
 | Google Gemini | API key | Also offers live audio for Ramble. |
 | OpenRouter | API key | Hundreds of models; also a route to Jev. |
@@ -425,9 +425,11 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 #### W7 — AI provider layer (BYOK) · L
 - `packages/ai`: provider registry per §5.2, capability model, router (feature → provider/model), streaming, retries, budgets & usage metering, "test connection" button, live model list fetch.
 - Admin + user credential management UIs; OAuth flows: **ChatGPT sign-in** (experimental) and **SuperGrok device flow** (experimental); token refresh jobs.
+  *W7d slice 1 done 2026-10-08 (ADR 0017): SuperGrok / X Premium sign-in by device flow (`xai-subscription`), personal only (xAI's terms forbid sharing an account), tokens in the encrypted credential secret, renewal under the row lock before calls, keep-alive job, revoke on removal, admin switch `ai.subscriptionSignIn` (off by default), Settings → AI sign-in panel. Next: ChatGPT (Codex device flow + Responses-API dialect), to be tested by the owner.*
 - **Security gate:** SSRF via custom/Ollama base URL (private IPs, DNS rebinding, redirects, IPv6 tricks, metadata endpoints); keys never in logs/errors/responses; per-user keys inaccessible to admins via UI; budget enforcement can't be bypassed by parallel requests.
 - *W7a done 2026-10-06 (see ADR 0006): SSRF-safe outbound client (`apps/server/src/net/outbound.ts`, reusable by webhooks and imports), shared IP classification, provider catalog and capability model, owner-bound encrypted credentials (instance and per user), feature routing with per-call ownership/capability checks, usage ledger with lock-serialised monthly budgets, "test connection" / live model list for the OpenAI, Anthropic and Gemini dialects, and the REST routes (`/api/v1/ai/*`, `/api/v1/admin/ai/*`). Admin settings: `ai.userKeys`, `ai.instanceAccess`, `ai.monthlyTokenBudget`, `ai.monthlyAudioMinutes`, `ai.routing`, `network.privateAllowlist`. Deviation: no `packages/ai` (catalog in `packages/shared/src/ai.ts`, key-handling code server-only). For W7b: adapters implement calls through `AiService.run(user, { feature, estimate, run(ctx) })` and must use `ctx.fetch` only; report usage (or throw `AiCallError` with partial usage).*
 - *W7b done 2026-10-07 (see ADR 0007): adapters per dialect (OpenAI-compatible, Anthropic, Gemini) for chat with tools and tool results, structured JSON replies (schema mode, JSON-mode fallback, forced tool call, `responseJsonSchema`), opt-in SSE streaming, speech to text (`/audio/transcriptions`, multipart) and embeddings; retries for 408/429/5xx/529 and dropped connections (3 attempts, `Retry-After` up to 20 s); errors as codes without provider bodies; `POST …/credentials/:id/try` (user and admin) makes a real tiny call for the settings UI. For W8/W9: call `ai.chat(user, feature, req, { onText })`, `ai.chatJson(user, feature, { schema, name, … })`, `ai.transcribe(user, feature, { audio, mimeType, durationSeconds })` or `ai.embed(user, texts)`; they meter, enforce budgets and check the feature's capability. Still validate what a reply refers to (ids, access). Deferred: live audio (WebSockets) to W8.*
+- *W7c done 2026-10-07 (PR #2, reviewed by Opus): Settings → AI (your keys: add, edit, remove, Test; which model serves each feature, with a Try button that makes a real tiny call; usage this month) and Admin settings → AI (who may use instance keys, monthly budgets, own keys on/off, instance keys and routing, per-user usage). Fixed in review: Test showed "Reachable" for a refused key (the server answers 200 with `ok: false`); feature names in words; every hidden label unique. Checked in a browser and with the axe audit (73 screens, 0 violations).*
 
 #### W8 — Ramble · L
 - Mic capture UI (waveform), chunked and live pipelines, live draft list with edit ops, review panel, commit as one batch command, language selection, push-to-talk + keyboard shortcut, Web Speech fallback.
@@ -495,8 +497,10 @@ Native Kotlin, Jetpack Compose, Material 3, Room, WorkManager, Glance. Min SDK 2
 #### A2 — Core screens · L
 - Inbox, Today, Upcoming, projects (list + board), filters, labels, task detail, comments, search, settings — all offline-capable.
 - Quick add with live NLP highlighting. Option: run `packages/nlp` in an embedded JS engine (QuickJS) to keep **one** parser; fall back to server `/parse`. (Decide in A2 spike.)
+  *Decided 2026-10-07 (ADR 0016): `packages/nlp` runs in AndroidX `JavaScriptSandbox` (WebView's V8, no native code), bundle generated into `app/src/main/assets/nlp.js` with a CI freshness check; ≈3.4 ms per parse after a ≈0.6 s cold start, output identical to Node's. Plain-text quick add where the sandbox isn't supported; no server `/parse`.*
 - Themes and fonts from §4a via a generated Compose `ColorScheme` and bundled font families; follows the user's synced appearance and the system light/dark mode; optional Material You dynamic color as an extra choice.
 - Time-zone picker with the same detection and smart search as the web (§4b), plus the travel prompt.
+- *Slice 1 done 2026-10-08: app shell (Inbox, Today, Upcoming, Browse, project lists by section) on `:core` `AppState`/`Views` with queued changes shown at once (`Optimistic`, the web reducers' rules for task commands); complete/reopen; quick add parsed by `packages/nlp` in `JavaScriptSandbox` with highlighting, chips that keep a token as text and the web's commands (`:core` `QuickAdd`), `assets/nlp.js` generated by `pnpm --filter @bokydo/nlp build:android` and checked in CI. Verified on an API 36 emulator (offline add/complete, recurring, live updates, hostile text). Next slices: task detail, comments, labels, filters, search, board; then themes/fonts, time-zone picker and biometric lock.*
 
 #### A3 — Notifications · M
 - **Reminders scheduled locally** with exact alarms (`SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` justification), re-armed on boot/timezone change/sync — works offline and without any push service.
@@ -547,7 +551,6 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
 **Open items:**
-- F-029: add a pnpm override `source-map-js: ^1.2.2` once 1.2.2 passes the 7-day release-age gate (on/after 2026-10-07 14:08 UTC), re-run osv-scanner, mark F-029 fixed.
 - Push delivery was verified by tests (RFC 8291 vector, real decryption) but not in a real browser (the dev browser blocks notification permission). Check on a real HTTPS install.
 - Push goes to the browser vendors' push services and to the hosts in the admin setting `push.allowedHosts` (M1, ADR 0005 update), through the SSRF-safe outbound client. For A3: UnifiedPush endpoints get the same Web Push (RFC 8291/8292) messages as browsers; `/api/v1/push/subscriptions` is still session-only and ties a subscription to a session, so the Android app needs a token-friendly variant tied to its OAuth grant (likely a migration).
 - Multi-replica would need LISTEN/NOTIFY pokes and shared rate limiters (ADR 0003); jobs already use `SKIP LOCKED`.
@@ -560,13 +563,13 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | ID | Task | Model | Blockers | Can run alongside |
 |---|---|---|---|---|
 | R1 ✅ | Finish the review of the DeepSeek change (global Completed view + COEP `require-corp`, F-008): one thumbnail check with COEP on, then commit and push | Sonnet | **Done 2026-10-06**: thumbnails render with COEP on (`crossOriginIsolated`, no console errors); committed | Everything |
-| R2 | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | Release-age gate: not before 2026-10-07 14:08 UTC | Everything |
+| R2 ✅ | F-029: pnpm override `source-map-js: ^1.2.2`, re-run osv-scanner, mark fixed | DeepSeek | **Done 2026-10-08**: override, osv-scanner clean, ignore removed | Everything |
 | R3 ✅ | Completed-tasks paging skips tasks that share a completion timestamp (parent + sub-tasks, ms-truncated cursor): use a `(completed_at, id)` cursor, scoped to visible projects, plus a test | Sonnet | **Done 2026-10-06** (F-034): opaque `<completed_at>_<id>` cursor, strict validation, regression + mutation-checked tests | Everything |
 | R4 | Verify Web Push in a real browser on an HTTPS install (enable, test push, click-through, sign-out removes it) | Sonnet (guided) | Needs an HTTPS deployment and a person with a real browser | Everything |
 | W7a ✅ | `packages/ai` core: SSRF-safe outbound HTTP client (private IPs, DNS rebinding, redirects, IPv6, metadata), credential storage (envelope-encrypted, per-user keys hidden from admins), router, budgets/metering | Opus | **Done 2026-10-06** (ADR 0006; catalog lives in `packages/shared/src/ai.ts`, not a new package) | W10a, W11b–W11e, W12a |
 | W7b ✅ | Provider adapters on top of W7a (OpenAI-compatible, Anthropic, Gemini, Ollama, …), streaming, retries, live model list, "test connection" | Sonnet | **Done 2026-10-07** (ADR 0007) | W10, W11 |
-| W7c | Admin + user AI settings UI | DeepSeek (Sonnet review) | W7a/W7b API shapes | Anything server-side |
-| W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | W7a; current provider docs and test accounts from the owner; ToS check | W10, W11 |
+| W7c ✅ | Admin + user AI settings UI | DeepSeek (Sonnet review) | **Done 2026-10-07** (PR #2) | Anything server-side |
+| W7d | Subscription sign-in: ChatGPT sign-in and SuperGrok device flow (experimental), token refresh jobs | Opus | SuperGrok slice done 2026-10-08 (ADR 0017); ChatGPT next, owner tests it | W10, W11 |
 | W8 🟡 | Ramble: mic capture, chunked/live pipelines, live draft edits, text Ramble, schema + authz validation of extracted tasks | Opus (extractor, injection, authz) + Sonnet (UI) | **Server done 2026-10-07** (ADR 0014); UI and live pipeline open | W10, W11, W12 |
 | W9 | AI features and decision models (Task/Filter Assist, reports, Ask your tasks with confirmed writes, eval harness) | Opus (tool design, injection, cross-project leakage) + Sonnet (individual features, eval fixtures) | W7; Ask-your-tasks tools reuse W10's MCP tool layer if built first | W10, W11, W12 |
 | W10a ✅ | OAuth 2.1 authorization server (DCR, PKCE, consent, revocation, refresh-token reuse detection) and PATs with scopes | Opus | **Done 2026-10-06** (ADR 0008, migration 0013) | W7, W11, W12 |
@@ -586,7 +589,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | M1 ✅ | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | **Done 2026-10-07** (`push.allowedHosts`, ADR 0005 update) | A1, A2 |
 | M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
 | A1 ✅ | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | **Done 2026-10-07** (ADR 0010; SQLite instead of Room) | Web W11–W12 |
-| A2 | Android core screens, themes, time-zone picker, quick add (QuickJS spike vs server `/parse`) | Sonnet (Opus for the parser spike decision) | A1 | A4 later screens, web work |
+| A2 | Android core screens, themes, time-zone picker, quick add (parser decided: ADR 0016, `JavaScriptSandbox`) | Sonnet | A1 | A4 later screens, web work |
 | A3 ✅ | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | **Done 2026-10-07** (ADR 0015, migration 0016) | A2, A4 |
 | A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A1–A2 | A3, A5 |
 | A5 | Ramble on Android | Sonnet | W8, A1 | A4 |
