@@ -149,6 +149,13 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/invites/link/accept': 'user/after',
   'GET /api/v1/activity': 'user/after',
   'GET /api/v1/productivity': 'user/after',
+  // Import from Todoist (W11a): session only, the user hands over another service's token
+  'POST /api/v1/import/todoist/connect': 'user/after',
+  'POST /api/v1/import/todoist/disconnect': 'user/after',
+  'POST /api/v1/import/todoist/plan': 'user/after',
+  'POST /api/v1/import/todoist/runs': 'user/after',
+  'GET /api/v1/import/todoist/runs/latest': 'user/after',
+  'GET /api/v1/import/todoist/runs/:id': 'user/after',
   'POST /api/v1/projects/:id/attachments': 'user/after',
   'GET /api/v1/attachments/:id': 'user/after',
   // Calendar feeds: managed by the owner, fetched with the secret in the URL

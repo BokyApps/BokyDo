@@ -937,3 +937,55 @@ export const webhookState = pgTable('webhook_state', {
   id: integer('id').primaryKey().default(1),
   lastActivityId: bigint('last_activity_id', { mode: 'number' }).notNull(),
 });
+
+// ---------------------------------------------------------------------------------------------
+// Imports from other apps (W11a)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * An import run (one at a time per user). Progress and the outcome only: the source account's
+ * data and token are never stored.
+ */
+export const imports = pgTable(
+  'imports',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['todoist'] }).notNull(),
+    status: text('status', { enum: ['running', 'done', 'failed'] }).notNull(),
+    done: integer('done').notNull().default(0),
+    total: integer('total').notNull(),
+    /** TodoistImportCounts (what was written) once finished. */
+    counts: jsonb('counts'),
+    /** TodoistImportWarning[] (bounded). */
+    warnings: jsonb('warnings').notNull().default([]),
+    error: text('error'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('imports_user_idx').on(t.userId, t.startedAt),
+    check('imports_status_check', sql`status in ('running', 'done', 'failed')`),
+  ],
+);
+
+/**
+ * Which BokyDo item an imported item became, so running an import again adds only what is not
+ * there yet. Written in the same transaction as the item itself.
+ */
+export const importMappings = pgTable(
+  'import_mappings',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['todoist'] }).notNull(),
+    kind: text('kind', { enum: ['project', 'section', 'task', 'comment', 'filter'] }).notNull(),
+    externalId: text('external_id').notNull(),
+    localId: uuid('local_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.source, t.kind, t.externalId] })],
+);

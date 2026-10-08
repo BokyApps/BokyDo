@@ -28,6 +28,7 @@ export async function testApp(
     fetchImpl?: typeof fetch;
     resolver?: Resolver;
     aiUserFetch?: OutboundFetch;
+    importFetch?: OutboundFetch;
     logger?: Parameters<typeof buildApp>[0]['logger'];
   } = {},
 ): Promise<TestApp> {
@@ -42,6 +43,7 @@ export async function testApp(
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
     ...(opts.aiUserFetch ? { aiUserFetch: opts.aiUserFetch } : {}),
+    ...(opts.importFetch ? { importFetch: opts.importFetch } : {}),
     secretsDir: dataDir,
     onRestored: () => undefined,
     ...(opts.logger ? { logger: opts.logger } : {}),

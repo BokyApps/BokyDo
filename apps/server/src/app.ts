@@ -49,6 +49,8 @@ import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerProductivityRoutes } from './productivity/routes.js';
+import { registerImportRoutes } from './import/routes.js';
+import { TodoistImporter } from './import/todoist-import.js';
 import { registerRambleRoutes } from './ramble/routes.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { registerWebhookRoutes } from './webhooks/routes.js';
@@ -72,6 +74,8 @@ export interface AppDeps {
   resolver?: Resolver;
   /** Tests only: the network for users' own AI credentials and subscription sign-in. */
   aiUserFetch?: OutboundFetch;
+  /** Tests only: the network the Todoist importer reads through. */
+  importFetch?: OutboundFetch;
 }
 
 export interface AppServices {
@@ -90,6 +94,8 @@ export interface AppServices {
   backups: BackupService;
   /** Outgoing webhook deliveries (the `webhooks` background job drives enqueue + dispatch). */
   webhooks: Webhooks;
+  /** Imports from Todoist (W11a). */
+  importer: TodoistImporter;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
 }
@@ -220,6 +226,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     masterKey: deps.secrets.masterKey,
     fetch: createOutbound(PUBLIC_ONLY, deps.resolver),
   });
+  // Todoist is on the public internet; the token goes nowhere else.
+  const importer = new TodoistImporter({
+    db,
+    sync,
+    fetch: deps.importFetch ?? createOutbound(PUBLIC_ONLY, deps.resolver),
+    defaultTimeZone: () => settings.get('instance.defaultTimezone'),
+    log: app.log,
+  });
+  await importer.recover();
   const services: AppServices = {
     settings,
     sessions,
@@ -234,6 +249,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     apiTokens,
     backups,
     webhooks,
+    importer,
   };
   app.decorate('services', services);
   app.addHook('onClose', async () => {
@@ -326,6 +342,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   registerProductivityRoutes(app, { db, settings });
+  registerImportRoutes(app, importer);
   const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

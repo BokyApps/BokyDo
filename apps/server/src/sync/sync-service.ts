@@ -264,11 +264,14 @@ export class SyncService {
    * Apply several commands as one: all succeed or none is kept. Each runs with the same checks
    * as `apply`; on the first failure everything is rolled back and that failure is returned.
    * Commands applied this way are not recorded for replay (callers use fresh ids each time).
+   * `alongside` runs in the same transaction after the commands (e.g. bookkeeping that must
+   * commit with them or not at all).
    */
   async applyAll(
     userId: string,
     commands: { type: CommandType; args: unknown }[],
     scope: ProjectScope = null,
+    alongside?: (tx: Tx) => Promise<void>,
   ): Promise<{ ok: true } | { ok: false; index: number; result: CommandResult }> {
     const recorder = new ChangeRecorder();
     class Abort extends Error {
@@ -289,6 +292,7 @@ export class SyncService {
             : ({ ok: false, error: 'invalid' } as CommandResult);
           if (!result.ok) throw new Abort(index, result);
         }
+        await alongside?.(tx);
         await this.afterWrite(tx, recorder);
         await recorder.flush(tx);
       });
