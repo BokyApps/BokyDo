@@ -1,20 +1,16 @@
 import { createECDH } from 'node:crypto';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { networkInterfaces } from 'node:os';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pushSubscriptions } from '../db/schema.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
+import { lanIpv4 } from '../test/lan.js';
 
 const PASSWORD = 'violin-pancake-orbit-meadow';
 
-const lanIp = Object.values(networkInterfaces())
-  .flat()
-  .find(
-    (i) => i && i.family === 'IPv4' && !i.internal && /^(10|172|192)\./.test(i.address),
-  )?.address;
+const lanIp = lanIpv4;
 
 describe.skipIf(!TEST_DATABASE_URL)('admin-listed push services (UnifiedPush)', () => {
   let t: TestApp;

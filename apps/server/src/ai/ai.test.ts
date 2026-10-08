@@ -1,7 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { networkInterfaces } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { aiCredentials, aiUsage, auditLog, users } from '../db/schema.js';
@@ -12,6 +11,7 @@ import { listModels } from './adapters.js';
 import { AiCredentialStore } from './credentials.js';
 import { AiNotConfiguredError, type AiUser } from './service.js';
 import { AiBudgetExceededError, reserveUsage } from './usage.js';
+import { lanIpv4 } from '../test/lan.js';
 
 const PASSWORD = 'violin-pancake-orbit-meadow';
 // Looks like a real key so a leak would be obvious; not a credential for anything.
@@ -255,11 +255,7 @@ describe.skipIf(!TEST_DATABASE_URL)('AI credentials', () => {
     }
   });
 
-  const lanIp = Object.values(networkInterfaces())
-    .flat()
-    .find(
-      (i) => i && i.family === 'IPv4' && !i.internal && /^(10|172|192)\./.test(i.address),
-    )?.address;
+  const lanIp = lanIpv4;
 
   it.skipIf(!lanIp)('reaches an allow-listed private model server with the key', async () => {
     let seenAuth: string | undefined;
@@ -643,11 +639,7 @@ describe.skipIf(!TEST_DATABASE_URL)('AI calls through the service', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  const lanIp = Object.values(networkInterfaces())
-    .flat()
-    .find(
-      (i) => i && i.family === 'IPv4' && !i.internal && /^(10|172|192)\./.test(i.address),
-    )?.address;
+  const lanIp = lanIpv4;
 
   /** A scripted OpenAI-compatible model server on a private address. */
   async function modelServer(

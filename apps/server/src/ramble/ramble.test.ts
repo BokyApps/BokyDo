@@ -2,7 +2,6 @@ import { resolvePreferences, type RambleDraftTask } from '@bokydo/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { networkInterfaces } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { aiUsage, projectMembers, projects, tasks } from '../db/schema.js';
 import { newId } from '../db/ids.js';
@@ -15,6 +14,7 @@ import {
   SYSTEM_PROMPT,
   type RambleContext,
 } from './ramble.js';
+import { lanIpv4 } from '../test/lan.js';
 
 const ctx: RambleContext = {
   prefs: resolvePreferences({}),
@@ -163,11 +163,7 @@ describe('the extraction prompt', () => {
   });
 });
 
-const lanIp = Object.values(networkInterfaces())
-  .flat()
-  .find(
-    (i) => i && i.family === 'IPv4' && !i.internal && /^(10|172|192)\./.test(i.address),
-  )?.address;
+const lanIp = lanIpv4;
 
 describe.skipIf(!TEST_DATABASE_URL || !lanIp)('Ramble end to end', () => {
   const PASSWORD = 'violin-pancake-orbit-meadow';
