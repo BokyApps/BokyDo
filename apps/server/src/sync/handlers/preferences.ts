@@ -1,8 +1,13 @@
-import { mergeNotifications, resolvePreferences, type CommandArgs } from '@bokydo/shared';
+import {
+  mergeNotifications,
+  productivityPrefsSchema,
+  resolvePreferences,
+  type CommandArgs,
+} from '@bokydo/shared';
 import { eq } from 'drizzle-orm';
 import { users } from '../../db/schema.js';
 import { refreshUserReminders } from '../../reminders/reminders.js';
-import type { CommandContext } from '../context.js';
+import { fail, type CommandContext } from '../context.js';
 
 /**
  * Merge a preferences patch. The user row is always included in sync responses, so the change
@@ -17,8 +22,17 @@ export async function userUpdatePreferences(
     .from(users)
     .where(eq(users.id, ctx.userId));
   const current = resolvePreferences(row?.preferences);
-  const { appearance, notifications, ...rest } = args;
+  const { appearance, notifications, productivity, ...rest } = args;
   const defined = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+  // `null` is meaningful here (clearing a vacation date), so only `undefined` is dropped.
+  const nextProductivity = {
+    ...current.productivity,
+    ...Object.fromEntries(Object.entries(productivity ?? {}).filter(([, v]) => v !== undefined)),
+  };
+  // Checked as a whole: a patch can set one end of the vacation past the other. Rejected rather
+  // than letting the merge below quietly fall back to the default goals.
+  const checked = productivityPrefsSchema.safeParse(nextProductivity);
+  if (!checked.success) fail('invalid', checked.error.issues[0]?.message);
   const next = resolvePreferences({
     ...current,
     ...defined,
@@ -27,6 +41,7 @@ export async function userUpdatePreferences(
       ...Object.fromEntries(Object.entries(appearance ?? {}).filter(([, v]) => v !== undefined)),
     },
     notifications: mergeNotifications(current.notifications, notifications ?? {}),
+    productivity: nextProductivity,
   });
   await ctx.tx
     .update(users)

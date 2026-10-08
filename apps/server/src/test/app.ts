@@ -8,7 +8,7 @@ import type { DbHandle } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
-import type { Resolver } from '../net/outbound.js';
+import type { OutboundFetch, Resolver } from '../net/outbound.js';
 import { hashPassword } from '../security/password.js';
 import { freshDb } from './db.js';
 
@@ -27,6 +27,7 @@ export async function testApp(
     webRoot?: string;
     fetchImpl?: typeof fetch;
     resolver?: Resolver;
+    aiUserFetch?: OutboundFetch;
     logger?: Parameters<typeof buildApp>[0]['logger'];
   } = {},
 ): Promise<TestApp> {
@@ -40,6 +41,7 @@ export async function testApp(
     webRoot: opts.webRoot ?? null,
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
+    ...(opts.aiUserFetch ? { aiUserFetch: opts.aiUserFetch } : {}),
     secretsDir: dataDir,
     onRestored: () => undefined,
     ...(opts.logger ? { logger: opts.logger } : {}),

@@ -18,6 +18,8 @@ export type AiErrorCode =
   | 'output_invalid'
   | 'refused'
   | 'cancelled'
+  /** A subscription sign-in can't be renewed: the user has to sign in again (W7d). */
+  | 'sign_in_expired'
   | OutboundErrorReason;
 
 export const NO_USAGE: ReportedUsage = { inputTokens: 0, outputTokens: 0, audioSeconds: 0 };

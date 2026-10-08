@@ -2,6 +2,7 @@ import {
   AI_FEATURES,
   AI_FEATURE_KEYS,
   aiRoutingSchema,
+  isSignInProvider,
   providerSupports,
   type AiFeature,
   type AiRouting,
@@ -28,6 +29,7 @@ import {
   type ChatResult,
 } from './chat.js';
 import type { AiCredentialStore, CredentialOwner, UsableCredential } from './credentials.js';
+import { REFRESH_MARGIN_MS, SIGN_IN_PROTOCOLS, SignInProviderError } from './sign-in.js';
 import {
   checkEmbedRequest,
   checkTranscribeRequest,
@@ -165,6 +167,8 @@ export class AiService {
       resolver?: Resolver;
       /** Tests only: replaces the retry backoff timer. */
       transport?: TransportOptions;
+      /** Tests only: replaces the network for users' own credentials and subscription sign-in. */
+      userFetch?: OutboundFetch;
     },
   ) {}
 
@@ -179,11 +183,76 @@ export class AiService {
    * over https; instance credentials may also reach admin-allow-listed private networks.
    */
   outboundFor(owner: CredentialOwner): OutboundFetch {
+    if (owner !== null && this.deps.userFetch) return this.deps.userFetch;
     const policy =
       owner === null
         ? allowlistPolicy(this.deps.settings.get('network.privateAllowlist'))
         : PUBLIC_ONLY;
     return createOutbound(policy, this.deps.resolver);
+  }
+
+  /** Subscription sign-in talks to the provider's own servers: public internet, https only. */
+  signInFetch(): OutboundFetch {
+    return this.deps.userFetch ?? createOutbound(PUBLIC_ONLY, this.deps.resolver);
+  }
+
+  /** Whether a credential may be used now: sign-in ones only while the admin allows them. */
+  private allowed(credential: UsableCredential): boolean {
+    // A signed-out subscription counts as not set up, so the instance route can serve instead.
+    return (
+      !isSignInProvider(credential.provider) ||
+      (this.deps.settings.get('ai.subscriptionSignIn') && credential.apiKey !== null)
+    );
+  }
+
+  /**
+   * A sign-in credential with an access token that's good for a while yet, renewed if needed
+   * (ADR 0017). Throws `sign_in_expired` when it can't be renewed. Key credentials pass through.
+   */
+  async fresh(credential: UsableCredential): Promise<UsableCredential> {
+    const provider = credential.provider;
+    if (!isSignInProvider(provider)) return credential;
+    if (credential.apiKey && (credential.expiresAt ?? 0) - Date.now() > REFRESH_MARGIN_MS)
+      return credential;
+    let renewed: UsableCredential | null;
+    try {
+      renewed = await this.deps.credentials.refreshSignIn(
+        credential.id,
+        (refreshToken) => SIGN_IN_PROTOCOLS[provider].refresh(this.signInFetch(), refreshToken),
+        { marginMs: REFRESH_MARGIN_MS },
+      );
+    } catch (err) {
+      if (err instanceof SignInProviderError) throw new AiProviderError('unavailable');
+      throw err;
+    }
+    if (!renewed?.apiKey) throw new AiProviderError('sign_in_expired', 401);
+    return renewed;
+  }
+
+  /**
+   * Keep-alive for subscription sign-ins (a job): renew any not renewed for `maxAgeMs`, so
+   * refresh tokens that expire when unused stay alive for routes used rarely.
+   */
+  async renewIdleSignIns(now: Date, maxAgeMs: number): Promise<number> {
+    if (!this.deps.settings.get('ai.subscriptionSignIn')) return 0;
+    const stale = await this.deps.credentials.staleSignIns(
+      new Date(now.getTime() - maxAgeMs),
+      Object.keys(SIGN_IN_PROTOCOLS) as (keyof typeof SIGN_IN_PROTOCOLS)[],
+    );
+    let renewed = 0;
+    for (const { id, provider } of stale.slice(0, 50)) {
+      try {
+        const result = await this.deps.credentials.refreshSignIn(
+          id,
+          (refreshToken) => SIGN_IN_PROTOCOLS[provider].refresh(this.signInFetch(), refreshToken),
+          { force: true, marginMs: REFRESH_MARGIN_MS },
+        );
+        if (result) renewed++;
+      } catch {
+        // Provider down: try again next time.
+      }
+    }
+    return renewed;
   }
 
   async userRouting(userId: string): Promise<AiRouting> {
@@ -206,7 +275,11 @@ export class AiService {
       const route = (await this.userRouting(user.id))[feature];
       if (route) {
         const credential = await this.deps.credentials.usable(user.id, route.credentialId);
-        if (credential && providerSupports(credential.provider, capability))
+        if (
+          credential &&
+          this.allowed(credential) &&
+          providerSupports(credential.provider, capability)
+        )
           return { credential, model: route.model, billing: 'own' };
       }
     }
@@ -214,7 +287,11 @@ export class AiService {
       const route = this.deps.settings.get('ai.routing')[feature];
       if (route) {
         const credential = await this.deps.credentials.usable(null, route.credentialId);
-        if (credential && providerSupports(credential.provider, capability))
+        if (
+          credential &&
+          this.allowed(credential) &&
+          providerSupports(credential.provider, capability)
+        )
           return { credential, model: route.model, billing: 'instance' };
       }
     }
@@ -241,7 +318,8 @@ export class AiService {
   async run<T>(user: AiUser, call: AiCall<T>): Promise<T> {
     const route = await this.resolve(user, call.feature);
     if (!route) throw new AiNotConfiguredError(call.feature);
-    const { credential, model, billing } = route;
+    const { model, billing } = route;
+    const credential = await this.fresh(route.credential);
     const usageId = await reserveUsage(this.deps.db, {
       userId: user.id,
       credentialId: credential.id,
@@ -414,15 +492,15 @@ export class AiService {
     model: string,
     kind: 'chat' | 'transcribe' | 'embed',
   ): Promise<TryResult | null> {
-    const credential = await this.deps.credentials.usable(owner, id);
-    if (!credential) return null;
+    const stored = await this.deps.credentials.usable(owner, id);
+    if (!stored || !this.allowed(stored)) return null;
     const capability =
       kind === 'chat' ? 'chat.structured' : kind === 'transcribe' ? 'stt.batch' : 'embeddings';
-    if (!providerSupports(credential.provider, capability))
-      return { ok: false, error: 'unsupported' };
-    const ctx: AiCallContext = { credential, model, fetch: this.outboundFor(owner) };
+    if (!providerSupports(stored.provider, capability)) return { ok: false, error: 'unsupported' };
     const started = Date.now();
     try {
+      const credential = await this.fresh(stored);
+      const ctx: AiCallContext = { credential, model, fetch: this.outboundFor(owner) };
       if (kind === 'chat') {
         const r = await chat(
           ctx,
@@ -453,8 +531,15 @@ export class AiService {
 
   /** "Test connection" / live model list for a stored credential of this owner. */
   async test(owner: CredentialOwner, id: string): Promise<TestResult | null> {
-    const credential = await this.deps.credentials.usable(owner, id);
-    if (!credential) return null;
-    return listModels({ credential, fetch: this.outboundFor(owner) });
+    const stored = await this.deps.credentials.usable(owner, id);
+    if (!stored || !this.allowed(stored)) return null;
+    try {
+      const credential = await this.fresh(stored);
+      return await listModels({ credential, fetch: this.outboundFor(owner) });
+    } catch (err) {
+      if (err instanceof AiProviderError)
+        return { ok: false, error: err.code, ...(err.status ? { status: err.status } : {}) };
+      throw err;
+    }
   }
 }

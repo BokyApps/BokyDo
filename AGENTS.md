@@ -24,6 +24,13 @@ parallel work from breaking.
   abandoned tree fails everyone's gate (stray `.nyc_output/` did exactly this). Either commit to
   your branch — a WIP commit with a clear message is fine — or
   `git stash push -u -m '<task>: <why>'`. Never leave a large unexplained dirty tree.
+- **Never `git checkout` a different branch here without stashing first.** On 2026-10-07 one agent
+  committed W10d, then reset and checked out its branch while another was mid-edit on
+  `w11c-productivity`: the `git reset` moved that branch back to `main` and took the other agent's
+  uncommitted files with it. It was recovered only because the first agent had stashed the tree and
+  said so in the stash message. If you must switch branches in the shared checkout, stash first and
+  say so on the board. Better still, push a WIP commit before you switch: unpushed work is one
+  `reset` away from gone, and `git branch -vv` is the only way anyone else can see it.
 
 ## Contended files
 

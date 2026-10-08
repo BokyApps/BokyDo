@@ -1,5 +1,10 @@
 import { FONT_IDS, THEME_IDS, TEXT_SIZES, type TextSize } from '@bokydo/themes';
 import { z } from 'zod';
+import {
+  DEFAULT_PRODUCTIVITY_PREFS,
+  productivityPrefsFields,
+  productivityPrefsSchema,
+} from './productivity.js';
 import { isKnownTimeZone } from './timezones.js';
 
 export const timeZoneSchema = z.string().max(64).refine(isKnownTimeZone, 'Unknown time zone');
@@ -72,6 +77,7 @@ export const preferencesSchema = z
     keyboardShortcuts: z.boolean(),
     appearance: appearanceSchema,
     notifications: notificationPrefsSchema,
+    productivity: productivityPrefsSchema,
   })
   .strict();
 export type Preferences = z.infer<typeof preferencesSchema>;
@@ -108,6 +114,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     quietHours: { enabled: false, start: '22:00', end: '07:00' },
     digest: { enabled: false, time: '07:00' },
   },
+  productivity: { ...DEFAULT_PRODUCTIVITY_PREFS },
 };
 
 /** Stored preferences merged over defaults (tolerates older/partial rows). */
@@ -120,6 +127,8 @@ export function resolvePreferences(stored: unknown): Preferences {
     ...s,
     appearance: { ...base.appearance, ...(s.appearance ?? {}) },
     notifications: mergeNotifications(base.notifications, s.notifications ?? {}),
+    // Nested, so a row stored before the goals existed keeps the defaults for the fields it lacks.
+    productivity: { ...base.productivity, ...(s.productivity ?? {}) },
   };
   const parsed = preferencesSchema.safeParse(merged);
   if (parsed.success) return parsed.data;
@@ -188,6 +197,8 @@ export const preferencesPatchSchema = preferencesSchema
   .extend({
     appearance: appearanceSchema.partial().strict().optional(),
     notifications: notificationPrefsPatchSchema.optional(),
+    /** Partial, so changing one goal does not require sending the others back. */
+    productivity: productivityPrefsFields.partial().strict().optional(),
   })
   .strict();
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;

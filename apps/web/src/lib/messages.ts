@@ -55,6 +55,10 @@ export function errorMessage(err: unknown): string {
       return `The mail server rejected the message (${err.body?.message ?? 'unknown error'}).`;
     case 'limit_exceeded':
       return "You've reached the limit for this.";
+    case 'sign_in_disabled':
+      return 'Subscription sign-in is switched off on this instance.';
+    case 'ai_provider_error':
+      return "The AI provider didn't answer as expected. Try again in a moment.";
     case 'conflict':
       return CONFLICTS[err.body?.message ?? ''] ?? 'That conflicts with the current state.';
     default:

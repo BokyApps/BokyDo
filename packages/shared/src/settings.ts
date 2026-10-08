@@ -177,6 +177,11 @@ export const settingDefinitions = {
 
   /** Users may add their own provider keys (their usage is metered but not budgeted). */
   'ai.userKeys': { schema: z.boolean(), default: true, secret: false },
+  /**
+   * Experimental: users may sign in to their own AI subscriptions (SuperGrok) instead of adding
+   * a key. Off by default: these flows aren't official APIs and may change (ADR 0017).
+   */
+  'ai.subscriptionSignIn': { schema: z.boolean(), default: false, secret: false },
   /** Who may use the instance's routing and keys, which count against the budgets below. */
   'ai.instanceAccess': {
     schema: z.enum(['off', 'admins', 'everyone']),

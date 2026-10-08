@@ -1,4 +1,4 @@
-# ADR 0016: Outgoing webhooks
+# ADR 0018: Outgoing webhooks
 
 - Status: Accepted (2026-10-07)
 
