@@ -59,6 +59,26 @@ export const notificationPrefsSchema = z
     quietHours: z.object({ enabled: z.boolean(), start: clock, end: clock }).strict(),
     /** A morning email of today's and overdue tasks. */
     digest: z.object({ enabled: z.boolean(), time: clock }).strict(),
+    /**
+     * An AI-written report by email (W9): a daily plan, or a weekly review on `weekday`. Written
+     * at send time from what the user can see then, with their AI routing and budget.
+     */
+    report: z
+      .object({
+        enabled: z.boolean(),
+        kind: z.enum(['day', 'week']),
+        time: clock,
+        weekday: z.enum([
+          'monday',
+          'tuesday',
+          'wednesday',
+          'thursday',
+          'friday',
+          'saturday',
+          'sunday',
+        ]),
+      })
+      .strict(),
   })
   .strict();
 export type NotificationPrefs = z.infer<typeof notificationPrefsSchema>;
@@ -113,6 +133,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     },
     quietHours: { enabled: false, start: '22:00', end: '07:00' },
     digest: { enabled: false, time: '07:00' },
+    report: { enabled: false, kind: 'week', time: '08:00', weekday: 'monday' },
   },
   productivity: { ...DEFAULT_PRODUCTIVITY_PREFS },
 };
@@ -165,6 +186,7 @@ export function mergeNotifications(
     channels,
     quietHours: { ...base.quietHours, ...defined(p.quietHours) },
     digest: { ...base.digest, ...defined(p.digest) },
+    report: { ...base.report, ...defined(p.report) },
   };
 }
 
@@ -186,6 +208,7 @@ const notificationPrefsPatchSchema = z
       .optional(),
     quietHours: notificationPrefsSchema.shape.quietHours.partial().strict().optional(),
     digest: notificationPrefsSchema.shape.digest.partial().strict().optional(),
+    report: notificationPrefsSchema.shape.report.partial().strict().optional(),
   })
   .strict();
 export type NotificationPrefsPatch = z.infer<typeof notificationPrefsPatchSchema>;

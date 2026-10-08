@@ -36,6 +36,8 @@ export async function report(
   scope: ProjectScope,
   defaultTimeZone: string,
   signal?: AbortSignal,
+  /** The moment it is for (a scheduled report's time); default: now. */
+  at: Date = new Date(),
 ): Promise<ReportResponse> {
   const [userRow] = await db
     .select({ preferences: users.preferences })
@@ -43,9 +45,9 @@ export async function report(
     .where(eq(users.id, user.id));
   const prefs = resolvePreferences(userRow?.preferences);
   const timeZone = prefs.timezone ?? defaultTimeZone;
-  const now = localNow(timeZone);
+  const now = localNow(timeZone, at);
   const soon = addDays(now.date, 7);
-  const since = new Date(Date.now() - 7 * 86_400_000);
+  const since = new Date(at.getTime() - 7 * 86_400_000);
 
   const data = await db.transaction(async (tx) => {
     const visible = await visibleProjects(tx, user.id, scope);
@@ -179,6 +181,6 @@ export async function report(
   return {
     report: result.text.replace(CONTROL, '').trim().slice(0, 8000),
     counts,
-    generatedAt: new Date().toISOString(),
+    generatedAt: at.toISOString(),
   };
 }

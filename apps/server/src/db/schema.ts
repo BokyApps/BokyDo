@@ -43,6 +43,8 @@ export const users = pgTable(
     preferences: jsonb('preferences').notNull().default({}),
     /** The user's local date of the last daily digest sent (so it goes out once a day). */
     lastDigestOn: date('last_digest_on'),
+    /** Local date the last AI report email was claimed for (W9). */
+    lastReportOn: date('last_report_on'),
     /** The user's own AI routing (feature → their credential + model; @bokydo/shared aiRoutingSchema). */
     aiRouting: jsonb('ai_routing').notNull().default({}),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),

@@ -49,6 +49,7 @@ import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerProductivityRoutes } from './productivity/routes.js';
+import { report } from './assist/report.js';
 import { registerAssistRoutes } from './assist/routes.js';
 import { registerImportRoutes } from './import/routes.js';
 import { TodoistImporter } from './import/todoist-import.js';
@@ -219,6 +220,24 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       lastSignInKeepAlive = now.getTime();
       await ai.renewIdleSignIns(now, 3 * 86_400_000);
     },
+  });
+  // AI report emails (W9): written at send time, from what each user can see then.
+  jobs.add({
+    name: 'ai-reports',
+    run: (now) =>
+      delivery.reports(now, (user, kind, at) =>
+        report(
+          db,
+          ai,
+          user,
+          kind,
+          undefined,
+          null,
+          settings.get('instance.defaultTimezone'),
+          undefined,
+          at,
+        ),
+      ),
   });
   // User-configured endpoints are public-internet only, whatever the admin allow-list says.
   const webhooks = new Webhooks({

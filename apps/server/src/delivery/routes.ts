@@ -144,10 +144,12 @@ export function registerDeliveryRoutes(app: FastifyInstance, deps: DeliveryRoute
         const next =
           topic === 'digest'
             ? { ...n, digest: { ...n.digest, enabled: false } }
-            : {
-                ...n,
-                channels: { ...n.channels, [topic]: { ...n.channels[topic], email: false } },
-              };
+            : topic === 'report'
+              ? { ...n, report: { ...n.report, enabled: false } }
+              : {
+                  ...n,
+                  channels: { ...n.channels, [topic]: { ...n.channels[topic], email: false } },
+                };
         await tx
           .update(users)
           .set({ preferences: { ...prefs, notifications: next }, updatedAt: new Date() })

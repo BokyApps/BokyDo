@@ -1,8 +1,12 @@
 import { NOTIFICATION_EVENTS, type NotificationEvent } from '@bokydo/shared';
 import { safeEqual, tokenId } from '../auth/tokens.js';
 
-export type UnsubscribeTopic = Exclude<NotificationEvent, 'security'> | 'digest';
-const TOPICS = new Set<string>([...NOTIFICATION_EVENTS.filter((e) => e !== 'security'), 'digest']);
+export type UnsubscribeTopic = Exclude<NotificationEvent, 'security'> | 'digest' | 'report';
+const TOPICS = new Set<string>([
+  ...NOTIFICATION_EVENTS.filter((e) => e !== 'security'),
+  'digest',
+  'report',
+]);
 
 /**
  * A link that turns off one kind of email for one user, without signing in. It's an HMAC of the

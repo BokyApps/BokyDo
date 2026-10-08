@@ -1,4 +1,4 @@
-import { localNow, toMinutes } from '@bokydo/nlp';
+import { localNow, toMinutes, weekdayOf } from '@bokydo/nlp';
 import {
   resolvePreferences,
   type NotificationEvent,
@@ -36,6 +36,15 @@ const EMAILS_PER_HOUR = 20;
 /** A digest is sent only within this long after its time (not hours late after downtime). */
 const DIGEST_WINDOW_MIN = 180;
 const DIGEST_MAX_TASKS = 50;
+const WEEKDAYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const;
 
 export interface DeliveryDeps {
   db: Database;
@@ -351,6 +360,90 @@ export class Delivery {
         sent++;
       } catch (err) {
         this.deps.log.warn({ err }, 'digest email failed');
+      }
+    }
+    return sent;
+  }
+
+  /**
+   * AI report emails (W9) for users whose local report time has come: daily, or weekly on their
+   * chosen weekday. `write` produces the report at send time from what the user can see then, so
+   * access lost since never shows up. A report that can't be written (no model routed, budget
+   * spent, provider down) is skipped for that day, never retried every tick.
+   */
+  async reports(
+    now: Date,
+    write: (
+      user: { id: string; isAdmin: boolean },
+      kind: 'day' | 'week',
+      at: Date,
+    ) => Promise<{ report: string }>,
+  ): Promise<number> {
+    if (!this.canEmail) return 0;
+    const { db } = this.deps;
+    const candidates = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        isAdmin: users.isAdmin,
+        preferences: users.preferences,
+        lastReportOn: users.lastReportOn,
+      })
+      .from(users)
+      .where(
+        and(
+          isNull(users.disabledAt),
+          sql`${users.emailVerifiedAt} is not null`,
+          sql`${users.preferences}->'notifications'->'report'->>'enabled' = 'true'`,
+        ),
+      );
+    let sent = 0;
+    for (const u of candidates) {
+      const prefs = resolvePreferences(u.preferences);
+      const setting = prefs.notifications.report;
+      const local = localNow(
+        prefs.timezone ?? this.deps.settings.get('instance.defaultTimezone'),
+        now,
+      );
+      const since = toMinutes(local.time) - toMinutes(setting.time);
+      if (!u.email || u.lastReportOn === local.date || since < 0 || since > DIGEST_WINDOW_MIN)
+        continue;
+      if (setting.kind === 'week' && WEEKDAYS[weekdayOf(local.date)] !== setting.weekday) continue;
+      const claimed = await db
+        .update(users)
+        .set({ lastReportOn: local.date })
+        .where(
+          and(
+            eq(users.id, u.id),
+            or(isNull(users.lastReportOn), sql`${users.lastReportOn} <> ${local.date}`),
+          ),
+        )
+        .returning({ id: users.id });
+      if (claimed.length === 0) continue;
+      try {
+        const { report } = await write({ id: u.id, isAdmin: u.isAdmin }, setting.kind, now);
+        if (!report) continue;
+        const name = clean(this.deps.settings.get('instance.name'), 60);
+        const { text, unsubscribe } = this.footer(u.id, 'report');
+        const title = setting.kind === 'day' ? 'Your plan for today' : 'Your weekly review';
+        await this.deps.mailer.send({
+          to: u.email,
+          subject: `${name}: ${title.toLowerCase()}`,
+          text:
+            [
+              `${title} (${local.date})`,
+              '',
+              report,
+              '',
+              'Written by AI from your tasks; check anything important in the app.',
+              `Open ${name}: ${this.publicUrl}/today`,
+              text,
+            ].join('\n') + '\n',
+          unsubscribeUrl: unsubscribe,
+        });
+        sent++;
+      } catch (err) {
+        this.deps.log.warn({ err }, 'report email skipped');
       }
     }
     return sent;

@@ -9,9 +9,11 @@ import { EVENT_LABEL } from './NotificationSettings.js';
 const describe = (topic: string) =>
   topic === 'digest'
     ? 'the daily digest'
-    : (NOTIFICATION_EVENTS as readonly string[]).includes(topic)
-      ? `“${EVENT_LABEL[topic as NotificationEvent]}”`
-      : null;
+    : topic === 'report'
+      ? 'the AI report'
+      : (NOTIFICATION_EVENTS as readonly string[]).includes(topic)
+        ? `“${EVENT_LABEL[topic as NotificationEvent]}”`
+        : null;
 
 /** /unsubscribe#<token>: stop one kind of email, signed in or not (the link is the proof). */
 export function UnsubscribePage() {

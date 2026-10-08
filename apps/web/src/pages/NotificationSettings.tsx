@@ -1,6 +1,7 @@
 import {
   NOTIFICATION_EVENTS,
   type NotificationEvent,
+  type NotificationPrefs,
   type NotificationPrefsPatch,
   type Preferences,
 } from '@bokydo/shared';
@@ -9,7 +10,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Alert, Button, Card, Checkbox, inputClass, SelectField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { disablePush, enablePush, pushState, type PushState } from '../lib/push.js';
-import { instanceQuery } from '../lib/queries.js';
+import { aiCatalogQuery, instanceQuery } from '../lib/queries.js';
 import { relativeLabel } from '../lib/reminders.js';
 
 export const EVENT_LABEL: Record<NotificationEvent, string> = {
@@ -152,6 +153,8 @@ export function NotificationSettings({
           </div>
         </div>
       </Section>
+
+      <ReportEmailSettings n={n} set={set} />
     </>
   );
 }
@@ -258,6 +261,73 @@ function PushSection() {
         </div>
       )}
       {message && <p className="mt-2 text-sm text-muted">{message}</p>}
+    </Section>
+  );
+}
+
+const WEEKDAY_LABEL = {
+  monday: 'Monday',
+  tuesday: 'Tuesday',
+  wednesday: 'Wednesday',
+  thursday: 'Thursday',
+  friday: 'Friday',
+  saturday: 'Saturday',
+  sunday: 'Sunday',
+} as const;
+
+/** The AI report by email (W9): shown only when the user has a model for reports. */
+function ReportEmailSettings({
+  n,
+  set,
+}: {
+  n: NotificationPrefs;
+  set: (patch: NotificationPrefsPatch) => void;
+}) {
+  const catalog = useQuery(aiCatalogQuery);
+  if (!catalog.data?.available.includes('reports')) return null;
+  const r = n.report;
+  return (
+    <Section title="AI report by email">
+      <div className="space-y-3">
+        <Checkbox
+          label="Email me a report written by AI"
+          hint="Written from your tasks when it is sent, with your AI settings and budget. AI can be wrong: check anything important in the app."
+          checked={r.enabled}
+          onChange={(e) => set({ report: { enabled: e.target.checked } })}
+        />
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <SelectField
+            label="Report"
+            hideLabel
+            value={r.kind}
+            onChange={(e) => set({ report: { kind: e.target.value as 'day' | 'week' } })}
+            options={[
+              { value: 'day', label: 'A plan for each day' },
+              { value: 'week', label: 'A weekly review' },
+            ]}
+          />
+          {r.kind === 'week' && (
+            <>
+              on
+              <SelectField
+                label="Weekday"
+                hideLabel
+                value={r.weekday}
+                onChange={(e) =>
+                  set({ report: { weekday: e.target.value as keyof typeof WEEKDAY_LABEL } })
+                }
+                options={Object.entries(WEEKDAY_LABEL).map(([value, label]) => ({ value, label }))}
+              />
+            </>
+          )}
+          at
+          <TimeInput
+            label="Report time"
+            value={r.time}
+            onChange={(time) => set({ report: { time } })}
+          />
+        </div>
+      </div>
     </Section>
   );
 }

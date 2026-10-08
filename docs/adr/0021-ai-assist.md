@@ -1,6 +1,6 @@
 # ADR 0021: Task Assist, Filter Assist, Ask your tasks and reports
 
-- Status: Accepted (2026-10-08), W9 slices 1 to 3a
+- Status: Accepted (2026-10-08), W9 slices 1 to 3b
 
 ## Context
 
@@ -58,12 +58,17 @@ their collaborators, so it is untrusted input to the model (PLAN §5.5).
   is gathered by the server from the projects the caller can see now (and a token's project
   limit), at most 60 items per list, and sent as escaped JSON in a `<data>` block; the model only
   writes prose, returned as plain text with the counts it was written from. A project the caller
-  can't see answers 404 before any model call. Scheduled report emails are the next slice: the
-  data will be gathered the same way at send time, so revoked access applies automatically.
+  can't see answers 404 before any model call.
+- **Scheduled report emails (slice 3b):** `notifications.report` (off by default; a daily plan,
+  or a weekly review on a chosen weekday, at a chosen time). The delivery job claims the day
+  first (`users.last_report_on`, migration 0020), then writes the report through the same
+  function at that moment, so access lost since never shows up, with the user's own routing and
+  budget; no model or no budget skips the day. The email says it was written by AI and carries
+  its own one-click unsubscribe topic.
 
 ## Consequences
 
 - No "auto-apply": the decision-model features (§5.4) with confidence thresholds are later W9
-  slices, as are scheduled reports and the eval harness.
+  slices, as is the eval harness.
 - Filter Assist needs a model good enough to write the language from the prompt's summary;
   small local models may need the correction round more often.
