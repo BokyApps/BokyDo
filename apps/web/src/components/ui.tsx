@@ -168,15 +168,17 @@ export function TextArea({
 export function SelectField({
   label,
   hint,
+  hideLabel,
   options,
   ...rest
 }: SelectHTMLAttributes<HTMLSelectElement> & {
   label: string;
   hint?: ReactNode;
+  hideLabel?: boolean;
   options: { value: string; label: string }[];
 }) {
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} hideLabel={hideLabel ?? false}>
       {(id, describedBy) => (
         <select id={id} aria-describedby={describedBy} className={inputClass} {...rest}>
           {options.map((o) => (

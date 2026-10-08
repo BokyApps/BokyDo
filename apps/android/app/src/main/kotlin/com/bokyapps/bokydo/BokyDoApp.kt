@@ -69,9 +69,13 @@ class BokyDoApp : Application() {
         store = SqliteStore(this)
         client = BokyDoClient(sessions)
         engine = SyncEngine(client, store)
+        Notifier.createChannels(this)
+        UnifiedPush.load(this)
         if (sessions.load() != null) {
             _screen.value = AppScreen.Home
             schedulePeriodicSync()
+            // Anything missed while the app wasn't running (e.g. right after an update).
+            ReminderAlarms.reschedule(this)
         }
         liveSync = LiveSync(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(liveSync)
@@ -144,8 +148,11 @@ class BokyDoApp : Application() {
     }
 
     suspend fun signOut(message: String? = null) {
+        // Revoking the grant also ends the push registration on the server.
+        UnifiedPush.unregister(this, tellServer = false)
         client.signOut()
         store.clear()
+        ReminderAlarms.clear(this)
         WorkManager.getInstance(this).cancelUniqueWork(PERIODIC)
         _screen.value = AppScreen.Connect(message)
     }
@@ -156,6 +163,8 @@ class BokyDoApp : Application() {
         try {
             engine.sync()
             syncError.value = null
+            // Due dates and reminders may have changed: re-arm the next alarm.
+            ReminderAlarms.reschedule(this)
         } catch (_: SignedOutException) {
             signOut("You were signed out. Sign in again to keep syncing.")
         } catch (e: ServerException) {

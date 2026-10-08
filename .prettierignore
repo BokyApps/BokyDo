@@ -2,6 +2,7 @@ pnpm-lock.yaml
 LICENSE
 dist/
 coverage/
+.nyc_output/
 apps/server/src/security/eff-wordlist.ts
 apps/server/drizzle/
 docs/PLAN.md
