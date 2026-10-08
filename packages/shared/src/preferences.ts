@@ -1,6 +1,10 @@
 import { FONT_IDS, THEME_IDS, TEXT_SIZES, type TextSize } from '@bokydo/themes';
 import { z } from 'zod';
-import { DEFAULT_PRODUCTIVITY_PREFS, productivityPrefsSchema } from './productivity.js';
+import {
+  DEFAULT_PRODUCTIVITY_PREFS,
+  productivityPrefsFields,
+  productivityPrefsSchema,
+} from './productivity.js';
 import { isKnownTimeZone } from './timezones.js';
 
 export const timeZoneSchema = z.string().max(64).refine(isKnownTimeZone, 'Unknown time zone');
@@ -194,7 +198,7 @@ export const preferencesPatchSchema = preferencesSchema
     appearance: appearanceSchema.partial().strict().optional(),
     notifications: notificationPrefsPatchSchema.optional(),
     /** Partial, so changing one goal does not require sending the others back. */
-    productivity: productivityPrefsSchema.partial().strict().optional(),
+    productivity: productivityPrefsFields.partial().strict().optional(),
   })
   .strict();
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;

@@ -18,7 +18,8 @@ export const KARMA_LEVELS = [
   { name: 'Enlightened', at: 50_000 },
 ] as const;
 
-export const productivityPrefsSchema = z
+/** The fields, unrefined: patches use `.partial()` of this. */
+export const productivityPrefsFields = z
   .object({
     /** Completions per day that count as a good day. 0 switches daily goals off. */
     dailyGoal: z.number().int().min(0).max(100),
@@ -34,6 +35,11 @@ export const productivityPrefsSchema = z
     vacationUntil: z.iso.date().nullable(),
   })
   .strict();
+
+export const productivityPrefsSchema = productivityPrefsFields.refine(
+  (p) => !p.vacationFrom || !p.vacationUntil || p.vacationFrom <= p.vacationUntil,
+  { path: ['vacationUntil'], message: 'The vacation must end on or after its first day' },
+);
 export type ProductivityPrefs = z.infer<typeof productivityPrefsSchema>;
 
 export const DEFAULT_PRODUCTIVITY_PREFS: ProductivityPrefs = {

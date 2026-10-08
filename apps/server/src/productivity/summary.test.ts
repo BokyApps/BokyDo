@@ -126,6 +126,22 @@ describe('vacation', () => {
     });
   });
 
+  it('bounds the streak walk, however long the vacation', () => {
+    // A vacation over every representable date once made each request walk millions of days.
+    const started = performance.now();
+    const summary = summariseProductivity({
+      completions: [],
+      karma: 0,
+      prefs: prefs({ vacationFrom: '0001-01-01', vacationUntil: '9999-12-31' }),
+      timeZone: 'UTC',
+      weekStart: 'monday',
+      now: NOW,
+      maxStreakDays: 400,
+    });
+    expect(summary.streak.current).toBe(0);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
   it('counts a vacation day as met so the view does not call it missed', () => {
     const summary = run([], {
       vacationFrom: '2026-07-13',

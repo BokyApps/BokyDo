@@ -24,6 +24,11 @@ export interface ProductivityInput {
   now: Date;
   /** How many days the returned series covers, ending today. */
   seriesDays?: number;
+  /**
+   * How far back the streak walk may go (the window the caller read). Without a bound a vacation
+   * spanning centuries would make every request walk millions of days.
+   */
+  maxStreakDays?: number;
 }
 
 /** The level `karma` sits in, and how far it is towards the next one. */
@@ -61,6 +66,7 @@ export function levelFor(karma: number): ProductivitySummary['level'] {
 export function summariseProductivity(input: ProductivityInput): ProductivitySummary {
   const { completions, karma, prefs, timeZone, weekStart, now } = input;
   const seriesDays = input.seriesDays ?? 14;
+  const maxStreakDays = input.maxStreakDays ?? 400;
   const today = localNow(timeZone, now).date;
 
   // Local date -> completions that day. Bucketing here rather than in SQL is what makes the
@@ -108,7 +114,7 @@ export function summariseProductivity(input: ProductivityInput): ProductivitySum
   if (goalsOn) {
     const todayMet = completedOn(today) >= dailyGoal || onVacation(today);
     let cursor = todayMet ? today : addDays(today, -1);
-    for (;;) {
+    for (let walked = 0; walked < maxStreakDays; walked++) {
       if (onVacation(cursor)) {
         // Holds the streak without extending it.
       } else if (completedOn(cursor) >= dailyGoal) {

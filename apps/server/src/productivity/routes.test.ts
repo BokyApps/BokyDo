@@ -122,4 +122,23 @@ describe.skipIf(!TEST_DATABASE_URL)('productivity summary', () => {
     expect(s.vacation.active).toBe(false);
     expect(s.today.met).toBe(false);
   });
+
+  it('refuses a vacation that ends before it starts, keeping the goals', async () => {
+    const pat = await person('pat');
+    await pat.sync.ok(cmd('user_update_preferences', { productivity: { dailyGoal: 3 } }));
+    await pat.sync.ok(
+      cmd('user_update_preferences', {
+        productivity: { vacationFrom: '2026-07-10', vacationUntil: '2026-07-20' },
+      }),
+    );
+    // One end moved past the other in a later patch: refused, not silently reset to defaults.
+    expect(
+      await pat.sync.result(
+        cmd('user_update_preferences', { productivity: { vacationFrom: '2026-07-21' } }),
+      ),
+    ).toMatchObject({ ok: false, error: 'invalid' });
+    const s = await summary(pat);
+    expect(s.today.goal).toBe(3);
+    expect(s.vacation).toMatchObject({ from: '2026-07-10', until: '2026-07-20' });
+  });
 });

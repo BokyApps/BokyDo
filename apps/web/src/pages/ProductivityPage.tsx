@@ -187,6 +187,8 @@ function VacationCard({ summary }: { summary: ProductivitySummary }) {
   const [until, setUntil] = useState<string | null>(null);
   const fromValue = from ?? prefs.productivity.vacationFrom ?? '';
   const untilValue = until ?? prefs.productivity.vacationUntil ?? '';
+  // The server refuses a range that ends before it starts; say so here instead.
+  const backwards = fromValue !== '' && untilValue !== '' && untilValue < fromValue;
 
   const set = (nextFrom: string, nextUntil: string) =>
     send('user_update_preferences', {
@@ -207,7 +209,7 @@ function VacationCard({ summary }: { summary: ProductivitySummary }) {
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          set(fromValue, untilValue);
+          if (!backwards) set(fromValue, untilValue);
         }}
       >
         <div className="grid gap-4 sm:grid-cols-2">
@@ -220,12 +222,16 @@ function VacationCard({ summary }: { summary: ProductivitySummary }) {
           <TextField
             label="Last day"
             type="date"
+            min={fromValue || undefined}
             value={untilValue}
             onChange={(e) => setUntil(e.target.value)}
           />
         </div>
+        {backwards && <Alert>The last day must be on or after the first day.</Alert>}
         <div className="flex gap-2">
-          <Button type="submit">Start vacation</Button>
+          <Button type="submit" disabled={backwards}>
+            Start vacation
+          </Button>
           {prefs.productivity.vacationUntil !== null && (
             <Button
               type="button"

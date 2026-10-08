@@ -2,7 +2,7 @@
 
 > A free, open-source, self-hostable Todoist-class task manager. Web app first (Phase 1), Android app with homescreen widgets second (Phase 2). Security is a first-class requirement, not a final step.
 
-Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · R2 ✅ A2 slice 1 W7d slice 1 (2026-10-08) · **Next: W7d ChatGPT, W8 UI/live, W9, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
+Status: **Draft v1 — 2026-10-04** · Progress: F1 ✅ F2 ✅ F3 ✅ F4 ✅ W1 ✅ W2 ✅ (2026-10-04) · W3 ✅ W4 ✅ (2026-10-05) · W5 ✅ W6 ✅ W7a ✅ W10a ✅ W10c ✅ W11b ✅ W11d ✅ (2026-10-06) · W11e ✅ W12b ✅ A1 ✅ W7b ✅ M1 ✅ W8 server ✅ A3 ✅ W10b ✅ W7c ✅ (2026-10-07) · R2 ✅ W11c ✅ A2 slice 1 W7d slice 1 (2026-10-08) · **Next: W7d ChatGPT, W8 UI/live, W9, W10d, A2.** Handoff notes: [§12](#12-status--handoff-for-the-next-contributor)
 Owner: Sarel
 
 ---
@@ -460,6 +460,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
   - dry-run summary (counts, conflicts, unsupported features such as Todoist-only filter syntax) before anything is written; the import runs as a background job with progress and can be re-run to pick up items skipped the first time (Todoist IDs remembered, so nothing is duplicated).
 - Templates: export/import project as CSV (Todoist-compatible format), template gallery.
 - Productivity: karma-style points, daily/weekly goals, streaks, vacation mode, productivity view.
+  *W11c done 2026-10-08 (reviewed by Opus): `GET /api/v1/productivity` (session-only), karma derived from completions by priority, levels, daily/weekly goals, streaks in the user's zone, vacation as a date range, `/productivity` view. Review fixes: a vacation spanning centuries hung the server (F-038, now bounded and validated), raw SQL replaced by bound parameters.*
 - iCal feed per project/filter (secret-tokenised URL, revocable); Google/CalDAV calendar sync as stretch.
 - Export everything (JSON/CSV), scheduled encrypted backups + restore (admin), account deletion (GDPR).
   - *W11e done 2026-10-07 (see ADR 0013): Settings → Your data (export ZIP with JSON + formula-guarded CSV + files; account deletion with blockers listed), admin delete in Users, Admin → Backups (schedule, retention, write-only passphrase, back up now, upload, download, delete, restore). Backups: argon2id + AES-256-GCM STREAM chunks; DB snapshot via COPY, instance keys and attachments; sign-in state excluded. Restore: authenticated pass first, automatic pre-restore backup, one transaction that rebuilds the schema at the backup's version, loads data with deferred FKs and applies newer migrations (older backups are upgraded), then keys/files swapped and the process restarts. Migration 0015: `tasks.created_by_id` set null on user deletion (was cascade). Verified by a real Docker restore drill in the smoke test. Not done: audit/activity log retention; restore from the setup wizard UI (the API works before setup).*
@@ -578,7 +579,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W10d | Outgoing webhooks: per-user subscriptions to task/project/comment events, HMAC-SHA256 signed and timestamped, retries with backoff via the job runner, delivery only through the W7a outbound client (users' webhooks public-only), admin switch, docs for verifying signatures | Sonnet (Opus review of signing and SSRF) | None (W7a outbound client and W6 job runner exist) | Everything |
 | W11a | Granular Todoist import (API token or backup/CSV, preview, per-item choices, dry run, background job, re-runnable) | Opus (untrusted input, token handling) + Sonnet (UI) | None (uses the W6 job runner) | W7, W10, W12 |
 | W11b ✅ | Templates: CSV export/import (Todoist format, CSV-injection-safe) and gallery | Sonnet; CSV mapping can go to DeepSeek | **Done 2026-10-06** (ADR 0012, T115–T120): Todoist-format CSV import (preview, new or existing project) and export, nine-template gallery; import is ordinary sync commands | Everything |
-| W11c | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | None | Everything |
+| W11c ✅ | Productivity: karma, goals, streaks, vacation mode, productivity view | DeepSeek (Sonnet review) | **Done 2026-10-08** (reviewed; F-038 fixed) | Everything |
 | W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0011, T108–T114): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
 | W11e ✅ | Export everything, scheduled encrypted backups + restore, account deletion | Opus | **Done 2026-10-07** (ADR 0013, migration 0015) | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |

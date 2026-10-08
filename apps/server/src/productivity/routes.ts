@@ -17,11 +17,12 @@ const SERIES_DAYS = 14;
  * completed task takes its points with it. Documented rather than hidden; a ledger is the upgrade
  * if that ever matters. The case is built from `KARMA_POINTS`, so the rule has one home.
  */
-const KARMA_SUM = sql.raw(
-  `case priority ${Object.entries(KARMA_POINTS)
-    .map(([priority, points]) => `when ${Number(priority)} then ${Number(points)}`)
-    .join(' ')} else 1 end`,
-);
+const KARMA_SUM = sql`case ${tasks.priority} ${sql.join(
+  Object.entries(KARMA_POINTS).map(
+    ([priority, points]) => sql`when ${Number(priority)} then ${Number(points)}::int`,
+  ),
+  sql` `,
+)} else 1 end`;
 
 export interface ProductivityRouteDeps {
   db: Database;
@@ -76,6 +77,7 @@ export function registerProductivityRoutes(
       weekStart: prefs.weekStart,
       now,
       seriesDays: SERIES_DAYS,
+      maxStreakDays: WINDOW_DAYS,
     });
   });
 }
