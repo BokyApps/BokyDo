@@ -135,7 +135,8 @@ describe.skipIf(!TEST_DATABASE_URL)('delivery: email', () => {
   });
 
   it('holds back email and push in quiet hours, except reminders', async () => {
-    // Quiet from an hour ago to an hour from now (UTC), on the real clock.
+    // Quiet from the top of the last hour to two hours from now (UTC), on the real clock: delivery
+    // runs two minutes ahead, which must still be inside the window at, say, 10:59.
     const now = localNow('UTC');
     const soon = localNow('UTC', new Date(Date.now() + 60_000));
     const hour = (h: number) =>
@@ -143,7 +144,7 @@ describe.skipIf(!TEST_DATABASE_URL)('delivery: email', () => {
     await bob.sync.ok(
       cmd('user_update_preferences', {
         notifications: {
-          quietHours: { enabled: true, start: hour(-1), end: hour(1) },
+          quietHours: { enabled: true, start: hour(-1), end: hour(2) },
           channels: { reminder: { email: true } },
         },
       }),
