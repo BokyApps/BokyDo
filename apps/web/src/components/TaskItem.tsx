@@ -216,8 +216,11 @@ export function TaskItem({
             type="button"
             aria-label={collapsed ? 'Show sub-tasks' : 'Hide sub-tasks'}
             aria-expanded={!collapsed}
-            className="absolute top-2 text-muted hover:text-fg"
-            style={{ left: `${depth * 1.75 - 1.1}rem` }}
+            // A full 24 px target (WCAG 2.5.8). Sub-tasks have it in their indent; a top-level
+            // row has its drag handle there, so on wider screens the toggle moves left of the
+            // handle (phones have no room: it stays where it was).
+            className={`absolute top-1 flex size-6 items-center justify-center rounded text-muted hover:text-fg ${depth === 0 ? '-left-6 md:-left-12' : ''}`}
+            style={depth === 0 ? undefined : { left: `${depth * 1.75 - 1.5}rem` }}
             onClick={(e) => {
               e.stopPropagation();
               onToggleCollapsed();
