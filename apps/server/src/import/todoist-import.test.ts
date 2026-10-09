@@ -1,5 +1,5 @@
 import type { TodoistImportRun, TodoistPreview } from '@bokydo/shared';
-import { eq, isNull } from 'drizzle-orm';
+import { eq, isNull, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   comments,
@@ -13,15 +13,19 @@ import {
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
-import { fakeTodoist, todoistFixture } from '../test/todoist.js';
-import { TODOIST_SYNC_URL } from './todoist-client.js';
+import { completedPage, fakeTodoist, todoistFixture } from '../test/todoist.js';
+import { TODOIST_COMPLETED_URL, TODOIST_SYNC_URL } from './todoist-client.js';
 
 const TOKEN = '0123456789abcdef0123456789abcdef01234567';
 let t: TestApp;
 let logs: string[];
 
-async function setup(answer: () => unknown = todoistFixture, status = 200) {
-  const todoist = fakeTodoist(answer, status);
+async function setup(
+  answer: () => unknown = todoistFixture,
+  status = 200,
+  completed: () => unknown = () => completedPage(),
+) {
+  const todoist = fakeTodoist(answer, status, completed);
   logs = [];
   t = await testApp({
     importFetch: todoist.fetch,
@@ -61,6 +65,8 @@ const everything = (preview: TodoistPreview, overrides: Record<string, unknown> 
   labels: preview.labels.map((l) => l.id),
   filters: preview.filters.map((f) => f.id),
   comments: true,
+  completed: false,
+  completedWindow: '3m',
   people: [],
   ...overrides,
 });
@@ -80,8 +86,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
   it('reads the account once with the token in the header only, and never keeps or logs it', async () => {
     const { todoist, alice } = await setup();
     const preview = await connect(alice);
-    expect(todoist.calls).toHaveLength(1);
+    // Two reads with the same token: the account, then its completed tasks (W11a-c1).
+    expect(todoist.calls).toHaveLength(2);
     expect(todoist.calls[0]?.url).toBe(TODOIST_SYNC_URL);
+    expect(todoist.calls[1]?.url).toContain(TODOIST_COMPLETED_URL);
+    expect(todoist.calls[1]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(todoist.calls[0]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(todoist.calls[0]?.body).not.toContain(TOKEN);
     expect(JSON.parse(todoist.calls[0]?.body ?? '{}')).toMatchObject({ sync_token: '*' });
@@ -260,6 +269,168 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
     const bad = await garbage.alice.http.post('/api/v1/import/todoist/connect', { token: TOKEN });
     expect(bad.statusCode).toBe(502);
     expect(bad.json()).toEqual({ error: 'todoist_invalid_response' });
+  });
+
+  // ---- completed tasks (W11a-c1) ----
+
+  const completedItems = [
+    {
+      id: 'c-report',
+      project_id: 'p-work',
+      section_id: 's-todo',
+      parent_id: null,
+      content: 'Write report',
+      description: 'Quarterly numbers',
+      priority: 4,
+      labels: ['deep-work'],
+      child_order: 0,
+      completed_at: '2026-09-16T10:00:00Z',
+      completed_by_uid: 'u2',
+      responsible_uid: 'u2',
+    },
+    {
+      id: 'c-outline',
+      project_id: 'p-work',
+      parent_id: 'c-report',
+      content: 'Outline',
+      priority: 1,
+      labels: [],
+      child_order: 0,
+      completed_at: '2026-09-15T08:30:00Z',
+      completed_by_uid: null,
+    },
+    {
+      // Older than a month: only a 3-month window brings it over.
+      id: 'c-old',
+      project_id: 'p-work',
+      content: 'Old task',
+      priority: 4,
+      labels: [],
+      child_order: 0,
+      completed_at: '2026-05-01T10:00:00Z',
+    },
+    {
+      // In a project the user skipped: not brought over at all.
+      id: 'c-skipped',
+      project_id: 'p-home',
+      content: 'Skipped',
+      priority: 4,
+      labels: [],
+      child_order: 0,
+      completed_at: '2026-09-01T10:00:00Z',
+    },
+  ];
+
+  const withCompleted = (items: unknown[] = completedItems) =>
+    setup(todoistFixture, 200, () => completedPage(items));
+
+  it('counts the completed tasks it read, without a second connect', async () => {
+    const { todoist, alice } = await withCompleted();
+    const preview = await connect(alice);
+    expect(preview.totals.completed).toBe(4);
+    // The read happened at connect; the choice is only applied later.
+    expect(todoist.calls).toHaveLength(2);
+  });
+
+  it('brings completed tasks over with their real completion time and completer', async () => {
+    const { alice } = await withCompleted();
+    const preview = await connect(alice);
+    const choices = everything(preview, {
+      projects: preview.projects
+        .filter((p) => p.name !== 'Home')
+        .map((p) =>
+          p.isInbox
+            ? { id: p.id, action: 'merge', targetId: alice.sync.inbox }
+            : { id: p.id, action: 'new' },
+        ),
+      completed: true,
+      completedWindow: '3m',
+      people: preview.people.map((p) => ({ id: p.id, userId: p.isYou ? alice.id : null })),
+    });
+    const summary = (await alice.http.post('/api/v1/import/todoist/plan', choices)).json();
+    expect(summary.counts.completedTasks).toBe(3); // the skipped project's task is left out
+
+    const status = await run(alice, choices);
+    expect(status.counts?.completedTasks).toBe(3);
+
+    const rows = await t.db.db.select().from(tasks);
+    const report = rows.find((r) => r.content === 'Write report')!;
+    expect(report.isCompleted).toBe(true);
+    // The real completion time, not the moment of the import.
+    expect(report.completedAt?.toISOString()).toBe('2026-09-16T10:00:00.000Z');
+    // The original completer, mapped through the people choice.
+    expect(report.completedById).toBe(null); // Ben is not a BokyDo user here
+    expect(report.priority).toBe(1); // 4 in Todoist is p1 in BokyDo
+    expect(report.labels).toEqual(['deep-work']);
+    const outline = rows.find((r) => r.content === 'Outline')!;
+    expect(outline.parentId).toBe(report.id); // completed sub-tasks under their completed parent
+    expect(outline.completedAt?.toISOString()).toBe('2026-09-15T08:30:00.000Z');
+    expect(rows.some((r) => r.content === 'Skipped')).toBe(false);
+    expect(rows.some((r) => r.content === 'Old task')).toBe(false);
+
+    // An import is not a completion: nothing in the activity log says a task was completed.
+    const activity = JSON.stringify(await t.db.db.execute(sql`select type from activity_log`));
+    expect(activity).not.toContain('task_completed');
+  });
+
+  it('a month window leaves older completed tasks alone', async () => {
+    const { alice } = await withCompleted([
+      {
+        id: 'new',
+        project_id: 'p-work',
+        content: 'Fresh',
+        priority: 4,
+        labels: [],
+        child_order: 0,
+        completed_at: new Date(Date.now() - 5 * 86_400_000).toISOString(),
+      },
+      {
+        id: 'old',
+        project_id: 'p-work',
+        content: 'Stale',
+        priority: 4,
+        labels: [],
+        child_order: 0,
+        completed_at: '2026-01-01T10:00:00Z',
+      },
+    ]);
+    const preview = await connect(alice);
+    const base = everything(preview, { completed: true });
+    const status = await run(alice, { ...base, completedWindow: '1m' });
+    expect(status.counts?.completedTasks).toBe(1);
+    const rows = await t.db.db.select().from(tasks);
+    expect(rows.map((r) => r.content)).not.toContain('Stale');
+  });
+
+  it('says nothing was imported when the choice is off', async () => {
+    const { alice } = await withCompleted();
+    const preview = await connect(alice);
+    const status = await run(alice, everything(preview));
+    expect(status.counts?.tasks).toBeGreaterThan(0);
+    expect(status.counts?.completedTasks).toBe(0);
+    const rows = await t.db.db.select().from(tasks);
+    expect(rows.every((r) => !r.isCompleted)).toBe(true);
+  });
+
+  it('a re-run adds each completed task once', async () => {
+    const { alice } = await withCompleted();
+    const preview = await connect(alice);
+    const choices = everything(preview, { completed: true });
+    const first = await run(alice, choices);
+    expect(first.counts?.completedTasks).toBe(3);
+    const again = await run(alice, choices);
+    expect(again.counts?.completedTasks).toBe(0);
+    expect(again.counts?.completedAlreadyImported).toBe(3);
+    const rows = await t.db.db.select().from(tasks);
+    expect(rows.filter((r) => r.content === 'Write report')).toHaveLength(1);
+  });
+
+  it('is happy with an account that has no completed tasks', async () => {
+    const { alice } = await withCompleted([]);
+    const preview = await connect(alice);
+    expect(preview.totals.completed).toBe(0);
+    const status = await run(alice, everything(preview, { completed: true }));
+    expect(status.counts?.completedTasks).toBe(0);
   });
 
   it('runs one import at a time per user', async () => {

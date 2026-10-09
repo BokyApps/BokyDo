@@ -1,6 +1,6 @@
 import { TODOIST_IMPORT_LIMITS as LIMITS } from '@bokydo/shared';
 import { z } from 'zod';
-import { OutboundError, type OutboundFetch } from '../net/outbound.js';
+import { OutboundError, type OutboundFetch, type OutboundResponse } from '../net/outbound.js';
 
 /**
  * Reading a Todoist account (PLAN W11a). One Sync API request (`POST /api/v1/sync`, full sync)
@@ -9,6 +9,13 @@ import { OutboundError, type OutboundFetch } from '../net/outbound.js';
  * format. Field names follow Todoist API v1 as described by Doist's own SDK (@doist/todoist-sdk).
  */
 export const TODOIST_SYNC_URL = 'https://api.todoist.com/api/v1/sync';
+/** Completed items (PLAN W11a-c1). One request series may cover at most 3 months. */
+export const TODOIST_COMPLETED_URL =
+  'https://api.todoist.com/api/v1/tasks/completed/by_completion_date';
+/** Todoist's own cap on a completion-date range, in months. */
+export const TODOIST_COMPLETED_MAX_MONTHS = 3;
+/** Page size asked for: Todoist's maximum (its default is 50, its cap 200). */
+const COMPLETED_PAGE_SIZE = 200;
 const RESOURCE_TYPES = [
   'user',
   'projects',
@@ -22,7 +29,15 @@ const RESOURCE_TYPES = [
 ] as const;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
-export type TodoistErrorReason = 'unauthorized' | 'unavailable' | 'too_large' | 'invalid_response';
+export type TodoistErrorReason =
+  | 'unauthorized'
+  | 'unavailable'
+  | 'too_large'
+  | 'invalid_response'
+  /** The completion-date range Todoist allows (3 months) was exceeded. */
+  | 'window_too_long'
+  /** More pages than the cap: the page limit is per request series, not the item cap. */
+  | 'too_many_pages';
 
 export class TodoistError extends Error {
   constructor(readonly reason: TodoistErrorReason) {
@@ -143,6 +158,22 @@ const collaboratorWire = z
   .loose();
 
 const list = <T extends z.ZodType>(item: T, max: number) => z.array(item).max(max).nullish();
+
+/**
+ * The completed-items endpoint. `items` is the page; `next_cursor` is null at the end. Unlike
+ * the sync payload these are *finished* tasks, so presence is the fact — `checked` is not a
+ * filter here (Todoist's sample shows it false).
+ */
+const completedItemWire = itemWire
+  .omit({ checked: true })
+  .extend({ completed_at: str(40).nullish(), completed_by_uid: tid.nullish() })
+  .strict();
+const completedWire = z
+  .object({
+    items: list(completedItemWire, LIMITS.completedTasks),
+    next_cursor: str(500).nullish(),
+  })
+  .loose();
 
 const syncWire = z
   .object({
@@ -289,6 +320,136 @@ export async function fetchTodoistSnapshot(
     throw new TodoistError('invalid_response');
   }
   return normalise(body);
+}
+
+/** A completed item, as the completed-items endpoint returns it. */
+export interface TodoistCompletedTask {
+  id: string;
+  projectId: string;
+  sectionId: string | null;
+  parentId: string | null;
+  content: string;
+  description: string;
+  priority: number;
+  labels: string[];
+  due: TodoistDue | null;
+  deadline: string | null;
+  duration: { amount: number; unit: 'minute' | 'day' } | null;
+  responsibleUid: string | null;
+  order: number;
+  /** When it was completed in Todoist (RFC 3339): the one date that must not be invented. */
+  completedAt: Date;
+  /** Who completed it when it was not the account owner, if Todoist says. */
+  completedByUid: string | null;
+}
+
+/** Read the account's completed tasks over [since, until] (W11a-c1). */
+export async function fetchTodoistCompleted(
+  fetch: OutboundFetch,
+  token: string,
+  { since, until, signal }: { since: Date; until: Date; signal?: AbortSignal },
+): Promise<TodoistCompletedTask[]> {
+  const span = monthsBetween(since, until);
+  if (span <= 0 || span > TODOIST_COMPLETED_MAX_MONTHS) {
+    throw new TodoistError('window_too_long');
+  }
+  const out: TodoistCompletedTask[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < LIMITS.completedPages; page++) {
+    const url = new URL(TODOIST_COMPLETED_URL);
+    url.searchParams.set('since', since.toISOString());
+    url.searchParams.set('until', until.toISOString());
+    url.searchParams.set('limit', String(COMPLETED_PAGE_SIZE));
+    if (cursor) url.searchParams.set('cursor', cursor);
+    const res = await todoistGet(fetch, token, url.toString(), signal);
+    const body = await res.json();
+    const parsed = completedWire.safeParse(body);
+    if (!parsed.success) {
+      const tooMany = parsed.error.issues.some((i) => i.code === 'too_big' && i.origin === 'array');
+      throw new TodoistError(tooMany ? 'too_large' : 'invalid_response');
+    }
+    for (const raw of parsed.data.items ?? []) {
+      // A page can repeat an item while the account changes underneath us.
+      if (raw.is_deleted || seen.has(raw.id)) continue;
+      seen.add(raw.id);
+      out.push(normaliseCompleted(raw));
+      if (out.length >= LIMITS.completedTasks) return out;
+    }
+    cursor = parsed.data.next_cursor ?? undefined;
+    if (!cursor) return out;
+  }
+  throw new TodoistError('too_many_pages');
+}
+
+/** One GET against Todoist, with the same status handling as the sync read. */
+async function todoistGet(
+  fetch: OutboundFetch,
+  token: string,
+  url: string,
+  signal?: AbortSignal,
+): Promise<OutboundResponse> {
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      timeoutMs: 30_000,
+      ...(signal ? { signal } : {}),
+    });
+  } catch {
+    throw new TodoistError('unavailable');
+  }
+  if (res.status === 401 || res.status === 403) {
+    res.cancel();
+    throw new TodoistError('unauthorized');
+  }
+  if (res.status === 400 || res.status === 422) {
+    // A range past Todoist's 3-month cap is the user's choice, not a server fault.
+    res.cancel();
+    throw new TodoistError('window_too_long');
+  }
+  if (res.status !== 200) {
+    res.cancel();
+    throw new TodoistError('unavailable');
+  }
+  return res;
+}
+
+/** Full months covered by [since, until), rounded up: 1 for a month, 3 for a quarter. */
+export function monthsBetween(since: Date, until: Date): number {
+  const months =
+    (until.getFullYear() - since.getFullYear()) * 12 +
+    (until.getMonth() - since.getMonth()) +
+    (until.getDate() > since.getDate() ? 1 : 0);
+  return months;
+}
+
+function normaliseCompleted(raw: z.output<typeof completedItemWire>): TodoistCompletedTask {
+  const completedAt = new Date(raw.completed_at ?? '');
+  return {
+    id: raw.id,
+    projectId: raw.project_id,
+    sectionId: raw.section_id ?? null,
+    parentId: raw.parent_id ?? null,
+    content: raw.content,
+    description: raw.description ?? '',
+    priority: raw.priority ?? 1,
+    labels: raw.labels ?? [],
+    due: raw.due ? toDue(raw.due) : null,
+    deadline:
+      raw.deadline && /^\d{4}-\d{2}-\d{2}$/.test(raw.deadline.date) ? raw.deadline.date : null,
+    duration: raw.duration ? { amount: raw.duration.amount, unit: raw.duration.unit } : null,
+    responsibleUid: raw.responsible_uid ?? null,
+    order: raw.child_order ?? 0,
+    completedAt,
+    completedByUid: raw.completed_by_uid ?? null,
+  };
+}
+
+/** A completed task whose completion time vanished is not importable: the date is the point. */
+export function hasCompletionDate(task: TodoistCompletedTask): boolean {
+  return !Number.isNaN(task.completedAt.getTime());
 }
 
 /** Validate a full-sync answer and keep only live items, in a shape the planner can trust. */

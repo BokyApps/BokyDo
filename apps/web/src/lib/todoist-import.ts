@@ -1,4 +1,5 @@
 import type {
+  TodoistCompletedWindow,
   TodoistImportChoices,
   TodoistImportCounts,
   TodoistImportWarning,
@@ -30,6 +31,10 @@ export interface ImportDraft {
   /** Todoist filter ids to import. */
   filters: Set<string>;
   comments: boolean;
+  /** Bring the account's completed tasks over, with their real completion dates. */
+  completed: boolean;
+  /** How far back to look for them: 1 or 3 months (Todoist allows no more). */
+  completedWindow: TodoistCompletedWindow;
   /** Todoist collaborator id → BokyDo user id, or null to leave their tasks unassigned. */
   people: Map<string, string | null>;
 }
@@ -108,6 +113,8 @@ export function defaultDraft(preview: TodoistPreview, targets: MergeTarget[]): I
     labels: new Set(preview.labels.filter((l) => !l.invalid).map((l) => l.id)),
     filters: new Set(preview.filters.filter((f) => f.supported).map((f) => f.id)),
     comments: true,
+    completed: false,
+    completedWindow: '3m',
     people: new Map(preview.people.filter((p) => !p.isYou).map((p) => [p.id, null])),
   };
 }
@@ -149,6 +156,8 @@ export function buildChoicesBody(
     labels: preview.labels.filter((l) => !l.invalid && draft.labels.has(l.id)).map((l) => l.id),
     filters: preview.filters.filter((f) => f.supported && draft.filters.has(f.id)).map((f) => f.id),
     comments: draft.comments,
+    completed: draft.completed,
+    completedWindow: draft.completedWindow,
     people: preview.people
       .filter((p) => !p.isYou)
       .map((p) => ({ id: p.id, userId: draft.people.get(p.id) ?? null })),
@@ -226,6 +235,7 @@ export const WARNING_KIND_LABEL: Record<TodoistImportWarning['kind'], string> = 
   truncated: 'Shortened text',
   duration: 'Durations',
   nesting: 'Nesting',
+  completed: 'Completed tasks',
   failed: 'Not imported',
 };
 

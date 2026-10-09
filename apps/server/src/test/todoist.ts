@@ -188,12 +188,25 @@ export function todoistFixture() {
   };
 }
 
+/** One page of the completed-items endpoint: no items, and no next page. */
+export const completedPage = (items: unknown[] = [], nextCursor: string | null = null) => ({
+  items,
+  next_cursor: nextCursor,
+});
+
 /** An outbound fetch that answers like Todoist and remembers what it was asked. */
-export function fakeTodoist(body: () => unknown, status = 200) {
+export function fakeTodoist(
+  body: () => unknown,
+  status = 200,
+  completed: () => unknown = () => completedPage(),
+) {
   const calls: { url: string; headers: Record<string, string>; body: string }[] = [];
   const fetch: OutboundFetch = async (url, init = {}) => {
     calls.push({ url, headers: init.headers ?? {}, body: String(init.body ?? '') });
-    const text = JSON.stringify(body());
+    const payload = String(url).includes('/tasks/completed/by_completion_date')
+      ? completed()
+      : body();
+    const text = JSON.stringify(payload);
     const res: OutboundResponse = {
       status,
       headers: { 'content-type': 'application/json' },

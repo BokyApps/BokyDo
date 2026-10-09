@@ -1,4 +1,5 @@
 import {
+  type TodoistCompletedWindow,
   type TodoistImportChoices,
   type TodoistImportPlanSummary,
   type TodoistImportRun,
@@ -536,14 +537,44 @@ function CommentsSection({
   edit: (change: (d: ImportDraft) => ImportDraft) => void;
 }) {
   return (
-    <Section title="Comments">
-      <Checkbox
-        label="Import comments"
-        hint={`${count(preview.totals.comments, 'comment')} on tasks and projects. Attached files are not copied; a comment keeps a link to the file on Todoist.`}
-        checked={draft.comments}
-        onChange={(e) => edit((d) => ({ ...d, comments: e.target.checked }))}
-      />
-    </Section>
+    <>
+      <Section title="Comments">
+        <Checkbox
+          label="Import comments"
+          hint={`${count(preview.totals.comments, 'comment')} on tasks and projects. Attached files are not copied; a comment keeps a link to the file on Todoist.`}
+          checked={draft.comments}
+          onChange={(e) => edit((d) => ({ ...d, comments: e.target.checked }))}
+        />
+      </Section>
+      <Section title="Completed tasks">
+        <Checkbox
+          label="Import completed tasks"
+          hint={
+            preview.totals.completed > 0
+              ? `${count(preview.totals.completed, 'completed task')} in the last 3 months. They keep the date and person from Todoist, and nothing else changes.`
+              : 'No completed tasks were found in the last 3 months.'
+          }
+          checked={draft.completed}
+          onChange={(e) => edit((d) => ({ ...d, completed: e.target.checked }))}
+        />
+        {draft.completed && (
+          <div className="mt-4">
+            <SelectField
+              label="Completed when"
+              value={draft.completedWindow}
+              onChange={(e) =>
+                edit((d) => ({ ...d, completedWindow: e.target.value as TodoistCompletedWindow }))
+              }
+              options={[
+                { value: '1m', label: 'In the last month' },
+                { value: '3m', label: 'In the last 3 months' },
+              ]}
+              hint="Todoist allows no more than 3 months of completed tasks per read."
+            />
+          </div>
+        )}
+      </Section>
+    </>
   );
 }
 

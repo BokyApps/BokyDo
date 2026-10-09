@@ -13,7 +13,14 @@ import {
   type TodoistImportWarning,
 } from '@bokydo/shared';
 import { newId } from '../db/ids.js';
-import type { TodoistComment, TodoistDue, TodoistSnapshot, TodoistTask } from './todoist-client.js';
+import {
+  hasCompletionDate,
+  type TodoistComment,
+  type TodoistCompletedTask,
+  type TodoistDue,
+  type TodoistSnapshot,
+  type TodoistTask,
+} from './todoist-client.js';
 
 /**
  * Turns a Todoist snapshot and the user's choices into sync commands (PLAN W11a). Pure: the
@@ -27,6 +34,8 @@ export const mappingKey = (kind: MappingKind, externalId: string) => `${kind}:${
 
 export interface PlanInput {
   snapshot: TodoistSnapshot;
+  /** Completed tasks the user asked for (absent when they did not): the choice is opt-in. */
+  completed?: readonly TodoistCompletedTask[];
   choices: {
     projects: {
       id: string;
@@ -63,8 +72,25 @@ export interface PlannedStep {
   label: string;
 }
 
+/**
+ * A completed task to write as completed (W11a-c1). It is not a sync command: the owner's
+ * decision is that the real completion date and the original completer are kept, and only the
+ * importer can write those, so it goes through the non-command write path with no completion
+ * event in the activity log.
+ */
+export interface CompletedStep {
+  args: Record<string, unknown>;
+  mapping: { kind: MappingKind; externalId: string; localId: string };
+  label: string;
+  /** Todoist's own completion time. */
+  completedAt: Date;
+  /** Who completed it in Todoist, when that person is a BokyDo user; else null. */
+  completedById: string | null;
+}
+
 export interface Plan {
   steps: PlannedStep[];
+  completed: CompletedStep[];
   counts: TodoistImportCounts;
   warnings: TodoistImportWarning[];
 }
@@ -108,7 +134,9 @@ export const isSupportedFilter = (query: string) => filterQuerySchema.safeParse(
 
 export function planImport(input: PlanInput): Plan {
   const { snapshot: s, choices, imported } = input;
+  const completedTasks = input.completed ?? [];
   const steps: PlannedStep[] = [];
+  const completed: CompletedStep[] = [];
   const warnings: TodoistImportWarning[] = [];
   const counts: TodoistImportCounts = {
     projects: 0,
@@ -118,6 +146,8 @@ export function planImport(input: PlanInput): Plan {
     comments: 0,
     labels: 0,
     filters: 0,
+    completedTasks: 0,
+    completedAlreadyImported: 0,
     alreadyImported: 0,
   };
   const warn = (kind: TodoistImportWarning['kind'], message: string) =>
@@ -336,6 +366,95 @@ export function planImport(input: PlanInput): Plan {
       `${droppedAssignees} task${droppedAssignees === 1 ? '' : 's'} assigned to people who aren't in the BokyDo project will be unassigned (nobody is invited automatically).`,
     );
 
+  // ---- completed tasks (opt-in): planned like open ones, written with their real history ----
+  const completedLocal = new Map<string, string>();
+  const completedById = new Map(completedTasks.map((t) => [t.id, t]));
+  const completedParent = (t: TodoistCompletedTask): string | undefined =>
+    t.parentId ? (localTask.get(t.parentId) ?? completedLocal.get(t.parentId)) : undefined;
+  const orderedCompleted = completedTasks
+    .filter((t) => localProject.has(t.projectId))
+    .sort(
+      (a, b) =>
+        taskDepth(a as unknown as TodoistTask) - taskDepth(b as unknown as TodoistTask) ||
+        byOrder(a, b),
+    );
+  let droppedCompletions = 0;
+  for (const t of orderedCompleted) {
+    const projectId = localProject.get(t.projectId);
+    if (!projectId) continue;
+    const before = imported.get(mappingKey('task', t.id));
+    if (before) {
+      completedLocal.set(t.id, before);
+      counts.completedAlreadyImported++;
+      continue;
+    }
+    if (t.parentId && !completedParent(t) && completedById.has(t.parentId)) continue; // its parent failed
+    if (!hasCompletionDate(t)) {
+      // Without Todoist's own completion time there is nothing to keep: never invent one.
+      warn(
+        'completed',
+        `“${oneLine(t.content, 80, '(untitled)').text}” has no completion date on Todoist's side and was skipped.`,
+      );
+      continue;
+    }
+    const content = oneLine(t.content, 1000, '(untitled)');
+    const description = multiLine(t.description, 16_000);
+    if (content.cut || description.cut)
+      warn('truncated', `“${content.text.slice(0, 80)}” was too long and was shortened.`);
+    const labels = t.labels.filter((l) => labelNameSchema.safeParse(l).success);
+    if (labels.length !== t.labels.length)
+      warn('label', `“${content.text.slice(0, 80)}”: labels with spaces, @ or # were left off.`);
+    let assigneeId: string | null = null;
+    if (t.responsibleUid) {
+      const userId = people.get(t.responsibleUid) ?? null;
+      const allowed = isNew.has(projectId)
+        ? userId === input.userId
+        : userId !== null && (input.members.get(projectId)?.has(userId) ?? false);
+      if (userId && allowed) assigneeId = userId;
+      else droppedAssignees++;
+    }
+    // Who completed it: the original person when they are a BokyDo user, else left blank.
+    const completer = t.completedByUid ? (people.get(t.completedByUid) ?? null) : null;
+    if (t.completedByUid && !completer) droppedCompletions++;
+    const parentLocal = completedParent(t);
+    const sectionId = !parentLocal && t.sectionId ? localSection.get(t.sectionId) : undefined;
+    const id = newId();
+    const due = t.due ? toDue(t.due, content.text, input.dates, warn) : null;
+    const duration = durationMinutes(t);
+    if (t.duration && duration === null)
+      warn('duration', `“${content.text.slice(0, 80)}”: durations over a day aren't supported.`);
+    const args: Record<string, unknown> = {
+      id,
+      projectId,
+      ...(parentLocal ? { parentId: parentLocal } : {}),
+      ...(sectionId ? { sectionId } : {}),
+      content: content.text,
+      ...(description.text ? { description: description.text } : {}),
+      priority: 5 - Math.min(4, Math.max(1, t.priority)),
+      ...(due ? { due } : {}),
+      ...(t.deadline ? { deadline: t.deadline } : {}),
+      ...(duration ? { durationMinutes: duration } : {}),
+      ...(labels.length ? { labels: labels.slice(0, 50) } : {}),
+      ...(assigneeId ? { assigneeId } : {}),
+      ...(completer ? { completedById: completer } : {}),
+      completedAt: t.completedAt,
+    };
+    completed.push({
+      args,
+      mapping: { kind: 'task', externalId: t.id, localId: id },
+      label: content.text,
+      completedAt: t.completedAt,
+      completedById: completer,
+    });
+    completedLocal.set(t.id, id);
+    counts.completedTasks++;
+  }
+  if (droppedCompletions)
+    warn(
+      'completed',
+      `${droppedCompletions} completed task${droppedCompletions === 1 ? ' was' : 's were'} finished by someone who isn't a BokyDo user here, so nothing will show who completed ${droppedCompletions === 1 ? 'it' : 'them'}.`,
+    );
+
   // ---- comments ----
   if (choices.comments) {
     const names = new Map(s.people.map((p) => [p.id, p.name || p.email]));
@@ -418,7 +537,7 @@ export function planImport(input: PlanInput): Plan {
       counts.filters++;
   }
 
-  return { steps, counts, warnings };
+  return { steps, completed, counts, warnings };
 }
 
 function durationMinutes(t: TodoistTask): number | null {

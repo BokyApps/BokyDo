@@ -52,7 +52,7 @@ function preview(extra: Partial<TodoistPreview> = {}): TodoistPreview {
     labels: [],
     filters: [],
     people: [],
-    totals: { projects: 0, sections: 0, tasks: 0, comments: 0 },
+    totals: { projects: 0, sections: 0, tasks: 0, comments: 0, completed: 0 },
     ...extra,
   };
 }
@@ -403,6 +403,8 @@ describe('countRows and runErrorMessage', () => {
       comments: 5,
       labels: 6,
       filters: 7,
+      completedTasks: 0,
+      completedAlreadyImported: 0,
       alreadyImported: 8,
     });
     expect(rows.map((r) => r.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
