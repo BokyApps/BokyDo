@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -42,8 +43,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -84,6 +87,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.time.LocalDate
 
 /** Where the user is. Kept as a small back stack: no navigation library needed for these few. */
@@ -93,6 +98,7 @@ sealed interface Route {
     data object Upcoming : Route
     data object Browse : Route
     data class Project(val id: String) : Route
+    data class TaskDetail(val id: String) : Route
     data object Settings : Route
 }
 
@@ -129,6 +135,7 @@ fun AppShell() {
         Route.Browse -> "Browse"
         Route.Settings -> "Settings"
         is Route.Project -> state.projects[route.id]?.name ?: "Project"
+        is Route.TaskDetail -> state.tasks[route.id]?.content?.take(30) ?: "Task"
     }
     val defaults = when (route) {
         is Route.Project -> route.id
@@ -158,18 +165,19 @@ fun AppShell() {
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && defaults != null) {
+            if (route != Route.Settings && route !is Route.TaskDetail && defaults != null) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
             }
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (route) {
-                Route.Inbox -> state.user?.let { ProjectList(state, it.inboxProjectId, today) }
-                Route.Today -> TodayList(state, today)
-                Route.Upcoming -> UpcomingList(state, today)
+                Route.Inbox -> state.user?.let { ProjectList(state, it.inboxProjectId, today) { go(Route.TaskDetail(it)) } }
+                Route.Today -> TodayList(state, today) { go(Route.TaskDetail(it)) }
+                Route.Upcoming -> UpcomingList(state, today) { go(Route.TaskDetail(it)) }
                 Route.Browse -> BrowseList(state) { go(it) }
-                is Route.Project -> ProjectList(state, route.id, today)
+                is Route.Project -> ProjectList(state, route.id, today) { go(Route.TaskDetail(it)) }
+                is Route.TaskDetail -> TaskDetailScreen(state, route.id, today, { go(Route.TaskDetail(it)) }, { stack = stack.dropLast(1) })
                 Route.Settings -> SettingsScreen()
             }
         }
@@ -183,17 +191,17 @@ fun AppShell() {
 }
 
 @Composable
-private fun TodayList(state: AppState, today: String) {
+private fun TodayList(state: AppState, today: String, onOpen: (String) -> Unit) {
     val lists = remember(state, today) { Views.today(state, today) }
     if (lists.overdue.isEmpty() && lists.today.isEmpty()) return Empty("Nothing due today. Enjoy your day.")
     LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
-        group("Overdue", lists.overdue, state, today, showProject = true)
-        group(Dates.describe(today, null, today, state.prefs()).label, lists.today, state, today, showProject = true)
+        group("Overdue", lists.overdue, state, today, showProject = true, onOpen = onOpen)
+        group(Dates.describe(today, null, today, state.prefs()).label, lists.today, state, today, showProject = true, onOpen = onOpen)
     }
 }
 
 @Composable
-private fun UpcomingList(state: AppState, today: String) {
+private fun UpcomingList(state: AppState, today: String, onOpen: (String) -> Unit) {
     val days = remember(state, today) {
         val end = LocalDate.parse(today).plusDays(13).toString()
         Views.upcoming(state, LocalDate.parse(today).plusDays(1).toString(), end)
@@ -201,19 +209,19 @@ private fun UpcomingList(state: AppState, today: String) {
     val overdue = remember(state, today) { Views.today(state, today).overdue }
     if (days.isEmpty() && overdue.isEmpty()) return Empty("Nothing scheduled for the next two weeks.")
     LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
-        group("Overdue", overdue, state, today, showProject = true)
-        for ((day, tasks) in days) group(Dates.describe(day, null, today, state.prefs()).label, tasks, state, today, showProject = true)
+        group("Overdue", overdue, state, today, showProject = true, onOpen = onOpen)
+        for ((day, tasks) in days) group(Dates.describe(day, null, today, state.prefs()).label, tasks, state, today, showProject = true, onOpen = onOpen)
     }
 }
 
 @Composable
-private fun ProjectList(state: AppState, projectId: String, today: String) {
+private fun ProjectList(state: AppState, projectId: String, today: String, onOpen: (String) -> Unit) {
     val groups = remember(state, projectId) { Views.projectTasks(state, projectId) }
     if (groups.all { it.second.isEmpty() } && groups.size == 1) return Empty("No tasks here yet. Tap + to add one.")
     LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
         for ((section, tasks) in groups) {
             if (section == null && tasks.isEmpty()) continue
-            group(section?.name ?: "", tasks, state, today, showProject = false, showEmpty = section != null)
+            group(section?.name ?: "", tasks, state, today, showProject = false, showEmpty = section != null, onOpen = onOpen)
         }
     }
 }
@@ -248,10 +256,11 @@ private fun LazyListScope.group(
     today: String,
     showProject: Boolean,
     showEmpty: Boolean = false,
+    onOpen: (String) -> Unit,
 ) {
     if (tasks.isEmpty() && !showEmpty) return
     if (title.isNotEmpty()) item(key = "h:$title") { Header(title) }
-    items(tasks, key = { it.id }) { TaskRow(it, state, today, showProject) }
+    items(tasks, key = { it.id }) { TaskRow(it, state, today, showProject, onOpen) }
 }
 
 @Composable
@@ -272,11 +281,14 @@ private fun Empty(text: String) {
 }
 
 @Composable
-private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean) {
+private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
     val app = LocalContext.current.app
     val prefs = state.prefs()
     val subtasks = remember(state, task.id) { Views.children(state, task.id) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.Top) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onOpen(task.id) }.padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
         Checkbox(
             checked = task.isCompleted,
             onCheckedChange = { done ->
@@ -310,6 +322,145 @@ private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boo
                 }
             }
         }
+    }
+}
+
+/**
+ * Task detail (A2 slice 2): read + edit the fields slice 1 could only show in a row.
+ * Edits send `task_update` (content ≤ 1000, description ≤ 16000, priority 1-4 — the
+ * server re-checks); complete/reopen and delete reuse the list commands so the change
+ * shows at once via `Optimistic` and syncs in the background. Due/labels/project moves
+ * stay read-only here until the picker slices land.
+ */
+@Composable
+private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onOpen: (String) -> Unit, onBack: () -> Unit) {
+    val app = LocalContext.current.app
+    val scope = rememberCoroutineScope()
+    val task = state.tasks[taskId]
+    if (task == null) {
+        Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("This task isn't here any more. It may have been deleted or moved to an archived project.")
+            Button(onClick = onBack) { Text("Back") }
+        }
+        return
+    }
+    val project = state.projects[task.projectId]
+    val writable = project?.writable ?: false
+    val prefs = state.prefs()
+    val subtasks = remember(state, task.id) { Views.children(state, task.id) }
+    val parent = task.parentId?.let { state.tasks[it] }
+
+    var content by remember(task.id, task.content) { mutableStateOf(task.content) }
+    var description by remember(task.id, task.description) { mutableStateOf(task.description) }
+    var priority by remember(task.id, task.priority) { mutableStateOf(task.priority) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var savedNote by remember { mutableStateOf<String?>(null) }
+    val dirty = content.trim() != task.content || description != task.description || priority != task.priority
+    val contentOk = content.trim().isNotBlank() && content.trim().length <= 1000 && description.length <= 16000
+
+    fun save() {
+        if (!writable || !dirty || !contentOk) return
+        scope.launch {
+            val args = buildJsonObject {
+                put("id", task.id)
+                if (content.trim() != task.content) put("content", content.trim())
+                if (description != task.description) put("description", description)
+                if (priority != task.priority) put("priority", priority)
+            }
+            app.sendAll(listOf("task_update" to args))
+            savedNote = "Saved. Syncing…"
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        parent?.let {
+            AssistChip(onClick = { onOpen(it.id) }, label = { Text("Above: ${it.content.take(60)}") })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = task.isCompleted,
+                onCheckedChange = { done -> app.send(if (done) "task_complete" else "task_uncomplete", task.id) },
+                modifier = Modifier.semantics { contentDescription = (if (task.isCompleted) "Reopen " else "Complete ") + task.content },
+            )
+            Text(
+                if (task.isCompleted) "Completed" else "Open",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.weight(1f))
+            project?.let { Text(if (it.isInbox) "Inbox" else it.name, style = MaterialTheme.typography.bodySmall) }
+        }
+        OutlinedTextField(
+            value = content,
+            onValueChange = { content = it.take(1000); savedNote = null },
+            label = { Text("Task name") },
+            enabled = writable && !task.isCompleted,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = description,
+            onValueChange = { description = it.take(16000); savedNote = null },
+            label = { Text("Description") },
+            enabled = writable && !task.isCompleted,
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Priority", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 4.dp))
+            for (p in 1..4) {
+                if (p == priority) {
+                    Button(enabled = writable, onClick = { priority = p; savedNote = null }) { Text("P$p") }
+                } else {
+                    androidx.compose.material3.OutlinedButton(enabled = writable, onClick = { priority = p; savedNote = null }) { Text("P$p") }
+                }
+            }
+        }
+        task.due?.let {
+            Text(
+                (if (it.recurring) "↻ " else "") + Dates.dueLabel(it, today, prefs),
+                style = MaterialTheme.typography.bodyMedium,
+                color = toneColor(Dates.describe(it.date, it.time, today, prefs).tone),
+            )
+        }
+        if (task.labels.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (l in task.labels) AssistChip(onClick = {}, label = { Text("@$l") })
+            }
+        }
+        if (!writable) {
+            Text("Read-only: you can view this project but not change it.", style = MaterialTheme.typography.bodySmall)
+        }
+        savedNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(enabled = writable && dirty && contentOk, onClick = { save() }) { Text("Save") }
+            androidx.compose.material3.OutlinedButton(
+                enabled = writable,
+                onClick = { confirmDelete = true },
+            ) { Text("Delete") }
+        }
+        if (subtasks.isNotEmpty()) {
+            Text("Sub-tasks (${subtasks.count { it.isCompleted }}/${subtasks.size})", style = MaterialTheme.typography.titleSmall)
+            for (sub in subtasks) TaskRow(sub, state, today, showProject = false, onOpen = onOpen)
+        } else if (task.parentId == null) {
+            Text("No sub-tasks. Add one from quick add with this task open? (Sub-task creation lands with the board slice.)", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    if (confirmDelete) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this task?") },
+            text = { Text("“${task.content.take(80)}” and its ${subtasks.size} sub-task(s) will be deleted on all devices.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    app.send("task_delete", task.id)
+                    onBack()
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
     }
 }
 
