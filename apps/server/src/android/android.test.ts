@@ -24,7 +24,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Android discovery and asset links', () => {
       app: 'bokydo',
       publicUrl: BASE,
       oauth: { issuer: BASE, tokenEndpoint: `${BASE}/oauth/token` },
-      android: { clientId: ANDROID_CLIENT_ID, redirectUri: ANDROID_REDIRECT_URI, scope: 'sync' },
+      android: {
+        clientId: ANDROID_CLIENT_ID,
+        redirectUri: ANDROID_REDIRECT_URI,
+        scope: 'sync ai:use tasks:write',
+      },
       api: { sync: `${BASE}/api/v1/sync` },
     });
   });

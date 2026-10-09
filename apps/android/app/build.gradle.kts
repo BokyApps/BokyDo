@@ -54,4 +54,6 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
+    // Ramble's mic glyph lives in the extended set (BOM pins the version).
+    implementation(libs.androidx.compose.material.icons.extended)
 }

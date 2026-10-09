@@ -49,7 +49,11 @@ export function registerAndroidRoutes(
         tokenEndpoint: `${base}/oauth/token`,
         revocationEndpoint: `${base}/oauth/revoke`,
       },
-      android: { clientId: ANDROID_CLIENT_ID, redirectUri: ANDROID_REDIRECT_URI, scope: 'sync' },
+      android: {
+        clientId: ANDROID_CLIENT_ID,
+        redirectUri: ANDROID_REDIRECT_URI,
+        scope: 'sync ai:use tasks:write',
+      },
       api: { sync: `${base}/api/v1/sync`, events: `${base}/api/v1/sync/events` },
     };
     return reply.header('cache-control', 'no-cache').send(discovery);

@@ -99,6 +99,7 @@ sealed interface Route {
     data object Browse : Route
     data class Project(val id: String) : Route
     data class TaskDetail(val id: String) : Route
+    data object Ramble : Route
     data object Settings : Route
 }
 
@@ -136,6 +137,7 @@ fun AppShell() {
         Route.Settings -> "Settings"
         is Route.Project -> state.projects[route.id]?.name ?: "Project"
         is Route.TaskDetail -> state.tasks[route.id]?.content?.take(30) ?: "Task"
+        Route.Ramble -> "Ramble"
     }
     val defaults = when (route) {
         is Route.Project -> route.id
@@ -153,6 +155,9 @@ fun AppShell() {
                         }
                     }
                 },
+                actions = {
+                    if (route != Route.Ramble) RambleAction { go(Route.Ramble) }
+                },
             )
         },
         bottomBar = {
@@ -165,7 +170,7 @@ fun AppShell() {
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && route !is Route.TaskDetail && defaults != null) {
+            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble && defaults != null) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
             }
         },
@@ -178,6 +183,7 @@ fun AppShell() {
                 Route.Browse -> BrowseList(state) { go(it) }
                 is Route.Project -> ProjectList(state, route.id, today) { go(Route.TaskDetail(it)) }
                 is Route.TaskDetail -> TaskDetailScreen(state, route.id, today, { go(Route.TaskDetail(it)) }, { stack = stack.dropLast(1) })
+                Route.Ramble -> RambleScreen(state, today)
                 Route.Settings -> SettingsScreen()
             }
         }
@@ -243,6 +249,9 @@ private fun BrowseList(state: AppState, open: (Route) -> Unit) {
         }
         if (tree.isEmpty()) item { Text("No projects yet.", Modifier.padding(16.dp)) }
         item { HorizontalDivider() }
+        item {
+            Text("Ramble (voice → tasks)", Modifier.fillMaxWidth().clickable { open(Route.Ramble) }.padding(16.dp))
+        }
         item {
             Text("Settings", Modifier.fillMaxWidth().clickable { open(Route.Settings) }.padding(16.dp))
         }
