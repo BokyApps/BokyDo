@@ -589,19 +589,19 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0011, T108–T114): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
 | W11e ✅ | Export everything, scheduled encrypted backups + restore, account deletion | Opus | **Done 2026-10-07** (ADR 0013, migration 0015) | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
-| W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Best after UI churn from W7–W11 settles; caching must not break the push service worker | W10, W11 |
+| W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Design decided 2026-10-09 (ADR 0022: one hand-written worker, shell-only cache, opt-in IndexedDB copy, wipe on sign-out); ready | W10, W11 |
 | W12b ✅ | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | **Done 2026-10-07** ([docs/accessibility.md](accessibility.md)): axe and keyboard audit passes (`docker/a11y-audit.mjs`, repeat after big UI changes); real screen-reader testing still open for W13 | Everything |
-| W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Do after most UI exists (late W11) to avoid churn | Server work |
+| W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Design decided 2026-10-09 (ADR 0023: i18next, JSON v4, Weblate); plumbing ready, extraction per area | Server work |
 | W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |
 | M1 ✅ | Admin-managed push allow-list for UnifiedPush/self-hosted push | Sonnet | **Done 2026-10-07** (`push.allowedHosts`, ADR 0005 update) | A1, A2 |
 | M2 | Multi-replica support (LISTEN/NOTIFY pokes, shared rate limiters) | Opus | Owner decision to support it; not needed for v1 | Everything |
 | A1 ✅ | Android foundation and auth: discovery, OAuth PKCE via Custom Tabs, Keystore token storage, Room + sync client, background sync | Opus | **Done 2026-10-07** (ADR 0010; SQLite instead of Room) | Web W11–W12 |
 | A2 | Android core screens, themes, time-zone picker, quick add (parser decided: ADR 0016, `JavaScriptSandbox`) | Sonnet | A1 | A4 later screens, web work |
 | A3 ✅ | Android notifications: local exact-alarm reminders, UnifiedPush, actions | Opus | **Done 2026-10-07** (ADR 0015, migration 0016) | A2, A4 |
-| A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A1–A2 | A3, A5 |
+| A4 | Widgets, Quick Settings tile, shortcuts, share target | Sonnet | A4a (share target, tile, shortcuts): A1 and A2 slice 1, ready. A4b (widgets): A2 themes | A3, A5 |
 | A5 | Ramble on Android | Sonnet | W8, A1 | A4 |
 | A6 | Android security hardening (MobSF, MASVS) | Opus | A1–A5 | — |
-| A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A6 | — |
+| A7 | Android release: reproducible builds, F-Droid, signed APKs | Sonnet; metadata to DeepSeek | A7a (reproducible build check, F-Droid metadata): ready. A7b (signing, release workflow): A6 | — |
 
 **Running work in parallel.** Put each concurrent task in its own git worktree or branch, merge one at a time, and run `pnpm check` after each merge. Two agents must not edit the same migration sequence at once: only one task adds a Drizzle migration at a time, and the other rebases and renumbers. Good pairings:
 - Now: **W11a Todoist import** (Opus) ‖ **A2 Android screens** (Sonnet) ‖ **W7c settings UI** (DeepSeek) ‖ **W8 Ramble** (Opus + Sonnet, unblocked by W7b); **R2** (DeepSeek) on/after 2026-10-07. (R1, R3, W7a, W7b, W10a, W10c, W11b, W11d, W11e, W12b and A1 are done and on main.)
