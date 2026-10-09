@@ -163,3 +163,27 @@ export interface TriageSuggestion {
 export interface TriageResponse {
   suggestions: TriageSuggestion[];
 }
+
+// ---- Eval harness ----
+
+/** Features the eval harness has cases for. */
+export const EVAL_FEATURES = ['assist.filter', 'assist.task', 'ramble.extract'] as const;
+export type EvalFeature = (typeof EVAL_FEATURES)[number];
+
+export const evalRequestSchema = z.object({ feature: z.enum(EVAL_FEATURES) }).strict();
+export type EvalRequest = z.input<typeof evalRequestSchema>;
+
+export interface EvalCaseResult {
+  name: string;
+  passed: boolean;
+  /** What was wrong, for a failed case. */
+  detail: string | null;
+  ms: number;
+}
+
+export interface EvalResponse {
+  feature: EvalFeature;
+  passed: number;
+  total: number;
+  cases: EvalCaseResult[];
+}

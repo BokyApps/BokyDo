@@ -1,6 +1,6 @@
-# ADR 0021: Task Assist, Filter Assist, Ask your tasks, reports and triage
+# ADR 0021: Task Assist, Filter Assist, Ask your tasks, reports, triage and evals
 
-- Status: Accepted (2026-10-08), W9 slices 1 to 4
+- Status: Accepted (2026-10-08), W9 slices 1 to 5
 
 ## Context
 
@@ -78,8 +78,17 @@ their collaborators, so it is untrusted input to the model (PLAN §5.5).
   per-user threshold needs that case excluded and the decision log the plan asks for; both are
   for a later slice.
 
+## Eval harness (slice 5)
+
+- `POST /api/v1/assist/eval` runs four fixed cases for Filter Assist, Task Assist or Ramble
+  against the model the user has routed for that feature, through the same prompts and checks
+  as the real feature (the model call and its validation are split from the data access for
+  this), and reports each case as passed or what was wrong. Two cases per feature check that
+  instructions inside the data are ignored. Fixtures are synthetic, with a fixed date: no user
+  data is sent. Each case is an ordinary metered call; 10 runs an hour per user; session only.
+
 ## Consequences
 
-- No auto-apply and no decision log yet (see triage); the eval harness is a later W9 slice.
+- No auto-apply and no decision log yet (see triage).
 - Filter Assist needs a model good enough to write the language from the prompt's summary;
   small local models may need the correction round more often.

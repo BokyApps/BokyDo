@@ -36,7 +36,7 @@ export class AssistNotFoundError extends Error {}
 /** The model's answer could not be turned into something usable (after a correction round). */
 export class AssistUnusableError extends Error {}
 
-interface DateContext {
+export interface DateContext {
   now: LocalNow;
   timeZone: string;
   prefs: Preferences;
@@ -128,18 +128,45 @@ export async function taskAssist(
   if (!found) throw new AssistNotFoundError();
   const ctx = await dateContext(db, user.id, defaultTimeZone);
   const { task, project, children } = found;
-  const prompt = [
-    `Now: ${today(ctx)}.`,
-    '<task>',
-    dataJson({
+  return suggestForTask(
+    ai,
+    user,
+    {
       title: task.content,
-      description: task.description.slice(0, 4000),
+      description: task.description,
       project: project?.isInbox ? 'Inbox' : (project?.name ?? ''),
       due: task.due?.string ?? null,
       priority: task.priority,
       labels: task.labels,
       existingSubtasks: children,
-    }),
+    },
+    ctx,
+    signal,
+  );
+}
+
+export interface TaskForAssist {
+  title: string;
+  description: string;
+  project: string;
+  due: string | null;
+  priority: number;
+  labels: string[];
+  existingSubtasks: string[];
+}
+
+/** The model call and the checks on its answer, with no data access (the eval harness uses it). */
+export async function suggestForTask(
+  ai: AiService,
+  user: AiUser,
+  task: TaskForAssist,
+  ctx: DateContext,
+  signal?: AbortSignal,
+): Promise<TaskAssistSuggestion> {
+  const prompt = [
+    `Now: ${today(ctx)}.`,
+    '<task>',
+    dataJson({ ...task, description: task.description.slice(0, 4000) }),
     '</task>',
   ].join('\n');
   const { value } = await ai.chatJson(
@@ -154,7 +181,7 @@ export async function taskAssist(
     },
     signal ? { signal } : {},
   );
-  const existing = new Set(children.map((c) => c.trim().toLowerCase()));
+  const existing = new Set(task.existingSubtasks.map((c) => c.trim().toLowerCase()));
   const seen = new Set<string>();
   const subtasks = value.subtasks.flatMap((s) => {
     const content = oneLine(s.content, 500);
@@ -165,7 +192,7 @@ export async function taskAssist(
   });
   const content = value.content ? oneLine(value.content, 500) : '';
   return {
-    content: content && content !== task.content ? content : null,
+    content: content && content !== task.title ? content : null,
     subtasks,
     due: readDue(value.due, ctx),
     priority: value.priority !== null && value.priority !== task.priority ? value.priority : null,
@@ -240,6 +267,38 @@ export async function filterAssist(
     };
   });
   const ctx = await dateContext(db, user.id, defaultTimeZone);
+  const { query, explanation } = await writeFilterQuery(ai, user, names, text, ctx, signal);
+  const run = await db.transaction((tx) =>
+    runFilter(tx, user.id, query, { limit: 200, defaultTimeZone, scope }),
+  );
+  if (!run.ok) throw new AssistUnusableError(run.error.message);
+  return {
+    query,
+    explanation,
+    warnings: run.warnings.slice(0, 20),
+    matches: run.lists[0]?.tasks.length ?? 0,
+  };
+}
+
+export interface FilterNames {
+  projects: string[];
+  sections: string[];
+  labels: string[];
+  people: string[];
+}
+
+/**
+ * The model call, the parser check and its one correction round, with no data access (the eval
+ * harness uses it). Throws AssistUnusableError when no valid query comes back.
+ */
+export async function writeFilterQuery(
+  ai: AiService,
+  user: AiUser,
+  names: FilterNames,
+  text: string,
+  ctx: DateContext,
+  signal?: AbortSignal,
+): Promise<{ query: string; explanation: string }> {
   const prompt = [
     '<context>',
     `Now: ${today(ctx)}.`,
@@ -279,16 +338,7 @@ export async function filterAssist(
     problem = queryProblem(query);
     if (problem) throw new AssistUnusableError(problem);
   }
-  const run = await db.transaction((tx) =>
-    runFilter(tx, user.id, query, { limit: 200, defaultTimeZone, scope }),
-  );
-  if (!run.ok) throw new AssistUnusableError(run.error.message);
-  return {
-    query,
-    explanation: oneLine(value.explanation, 600),
-    warnings: run.warnings.slice(0, 20),
-    matches: run.lists[0]?.tasks.length ?? 0,
-  };
+  return { query, explanation: oneLine(value.explanation, 600) };
 }
 
 function queryProblem(query: string): string | null {

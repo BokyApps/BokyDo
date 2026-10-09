@@ -1,6 +1,8 @@
 import {
   askConfirmSchema,
   askRequestSchema,
+  evalRequestSchema,
+  type EvalResponse,
   filterAssistRequestSchema,
   reportRequestSchema,
   triageRequestSchema,
@@ -20,6 +22,7 @@ import type { SyncService } from '../sync/sync-service.js';
 import { ask, confirm, type AskDeps } from './ask.js';
 import { report } from './report.js';
 import { triage } from './triage.js';
+import { EvalNotConfiguredError, runEval } from './eval.js';
 import { AssistNotFoundError, AssistUnusableError, filterAssist, taskAssist } from './assist.js';
 
 const perMinute = (max: number) =>
@@ -37,6 +40,13 @@ export function registerAssistRoutes(
   const limiter = perMinute(30);
   const asks = perMinute(20);
   const confirms = perMinute(60);
+  // Each run is a handful of model calls on the user's own routing.
+  const evals = new RateLimiter({
+    windowMs: 3600_000,
+    maxPerWindow: 10,
+    freeFailures: 0,
+    maxBackoffMs: 0,
+  });
   const askDeps = (): AskDeps => ({
     db,
     sync,
@@ -187,5 +197,26 @@ export function registerAssistRoutes(
     const done = await confirm(askDeps(), me.id, body.tool, body.args);
     if (!done.ok) return reply.status(422).send({ error: 'not_done', message: done.message });
     return { result: done.result };
+  });
+
+  /** The eval harness: fixed synthetic cases against the model routed for a feature. */
+  app.post('/api/v1/assist/eval', { config: { access: 'user' } }, async (req, reply) => {
+    const body = parseBody(evalRequestSchema, req.body, reply);
+    if (!body) return;
+    const me = requireSession(req).user;
+    if (!evals.attempt(me.id).allowed) return tooMany(reply);
+    try {
+      const cases = await runEval(ai, { id: me.id, isAdmin: me.isAdmin }, body.feature);
+      return {
+        feature: body.feature,
+        passed: cases.filter((c) => c.passed).length,
+        total: cases.length,
+        cases,
+      } satisfies EvalResponse;
+    } catch (err) {
+      if (err instanceof EvalNotConfiguredError)
+        return reply.status(409).send({ error: 'ai_not_configured', feature: body.feature });
+      return aiError(err, reply);
+    }
   });
 }
