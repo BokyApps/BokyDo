@@ -1,6 +1,6 @@
-# ADR 0021: Task Assist, Filter Assist, Ask your tasks and reports
+# ADR 0021: Task Assist, Filter Assist, Ask your tasks, reports and triage
 
-- Status: Accepted (2026-10-08), W9 slices 1 to 3b
+- Status: Accepted (2026-10-08), W9 slices 1 to 4
 
 ## Context
 
@@ -66,9 +66,20 @@ their collaborators, so it is untrusted input to the model (PLAN §5.5).
   budget; no model or no budget skips the day. The email says it was written by AI and carries
   its own one-click unsubscribe topic.
 
+## Inbox triage (slice 4, decision models)
+
+- `POST /api/v1/assist/triage` takes up to 20 task ids and suggests, per task, a project, labels,
+  a priority, a confidence and a reason: the decision capability of PLAN §5.4 through its LLM
+  fallback (on Task Assist's model; no Jev adapter yet). The model chooses among opaque keys
+  (`p3`, `l2`, `t1`) that we hand out for writable projects, the user's existing labels and the
+  tasks; anything else in its answer is ignored. If any task isn't the caller's, none is sent.
+- **Suggestions only, no auto-apply yet.** Moving a task into a shared project shows it to other
+  people, so a model talked into it by task text could leak a private task. Auto-apply above a
+  per-user threshold needs that case excluded and the decision log the plan asks for; both are
+  for a later slice.
+
 ## Consequences
 
-- No "auto-apply": the decision-model features (§5.4) with confidence thresholds are later W9
-  slices, as is the eval harness.
+- No auto-apply and no decision log yet (see triage); the eval harness is a later W9 slice.
 - Filter Assist needs a model good enough to write the language from the prompt's summary;
   small local models may need the correction round more often.

@@ -134,3 +134,32 @@ export interface ReportResponse {
   counts: { overdue: number; today: number; upcoming: number; completed: number };
   generatedAt: string;
 }
+
+// ---- Inbox triage (decision models, PLAN §5.4) ----
+
+export const TRIAGE_LIMITS = { tasks: 20 } as const;
+
+export const triageRequestSchema = z
+  .object({ taskIds: z.array(z.uuid()).min(1).max(TRIAGE_LIMITS.tasks) })
+  .strict()
+  .refine((r) => new Set(r.taskIds).size === r.taskIds.length, 'A task is listed twice');
+export type TriageRequest = z.input<typeof triageRequestSchema>;
+
+/** Where a task probably belongs. Suggestions only: the user applies them. */
+export interface TriageSuggestion {
+  taskId: string;
+  /** A project the user can add tasks to; null: leave it where it is. */
+  projectId: string | null;
+  /** Names of the user's existing labels only. */
+  labels: string[];
+  /** 1 is the most urgent; null: no change suggested. */
+  priority: number | null;
+  /** The model's own confidence, 0 to 1 (uncalibrated for LLMs). */
+  confidence: number;
+  /** One short sentence. Plain text. */
+  why: string;
+}
+
+export interface TriageResponse {
+  suggestions: TriageSuggestion[];
+}

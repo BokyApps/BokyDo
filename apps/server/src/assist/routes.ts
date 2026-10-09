@@ -3,6 +3,7 @@ import {
   askRequestSchema,
   filterAssistRequestSchema,
   reportRequestSchema,
+  triageRequestSchema,
   taskAssistRequestSchema,
   type FilterAssistResponse,
   type TaskAssistResponse,
@@ -18,6 +19,7 @@ import type { SettingsService } from '../settings/settings-service.js';
 import type { SyncService } from '../sync/sync-service.js';
 import { ask, confirm, type AskDeps } from './ask.js';
 import { report } from './report.js';
+import { triage } from './triage.js';
 import { AssistNotFoundError, AssistUnusableError, filterAssist, taskAssist } from './assist.js';
 
 const perMinute = (max: number) =>
@@ -124,6 +126,32 @@ export function registerAssistRoutes(
           settings.get('instance.defaultTimezone'),
           abortOnClose(reply),
         );
+      } catch (err) {
+        if (err instanceof AssistNotFoundError)
+          return reply.status(404).send({ error: 'not_found' });
+        return aiError(err, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/api/v1/assist/triage',
+    { config: { access: 'user', scopes: ['ai:use', 'tasks:read'] } },
+    async (req, reply) => {
+      const body = parseBody(triageRequestSchema, req.body, reply);
+      if (!body) return;
+      const me = requireUser(req);
+      if (!limiter.attempt(me.id).allowed) return tooMany(reply);
+      try {
+        const suggestions = await triage(
+          db,
+          ai,
+          { id: me.id, isAdmin: me.isAdmin },
+          body.taskIds,
+          callerScope(req),
+          abortOnClose(reply),
+        );
+        return { suggestions };
       } catch (err) {
         if (err instanceof AssistNotFoundError)
           return reply.status(404).send({ error: 'not_found' });
