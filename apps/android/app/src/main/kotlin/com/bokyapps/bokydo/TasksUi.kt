@@ -105,7 +105,7 @@ sealed interface Route {
 /** The signed-in app: task lists, quick add, browse and settings. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppShell() {
+fun AppShell(openQuickAdd: Boolean = false, quickAddText: String = "", startRoute: Route = Route.Today) {
     val app = LocalContext.current.app
     val version by app.store.version.collectAsState()
     // Decoding reads SQLite and parses JSON: off the main thread, showing the last state meanwhile.
@@ -118,8 +118,8 @@ fun AppShell() {
             clock++
         }
     }
-    var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
-    var adding by remember { mutableStateOf(false) }
+    var stack by remember { mutableStateOf(listOf<Route>(startRoute)) }
+    var adding by remember { mutableStateOf(openQuickAdd) }
     val route = stack.last()
     val today = remember(state.user?.timeZone, clock) { QuickAdd.localNow(state.user?.timeZone ?: "UTC").first }
 
@@ -185,7 +185,7 @@ fun AppShell() {
 
     if (adding && defaults != null) {
         ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            QuickAddSheet(state, defaults, today)
+            QuickAddSheet(state, defaults, today, initialText = quickAddText)
         }
     }
 }
@@ -470,10 +470,10 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
  * in the JavaScript sandbox; where that isn't available, the text is added as it is.
  */
 @Composable
-private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String) {
+private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String, initialText: String = "") {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(initialText.take(2000)) }
     var disabled by remember { mutableStateOf(setOf<String>()) }
     var parsed by remember { mutableStateOf(QuickAdd.Parsed.plain("")) }
     var parsedFor by remember { mutableStateOf("") }

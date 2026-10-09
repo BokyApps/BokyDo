@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BokyDo</string>
+    <!-- Launcher shortcuts and the Quick Settings tile (all new strings live here for Weblate). -->
+    <string name="shortcut_add">Add task</string>
+    <string name="shortcut_add_long">Add a task with quick add</string>
+    <string name="shortcut_today">Today</string>
+    <string name="shortcut_today_long">Open today\'s list</string>
+    <string name="tile_quick_add">Add task</string>
 </resources>

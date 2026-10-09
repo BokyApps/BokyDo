@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,20 +56,54 @@ import java.util.Date
  * shows the account, sync status and notifications.
  */
 class MainActivity : ComponentActivity() {
+    /** The intent that opened us (launcher, share, tile, shortcut); tiles and shortcuts re-send it. */
+    private val launch = mutableStateOf<Intent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        launch.value = intent
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) {
                     val screen by app.screen.collectAsState()
-                    when (val s = screen) {
-                        is AppScreen.Connect -> ConnectScreen(s.message)
-                        is AppScreen.WaitingForBrowser -> WaitingScreen(s.host)
-                        AppScreen.Home -> AppShell()
+                    // A new tile/shortcut/share intent restarts the shell so it opens where asked.
+                    key(launch.value) {
+                        when (val s = screen) {
+                            is AppScreen.Connect -> ConnectScreen(s.message)
+                            is AppScreen.WaitingForBrowser -> WaitingScreen(s.host)
+                            AppScreen.Home -> {
+                                val parsed = parseLaunch(launch.value)
+                                AppShell(openQuickAdd = parsed.quickAdd, quickAddText = parsed.text, startRoute = parsed.route)
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        launch.value = intent
+    }
+}
+
+/** Where a launcher, share, tile or shortcut intent wants to land. */
+private data class Launch(val route: Route, val quickAdd: Boolean, val text: String)
+
+private fun parseLaunch(intent: Intent?): Launch {
+    if (intent == null) return Launch(Route.Today, false, "")
+    if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+        // Shared text is untrusted: plain text, capped, still needs the user to tap Add.
+        val shared = com.bokyapps.bokydo.core.sanitizeSharedText(intent.getCharSequenceExtra(Intent.EXTRA_TEXT))
+        if (shared != null) return Launch(Route.Today, true, shared)
+        return Launch(Route.Today, false, "")
+    }
+    return when (intent.action) {
+        "com.bokyapps.bokydo.QUICK_ADD" -> Launch(Route.Today, true, "")
+        "com.bokyapps.bokydo.SHOW_TODAY" -> Launch(Route.Today, false, "")
+        else -> Launch(Route.Today, false, "")
     }
 }
 
