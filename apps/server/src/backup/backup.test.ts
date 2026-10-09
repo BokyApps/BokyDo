@@ -284,7 +284,8 @@ describe.skipIf(!TEST_DATABASE_URL)('backups and restore', { timeout: 60_000 }, 
         await old.sql`insert into drizzle.__drizzle_migrations (hash, created_at) values (${m.hash}, ${m.folderMillis})`;
       }
       const uid = newId();
-      await old.db.insert(users).values({ id: uid, username: 'oldtimer', passwordHash: 'x' });
+      // Raw SQL: the current schema may have columns the older one doesn't.
+      await old.sql`insert into users (id, username, password_hash) values (${uid}, 'oldtimer', 'x')`;
       const oldService = new BackupService({
         sql: old.sql,
         dataDir: t.dataDir,
