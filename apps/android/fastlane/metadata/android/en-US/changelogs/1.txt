@@ -1,0 +1,2 @@
+First F-Droid release: core lists, quick add, task detail, Ramble voice entry,
+share target, widgets groundwork. Unsigned reproducible build.

@@ -1,0 +1,47 @@
+name: Android reproducible build
+
+# A7a: the F-Droid recipe builds from source, so the published APK must be rebuildable
+# byte for byte. This builds :app:assembleRelease (unsigned) twice, in two clean
+# checkouts on the same runner image, and fails showing diffoscope output on mismatch.
+# Kept as its own file so the change stays out of the contended CI/security workflows.
+on:
+  push:
+    branches: [main]
+    paths: ['apps/android/**', '.github/workflows/android-reproducible.yml']
+  pull_request:
+    paths: ['apps/android/**', '.github/workflows/android-reproducible.yml']
+
+jobs:
+  reproducible:
+    name: Two clean builds, byte-identical APKs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: build-a
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: build-b
+      # The runner image ships JDK 17/21 and the Android SDK (ANDROID_HOME); no extra actions.
+      - run: echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+        working-directory: build-a/apps/android
+      - run: echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+        working-directory: build-b/apps/android
+      - run: ./gradlew --no-daemon :app:assembleRelease
+        working-directory: build-a/apps/android
+      - run: ./gradlew --no-daemon :app:assembleRelease
+        working-directory: build-b/apps/android
+      - run: |
+          A=build-a/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          B=build-b/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          sha256sum "$A" "$B"
+          if cmp -s "$A" "$B"; then
+            echo "Reproducible: both APKs are byte-identical."
+          else
+            echo "NOT reproducible: installing diffoscope for the details."
+            sudo apt-get update -qq && sudo apt-get install -qq -y diffoscope
+            diffoscope "$A" "$B" || true
+            exit 1
+          fi
