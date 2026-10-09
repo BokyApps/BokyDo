@@ -88,6 +88,8 @@ export const preferencesSchema = z
   .object({
     /** null until the user picks one (clients offer the detected zone). */
     timezone: timeZoneSchema.nullable(),
+    /** 'auto' follows the browser; otherwise a BCP 47 tag like "en" or "af" (W12c, ADR 0023). */
+    language: z.union([z.literal('auto'), z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/)]),
     weekStart: z.enum(['monday', 'sunday', 'saturday']),
     timeFormat: z.enum(['24h', '12h']),
     dateFormat: z.enum(['dmy', 'mdy', 'ymd']),
@@ -104,6 +106,7 @@ export type Preferences = z.infer<typeof preferencesSchema>;
 
 export const DEFAULT_PREFERENCES: Preferences = {
   timezone: null,
+  language: 'auto',
   weekStart: 'monday',
   timeFormat: '24h',
   dateFormat: 'dmy',

@@ -35,6 +35,9 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The translation catalogue must match what the screens use (W12c, ADR 0023).
+      - run: pnpm --filter @bokydo/web i18n:extract
+      - run: git diff --exit-code -- apps/web/src/locales/en.json
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck

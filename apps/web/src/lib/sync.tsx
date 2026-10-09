@@ -19,6 +19,7 @@ import {
 } from 'react';
 import { api } from './api.js';
 import { applyAppearance, watchSystemMode } from './appearance.js';
+import { rememberLanguage, setLanguage } from '../i18n.js';
 import { useToast } from './toasts.js';
 
 const SyncContext = createContext<SyncStore | null>(null);
@@ -120,6 +121,11 @@ export function PreferenceEffects() {
     applyAppearance(prefs.appearance);
     return watchSystemMode(() => prefs.appearance);
   }, [prefs]);
+  // The synced language wins over this device's remembered one (W12c, ADR 0023).
+  useEffect(() => {
+    if (prefs?.language)
+      void setLanguage(prefs.language).then(() => rememberLanguage(prefs.language));
+  }, [prefs?.language]);
   useEffect(() => {
     if (state.user && prefs && prefs.timezone === null) {
       const detected = detectTimeZone();
