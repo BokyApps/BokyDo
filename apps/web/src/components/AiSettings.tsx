@@ -20,6 +20,7 @@ import { parseHeaderLines } from '../lib/ai-headers.js';
 import { errorMessage } from '../lib/messages.js';
 import { adminSettingsQuery } from '../lib/queries.js';
 import { Alert, Button, Card, Checkbox, SelectField, TextField } from './ui.js';
+import { AiEvalPanel } from './AiEvalPanel.js';
 
 /** The same panels serve your own keys and the instance's; only the endpoints differ. */
 type Scope = 'user' | 'instance';
@@ -149,6 +150,7 @@ export function AiSettings() {
       )}
       <CredentialsPanel scope="user" canWrite={userKeys} signIn={signIn} />
       <RoutingPanel scope="user" canWrite={userKeys} />
+      <AiEvalPanel />
       <UsagePanel />
     </div>
   );
