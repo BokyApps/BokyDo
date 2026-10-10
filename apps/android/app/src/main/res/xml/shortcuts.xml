@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher shortcuts: Add task opens the quick-add sheet, Today opens the list.
+     Both land in MainActivity, which routes to sign-in first when signed out. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="add"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/shortcut_add"
+        android:shortcutLongLabel="@string/shortcut_add_long">
+        <intent
+            android:action="com.bokyapps.bokydo.QUICK_ADD"
+            android:targetPackage="com.bokyapps.bokydo"
+            android:targetClass="com.bokyapps.bokydo.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="today"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/shortcut_today"
+        android:shortcutLongLabel="@string/shortcut_today_long">
+        <intent
+            android:action="com.bokyapps.bokydo.SHOW_TODAY"
+            android:targetPackage="com.bokyapps.bokydo"
+            android:targetClass="com.bokyapps.bokydo.MainActivity" />
+    </shortcut>
+</shortcuts>
