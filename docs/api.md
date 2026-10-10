@@ -158,6 +158,36 @@ Both can call a REST API with an `Authorization: Bearer …` header. Set the bas
 `https://your-instance/api/v1` and, for n8n, import `/api/docs/openapi.json` as the node's
 definition.
 
+## AI features (suggestions over REST)
+
+The suggestion endpoints below work with personal access tokens, so a connector or script can
+use them without a browser session. They only suggest: nothing is written. Apply what you
+accept through `/sync` or the REST resources above. The model used is the token owner's own
+AI routing, and a project-limited token only sees its projects (ADR 0019).
+
+| Endpoint                                            | Scopes needed              | Request (JSON unless noted)                                                             | Response                                                                                                                                |
+| --------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/assist/task`                          | `ai:use` + `tasks:read`    | `{ "taskId": "uuid" }`                                                                  | `{ "suggestion": { "content", "subtasks", "due", "priority", "why" } }`                                                                 |
+| `POST /api/v1/assist/filter`                        | `ai:use` + `projects:read` | `{ "text": "overdue work" }` (1–500 chars)                                              | `{ "query", "explanation", "warnings", "matches" }`                                                                                     |
+| `POST /api/v1/assist/report`                        | `ai:use` + `tasks:read`    | `{ "kind": "day" }`, `"week"`, or `{ "kind": "project", "projectId": "uuid" }`          | `{ "report", "counts", "generatedAt" }`                                                                                                 |
+| `POST /api/v1/assist/triage`                        | `ai:use` + `tasks:read`    | `{ "taskIds": ["uuid", …] }` (1–20, no repeats)                                         | `{ "suggestions": [{ "taskId", "projectId", "labels", "priority", "confidence", "why" }] }`                                             |
+| `POST /api/v1/ramble/transcribe?seconds=&language=` | `ai:use`                   | Raw `audio/*` chunk (≤ 5 MiB, ≤ 60 s)                                                   | `{ "text" }`                                                                                                                            |
+| `POST /api/v1/ramble/extract`                       | `ai:use`                   | `{ "text": "…", "draft": […] }` (text ≤ 20 000 chars, ≤ 50 draft tasks)                 | `{ "draft": [{ …task, "resolved": { "projectId", "sectionId", "due", "labels", "assigneeId", "issues" } }], "ops": [{ "op", "ref" }] }` |
+| `POST /api/v1/ramble/commit`                        | `tasks:write`              | `{ "tasks": […] }` (1–50 reviewed draft tasks; `projectId` overrides the named project) | `201 { "created": [{ "ref", "taskId" }] }` (all or nothing)                                                                             |
+
+Shapes match the Zod schemas in `packages/shared/src/assist.ts` and `packages/shared/src/ramble.ts`.
+
+Rate limits are per user: 30 requests/min across the four `assist/*` suggestion endpoints,
+and separately 40/min for transcriptions, 30/min for extractions and 30/min for commits.
+Common errors: `404 not_found` (unknown task/project), `409 ai_not_configured`,
+`422 ai_unusable` / `ai_refused`, `429 ai_budget_exceeded` / `too_many_requests`,
+`502 ai_provider_error`. Transcriptions also answer `400 validation_failed`,
+`413 audio_too_long` and `415 unsupported_media_type`.
+
+Ask your tasks (`/assist/ask`, `/assist/ask/confirm`) and the eval harness (`/assist/eval`)
+are session-only: they declare no token scopes, so a bearer token gets
+`403 token_not_accepted` there.
+
 ## Security notes
 
 - Tokens are never sent to the browser and never appear in logs or error bodies.
