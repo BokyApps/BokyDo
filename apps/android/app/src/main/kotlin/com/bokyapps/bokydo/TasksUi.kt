@@ -105,7 +105,11 @@ sealed interface Route {
 /** The signed-in app: task lists, quick add, browse and settings. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppShell(openQuickAdd: Boolean = false, quickAddText: String = "", startRoute: Route = Route.Today) {
+fun AppShell(
+    openQuickAdd: Boolean = false,
+    quickAddText: String = "",
+    quickAddDetails: String = "",
+) {
     val app = LocalContext.current.app
     val version by app.store.version.collectAsState()
     // Decoding reads SQLite and parses JSON: off the main thread, showing the last state meanwhile.
@@ -118,7 +122,8 @@ fun AppShell(openQuickAdd: Boolean = false, quickAddText: String = "", startRout
             clock++
         }
     }
-    var stack by remember { mutableStateOf(listOf<Route>(startRoute)) }
+    // Every entry point (launcher, share, tile, shortcut) opens Today.
+    var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
     var adding by remember { mutableStateOf(openQuickAdd) }
     val route = stack.last()
     val today = remember(state.user?.timeZone, clock) { QuickAdd.localNow(state.user?.timeZone ?: "UTC").first }
@@ -185,7 +190,7 @@ fun AppShell(openQuickAdd: Boolean = false, quickAddText: String = "", startRout
 
     if (adding && defaults != null) {
         ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            QuickAddSheet(state, defaults, today, initialText = quickAddText)
+            QuickAddSheet(state, defaults, today, quickAddText, quickAddDetails)
         }
     }
 }
@@ -470,10 +475,18 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
  * in the JavaScript sandbox; where that isn't available, the text is added as it is.
  */
 @Composable
-private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String, initialText: String = "") {
+private fun QuickAddSheet(
+    state: AppState,
+    defaultProjectId: String,
+    today: String,
+    initialText: String = "",
+    initialDetails: String = "",
+) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf(initialText.take(2000)) }
+    // The rest of a share: kept, editable, and written as the task's description.
+    var details by remember { mutableStateOf(initialDetails.take(16000)) }
     var disabled by remember { mutableStateOf(setOf<String>()) }
     var parsed by remember { mutableStateOf(QuickAdd.Parsed.plain("")) }
     var parsedFor by remember { mutableStateOf("") }
@@ -503,11 +516,13 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
                 app.quickAddParser.parse(QuickAdd.input(text, state, defaultProjectId, now, disabled))
                     ?.let { QuickAdd.parseResult(it, text) } ?: QuickAdd.Parsed.plain(text)
             }
-            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs)
+            val commands =
+                QuickAdd.commands(text, current, defaultProjectId, null, today, prefs, description = details)
             if (commands.isEmpty()) return@launch
             app.sendAll(commands)
             note = "Added “${current.content.ifBlank { text.trim() }}”"
             text = ""
+            details = ""
             disabled = emptySet()
         }
     }
@@ -524,6 +539,15 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
             keyboardActions = KeyboardActions(onDone = { submit() }),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
         )
+        if (details.isNotEmpty()) {
+            OutlinedTextField(
+                value = details,
+                onValueChange = { details = it.take(16000) },
+                label = { Text("Description") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         val chips = chipsFor(parsed, state, today)
         if (chips.isNotEmpty()) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
