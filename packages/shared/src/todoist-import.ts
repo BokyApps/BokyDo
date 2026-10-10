@@ -16,9 +16,19 @@ export const TODOIST_IMPORT_LIMITS = {
   labels: 2000,
   filters: 500,
   collaborators: 2000,
+  /**
+   * Completed tasks (W11a-c1): Todoist's completed-items endpoint caps one request series at a
+   * 3-month window, so the offer is bounded and the paging is capped.
+   */
+  completedTasks: 20_000,
+  completedPages: 100,
   /** How long a connected preview stays usable before the user must connect again. */
   sessionMinutes: 30,
 } as const;
+
+/** Offer windows for completed tasks. Todoist caps a completion-date range at 3 months. */
+export const TODOIST_COMPLETED_WINDOWS = ['1m', '3m'] as const;
+export type TodoistCompletedWindow = (typeof TODOIST_COMPLETED_WINDOWS)[number];
 
 /** Todoist API tokens are 40 hex characters; allow some slack for other token kinds. */
 export const todoistConnectSchema = z
@@ -81,7 +91,14 @@ export interface TodoistPreview {
   labels: TodoistPreviewLabel[];
   filters: TodoistPreviewFilter[];
   people: TodoistPreviewPerson[];
-  totals: { projects: number; sections: number; tasks: number; comments: number };
+  totals: {
+    projects: number;
+    sections: number;
+    tasks: number;
+    comments: number;
+    /** Completed tasks found over the window read at connect (W11a-c1). */
+    completed: number;
+  };
 }
 
 /** What to do with each item. Anything not listed is skipped. */
@@ -108,6 +125,10 @@ export const todoistImportChoicesSchema = z
     labels: z.array(z.string().min(1).max(64)).max(TODOIST_IMPORT_LIMITS.labels),
     filters: z.array(z.string().min(1).max(64)).max(TODOIST_IMPORT_LIMITS.filters),
     comments: z.boolean(),
+    /** Bring the account's completed tasks over, with their real completion dates. */
+    completed: z.boolean(),
+    /** How far back to look for them (ignored when `completed` is false). */
+    completedWindow: z.enum(TODOIST_COMPLETED_WINDOWS),
     /** Todoist collaborator id → BokyDo user id (or null: leave their tasks unassigned). */
     people: z
       .array(z.object({ id: z.string().min(1).max(64), userId: idSchema.nullable() }).strict())
@@ -130,6 +151,7 @@ export interface TodoistImportWarning {
     | 'truncated'
     | 'duration'
     | 'nesting'
+    | 'completed'
     | 'failed';
   message: string;
 }
@@ -139,6 +161,9 @@ export interface TodoistImportCounts {
   merged: number;
   sections: number;
   tasks: number;
+  /** Completed tasks brought over (and those an earlier import already brought). */
+  completedTasks: number;
+  completedAlreadyImported: number;
   comments: number;
   labels: number;
   filters: number;

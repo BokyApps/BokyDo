@@ -29,6 +29,8 @@ export async function testApp(
     resolver?: Resolver;
     aiUserFetch?: OutboundFetch;
     importFetch?: OutboundFetch;
+    /** Injected clock for the Todoist importer's completed-task windows (tests only). */
+    importNow?: () => Date;
     logger?: Parameters<typeof buildApp>[0]['logger'];
   } = {},
 ): Promise<TestApp> {
@@ -44,6 +46,7 @@ export async function testApp(
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
     ...(opts.aiUserFetch ? { aiUserFetch: opts.aiUserFetch } : {}),
     ...(opts.importFetch ? { importFetch: opts.importFetch } : {}),
+    ...(opts.importNow ? { importNow: opts.importNow } : {}),
     secretsDir: dataDir,
     onRestored: () => undefined,
     ...(opts.logger ? { logger: opts.logger } : {}),

@@ -78,6 +78,8 @@ export interface AppDeps {
   aiUserFetch?: OutboundFetch;
   /** Tests only: the network the Todoist importer reads through. */
   importFetch?: OutboundFetch;
+  /** Tests only: the importer's clock, so completed-task windows are not wall-clock bound. */
+  importNow?: () => Date;
 }
 
 export interface AppServices {
@@ -253,6 +255,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     fetch: deps.importFetch ?? createOutbound(PUBLIC_ONLY, deps.resolver),
     defaultTimeZone: () => settings.get('instance.defaultTimezone'),
     log: app.log,
+    ...(deps.importNow ? { now: deps.importNow } : {}),
   });
   await importer.recover();
   const services: AppServices = {

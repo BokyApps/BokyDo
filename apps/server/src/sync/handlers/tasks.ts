@@ -78,7 +78,7 @@ function normalizeLabels(labels: string[]): string[] {
   return labels.filter((l) => !seen.has(l.toLowerCase()) && seen.add(l.toLowerCase()));
 }
 
-const dueColumns = (due: Due | null | undefined) =>
+export const dueColumns = (due: Due | null | undefined) =>
   due === undefined ? {} : { due, dueDate: due?.date ?? null };
 
 export async function taskAdd(ctx: CommandContext, args: CommandArgs<'task_add'>): Promise<void> {

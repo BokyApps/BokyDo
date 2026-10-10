@@ -2,7 +2,9 @@ import { localNow } from '@bokydo/nlp';
 import {
   resolvePreferences,
   TODOIST_IMPORT_LIMITS,
+  type TodoistCompletedWindow,
   type CommandType,
+  type Due,
   type TodoistImportChoices,
   type TodoistImportCounts,
   type TodoistImportPlanSummary,
@@ -28,15 +30,26 @@ import {
   users,
 } from '../db/schema.js';
 import type { OutboundFetch } from '../net/outbound.js';
-import type { Tx } from '../sync/context.js';
+import { allOf, nextOrderKey } from '../sync/handlers/common.js';
+import { dueColumns } from '../sync/handlers/tasks.js';
+import type { ChangeRecorder, Tx } from '../sync/context.js';
 import { visibleProjects } from '../sync/policy.js';
 import type { SyncService } from '../sync/sync-service.js';
-import { fetchTodoistSnapshot, type TodoistSnapshot } from './todoist-client.js';
+import {
+  fetchTodoistCompleted,
+  fetchTodoistSnapshot,
+  hasCompletionDate,
+  TODOIST_COMPLETED_MAX_MONTHS,
+  TodoistError,
+  type TodoistCompletedTask,
+  type TodoistSnapshot,
+} from './todoist-client.js';
 import {
   filterReferences,
   isSupportedFilter,
   mappingKey,
   planImport,
+  type CompletedStep,
   type MappingKind,
   type Plan,
   type PlannedStep,
@@ -53,6 +66,8 @@ interface Session {
   userId: string;
   snapshot: TodoistSnapshot;
   expiresAt: number;
+  /** The account's completed tasks read at connect (Todoist's capped window). */
+  completed: TodoistCompletedTask[];
 }
 
 export class ImportSessionError extends Error {
@@ -71,6 +86,8 @@ export class ImportSessionError extends Error {
 export class TodoistImporter {
   private readonly sessions = new Map<string, Session>();
   private readonly running = new Set<string>();
+  /** Sessions whose completed-items read failed: the choice stays off (W11a-c1). */
+  private readonly completedUnavailable = new Set<string>();
 
   constructor(
     private readonly deps: {
@@ -79,8 +96,14 @@ export class TodoistImporter {
       fetch: OutboundFetch;
       defaultTimeZone: () => string;
       log: FastifyBaseLogger;
+      /** Injected so the completed-task windows are testable rather than wall-clock bound. */
+      now?: () => Date;
     },
   ) {}
+
+  private now(): Date {
+    return (this.deps.now ?? (() => new Date()))();
+  }
 
   /** After a restart nothing is running: a run cut short is marked failed (re-running resumes). */
   async recover(): Promise<void> {
@@ -102,8 +125,31 @@ export class TodoistImporter {
     }
     const sessionId = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + TODOIST_IMPORT_LIMITS.sessionMinutes * 60_000;
-    this.sessions.set(sessionId, { userId, snapshot, expiresAt });
-    return this.preview(userId, sessionId, snapshot, expiresAt);
+    // The same token, still only for this read: the account's completed tasks over Todoist's
+    // capped window, so the preview can count them before the user chooses (W11a-c1).
+    // Best effort: this read is an extra for an import that may never ask for completed tasks,
+    // so a failure here leaves the count at zero and the choice off rather than failing the
+    // whole connect (the snapshot above is what the import needs).
+    const completed = await this.readCompleted(token, sessionId);
+    this.sessions.set(sessionId, { userId, snapshot, expiresAt, completed });
+    return this.preview(userId, sessionId, snapshot, expiresAt, completed);
+  }
+
+  /** Todoist's completed items over its capped window, or none when the read did not work. */
+  private async readCompleted(token: string, sessionId: string): Promise<TodoistCompletedTask[]> {
+    const until = this.now();
+    const since = new Date(until);
+    since.setMonth(since.getMonth() - TODOIST_COMPLETED_MAX_MONTHS);
+    try {
+      return await fetchTodoistCompleted(this.deps.fetch, token, { since, until });
+    } catch (err) {
+      if (err instanceof TodoistError) {
+        this.deps.log.warn({ reason: err.reason }, 'todoist completed items not read');
+        this.completedUnavailable.add(sessionId);
+        return [];
+      }
+      throw err;
+    }
   }
 
   /** Forget the snapshot now (the user closed the import). */
@@ -135,7 +181,7 @@ export class TodoistImporter {
           userId,
           source: 'todoist',
           status: 'running',
-          total: plan.steps.length,
+          total: plan.steps.length + plan.completed.length,
           warnings: [],
         });
       });
@@ -187,6 +233,16 @@ export class TodoistImporter {
 
   private async build(userId: string, choices: TodoistImportChoices) {
     const s = this.session(userId, choices.sessionId);
+    let completed: TodoistCompletedTask[] = [];
+    if (choices.completed) {
+      // The read at connect is best effort: if it did not work, the choice is refused rather
+      // than silently importing nothing (W11a-c1).
+      if (this.completedUnavailable.has(choices.sessionId))
+        throw new ImportSessionError('invalid_choice');
+      // Read at connect (Todoist's window is capped there); the choice only filters it, so
+      // further-back history is out of scope rather than a second fetch.
+      completed = withinWindow(s.completed, choices.completedWindow, this.now());
+    }
     const known = new Set(s.snapshot.projects.map((p) => p.id));
     if (choices.projects.some((p) => !known.has(p.id)))
       throw new ImportSessionError('invalid_choice');
@@ -199,6 +255,7 @@ export class TodoistImporter {
         throw new ImportSessionError('invalid_choice');
     const plan = planImport({
       snapshot: s.snapshot,
+      completed,
       choices: {
         projects: choices.projects,
         labels: choices.labels,
@@ -267,6 +324,8 @@ export class TodoistImporter {
     sessionId: string,
     snapshot: TodoistSnapshot,
     expiresAt: number,
+    /** Read at connect, so the preview can count what the completed choice would bring. */
+    completed: readonly TodoistCompletedTask[] = [],
   ): Promise<TodoistPreview> {
     const ctx = await this.context(userId, []);
     const names = new Map<string, string>(); // lower-cased name → writable BokyDo project
@@ -348,6 +407,7 @@ export class TodoistImporter {
         sections: snapshot.sections.length,
         tasks: snapshot.tasks.length,
         comments: snapshot.comments.length,
+        completed: completed.length,
       },
     };
   }
@@ -385,8 +445,48 @@ export class TodoistImporter {
         rest = rest.slice(failedAt + 1);
       }
     };
+    let writtenCompleted = 0;
+    const writeCompleted = async (steps: CompletedStep[]): Promise<void> => {
+      const one = async (step: CompletedStep): Promise<void> => {
+        try {
+          await this.deps.sync.write(async (tx, changes) => {
+            await insertCompletedTask(tx, changes, userId, step);
+            await recordMappings(tx, userId, [{ ...step, type: null }]);
+          });
+        } catch {
+          failures.push({
+            kind: 'completed',
+            message: `“${step.label.slice(0, 80)}” could not be imported as completed.`,
+          });
+        }
+        done += 1;
+        await this.progress(id, done);
+      };
+      let rest = steps;
+      while (rest.length) {
+        const chunk = rest.slice(0, CHUNK);
+        try {
+          await this.deps.sync.write(async (tx, changes) => {
+            for (const step of chunk) await insertCompletedTask(tx, changes, userId, step);
+            await recordMappings(
+              tx,
+              userId,
+              chunk.map((step) => ({ ...step, type: null })),
+            );
+          });
+          writtenCompleted += chunk.length;
+          done += chunk.length;
+          await this.progress(id, done);
+        } catch {
+          // One bad row must not stop the rest: go through this chunk one at a time.
+          for (const step of chunk) await one(step);
+        }
+        rest = rest.slice(chunk.length);
+      }
+    };
     try {
       await apply(plan.steps);
+      await writeCompleted(plan.completed);
       const counts: TodoistImportCounts = {
         ...plan.counts,
         projects: applied.get('project_add') ?? 0,
@@ -395,6 +495,7 @@ export class TodoistImporter {
         comments: applied.get('comment_add') ?? 0,
         labels: applied.get('label_add') ?? 0,
         filters: applied.get('filter_add') ?? 0,
+        completedTasks: writtenCompleted,
       };
       const warnings = [...failures, ...plan.warnings].slice(0, MAX_WARNINGS);
       await this.deps.db
@@ -419,6 +520,77 @@ export class TodoistImporter {
   private async progress(id: string, done: number): Promise<void> {
     await this.deps.db.update(imports).set({ done }).where(eq(imports.id, id));
   }
+}
+
+/** Completed tasks finished within the window the user picked (the read already capped it). */
+/**
+ * Completed tasks finished within the window the user picked. Same definition of a month as
+ * the reader (calendar months back from `now`), so the filter never drops the oldest day or
+ * two of what the read already fetched.
+ */
+function withinWindow(
+  tasks: readonly TodoistCompletedTask[],
+  window: TodoistCompletedWindow,
+  now: Date,
+): TodoistCompletedTask[] {
+  const from = new Date(now);
+  from.setMonth(from.getMonth() - (window === '1m' ? 1 : TODOIST_COMPLETED_MAX_MONTHS));
+  return tasks.filter((t) => hasCompletionDate(t) && t.completedAt.getTime() >= from.getTime());
+}
+
+/**
+ * Write one Todoist completed task as completed (W11a-c1). Mirrors the command layer's insert
+ * for the fields the command layer owns, then sets the completion from Todoist: the real
+ * `completed_at`, `completed_by` only when that person is a BokyDo user, and no activity event.
+ * A completion in the log would be a fabricated history; the import row is the record.
+ */
+async function insertCompletedTask(
+  tx: Tx,
+  changes: ChangeRecorder,
+  userId: string,
+  step: CompletedStep,
+): Promise<void> {
+  const a = step.args;
+  // One id for the row, the change record and the mapping: never a fresh one part-way.
+  const id = typeof a.id === 'string' ? a.id : step.mapping.localId;
+  const projectId = String(a.projectId);
+  const parentId = typeof a.parentId === 'string' ? a.parentId : null;
+  const sectionId = typeof a.sectionId === 'string' ? a.sectionId : null;
+  const childOrder = await nextOrderKey(
+    tx,
+    tasks,
+    tasks.childOrder,
+    allOf(
+      eq(tasks.projectId, projectId),
+      sectionId ? eq(tasks.sectionId, sectionId) : isNull(tasks.sectionId),
+      parentId ? eq(tasks.parentId, parentId) : isNull(tasks.parentId),
+      isNull(tasks.deletedAt),
+    ),
+  );
+  await tx
+    .insert(tasks)
+    .values({
+      id,
+      projectId,
+      sectionId,
+      parentId,
+      content: String(a.content),
+      description: typeof a.description === 'string' ? a.description : '',
+      priority: typeof a.priority === 'number' ? a.priority : 4,
+      ...dueColumns(typeof a.due === 'object' && a.due !== null ? (a.due as Due) : null),
+      deadline: typeof a.deadline === 'string' ? a.deadline : null,
+      durationMinutes: typeof a.durationMinutes === 'number' ? a.durationMinutes : null,
+      labels: Array.isArray(a.labels) ? (a.labels as string[]) : [],
+      assigneeId: typeof a.assigneeId === 'string' ? a.assigneeId : null,
+      assignedById: typeof a.assigneeId === 'string' ? userId : null,
+      childOrder,
+      isCompleted: true,
+      completedAt: step.completedAt,
+      completedById: step.completedById,
+      createdById: userId,
+    })
+    .onConflictDoNothing();
+  changes.inProject('tasks', id, projectId);
 }
 
 /** The step index of the n-th real command in a chunk (mapping-only steps carry no command). */
