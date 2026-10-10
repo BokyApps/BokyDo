@@ -1,0 +1,35 @@
+{
+  "translation": {
+    "count": {
+      "invitation_one": "{{count}} invitation",
+      "invitation_other": "{{count}} invitations"
+    },
+    "nav": {
+      "addTask": "Add task",
+      "ask": "Ask",
+      "completed": "Completed",
+      "filtersLabels": "Filters & Labels",
+      "inbox": "Inbox",
+      "productivity": "Productivity",
+      "ramble": "Ramble",
+      "search": "Search",
+      "templates": "Templates",
+      "today": "Today",
+      "upcoming": "Upcoming"
+    },
+    "settings": {
+      "language": "Language",
+      "languageAuto": "Match the browser",
+      "languageHint": "Translations are added over time; anything not yet translated stays in English."
+    },
+    "sidebar": {
+      "addProject": "Add project",
+      "archivedProjects": "Archived projects",
+      "emptyFolder": "Empty folder",
+      "favourites": "Favourites",
+      "myProjects": "My projects",
+      "noProjects": "No projects yet.",
+      "noTeamProjects": "No team projects yet."
+    }
+  }
+}
