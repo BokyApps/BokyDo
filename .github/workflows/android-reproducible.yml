@@ -1,0 +1,60 @@
+name: Android reproducible build
+
+# A7a: the F-Droid recipe builds from source, so the published APK must be rebuildable
+# byte for byte. This builds :app:assembleRelease (unsigned) twice, in two clean checkouts
+# with separate Gradle homes and no shared build cache, and fails showing diffoscope output
+# on mismatch. Kept as its own file so the change stays out of the contended workflows.
+on:
+  push:
+    branches: [main]
+    paths: ['apps/android/**', '.github/workflows/android-reproducible.yml']
+  pull_request:
+    paths: ['apps/android/**', '.github/workflows/android-reproducible.yml']
+  workflow_dispatch:
+
+jobs:
+  reproducible:
+    name: Two clean builds, byte-identical APKs
+    runs-on: ubuntu-latest
+    env:
+      # One Gradle home per build. Without this the local build cache (apps/android sets
+      # org.gradle.caching=true) would hand build B build A's outputs and the two "builds"
+      # would compare A with itself, passing even when the build is not reproducible.
+      GRADLE_A: /tmp/gradle-a
+      GRADLE_B: /tmp/gradle-b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: build-a
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: build-b
+      # The runner image ships JDK 17/21 and the Android SDK (ANDROID_HOME); no extra actions.
+      - name: Verify the Gradle wrapper jar (both checkouts)
+        run: |
+          for d in build-a build-b; do
+            echo "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  $d/apps/android/gradle/wrapper/gradle-wrapper.jar" | sha256sum -c
+          done
+      # --no-build-cache on top of the separate homes: no cache entry may be reused, so any
+      # difference in the two builds has to come from the source, which is the point.
+      - name: Build A
+        working-directory: build-a/apps/android
+        run: GRADLE_USER_HOME=$GRADLE_A ./gradlew --no-daemon --no-build-cache :app:assembleRelease
+      - name: Build B
+        working-directory: build-b/apps/android
+        run: GRADLE_USER_HOME=$GRADLE_B ./gradlew --no-daemon --no-build-cache :app:assembleRelease
+      - name: Compare the two APKs
+        run: |
+          A=build-a/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          B=build-b/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          sha256sum "$A" "$B"
+          if cmp -s "$A" "$B"; then
+            echo "Reproducible: both APKs are byte-identical."
+          else
+            echo "NOT reproducible: installing diffoscope for the details."
+            sudo apt-get update -qq && sudo apt-get install -qq -y diffoscope
+            diffoscope "$A" "$B" || true
+            exit 1
+          fi
