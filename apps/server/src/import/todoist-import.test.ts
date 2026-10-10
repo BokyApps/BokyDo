@@ -20,6 +20,9 @@ const TOKEN = '0123456789abcdef0123456789abcdef01234567';
 let t: TestApp;
 let logs: string[];
 
+/** A fixed "now" so completed-task fixtures don't age: the importer takes its clock from here. */
+const NOW = new Date('2026-10-09T12:00:00Z');
+
 async function setup(
   answer: () => unknown = todoistFixture,
   status = 200,
@@ -29,6 +32,7 @@ async function setup(
   logs = [];
   t = await testApp({
     importFetch: todoist.fetch,
+    importNow: () => NOW,
     logger: {
       level: 'trace',
       stream: { write: (line: string) => void logs.push(line) },
@@ -273,6 +277,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
 
   // ---- completed tasks (W11a-c1) ----
 
+  /** An RFC 3339 timestamp `days` before the injected NOW, for the completed-item fixtures. */
+  const iso = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
+
   const completedItems = [
     {
       id: 'c-report',
@@ -284,7 +291,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
       priority: 4,
       labels: ['deep-work'],
       child_order: 0,
-      completed_at: '2026-09-16T10:00:00Z',
+      completed_at: iso(-23 * 86_400_000),
       completed_by_uid: 'u2',
       responsible_uid: 'u2',
     },
@@ -296,7 +303,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
       priority: 1,
       labels: [],
       child_order: 0,
-      completed_at: '2026-09-15T08:30:00Z',
+      completed_at: iso(-24 * 86_400_000),
       completed_by_uid: null,
     },
     {
@@ -307,7 +314,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
       priority: 4,
       labels: [],
       child_order: 0,
-      completed_at: '2026-05-01T10:00:00Z',
+      completed_at: iso(-161 * 86_400_000),
     },
     {
       // In a project the user skipped: not brought over at all.
@@ -317,7 +324,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
       priority: 4,
       labels: [],
       child_order: 0,
-      completed_at: '2026-09-01T10:00:00Z',
+      completed_at: iso(-38 * 86_400_000),
     },
   ];
 
@@ -357,14 +364,14 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
     const report = rows.find((r) => r.content === 'Write report')!;
     expect(report.isCompleted).toBe(true);
     // The real completion time, not the moment of the import.
-    expect(report.completedAt?.toISOString()).toBe('2026-09-16T10:00:00.000Z');
+    expect(report.completedAt?.toISOString()).toBe(iso(-23 * 86_400_000));
     // The original completer, mapped through the people choice.
     expect(report.completedById).toBe(null); // Ben is not a BokyDo user here
     expect(report.priority).toBe(1); // 4 in Todoist is p1 in BokyDo
     expect(report.labels).toEqual(['deep-work']);
     const outline = rows.find((r) => r.content === 'Outline')!;
     expect(outline.parentId).toBe(report.id); // completed sub-tasks under their completed parent
-    expect(outline.completedAt?.toISOString()).toBe('2026-09-15T08:30:00.000Z');
+    expect(outline.completedAt?.toISOString()).toBe(iso(-24 * 86_400_000));
     expect(rows.some((r) => r.content === 'Skipped')).toBe(false);
     expect(rows.some((r) => r.content === 'Old task')).toBe(false);
 
@@ -382,7 +389,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
         priority: 4,
         labels: [],
         child_order: 0,
-        completed_at: new Date(Date.now() - 5 * 86_400_000).toISOString(),
+        completed_at: iso(-5 * 86_400_000),
       },
       {
         id: 'old',
@@ -391,7 +398,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
         priority: 4,
         labels: [],
         child_order: 0,
-        completed_at: '2026-01-01T10:00:00Z',
+        completed_at: iso(-281 * 86_400_000),
       },
     ]);
     const preview = await connect(alice);
@@ -431,6 +438,66 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', () => {
     expect(preview.totals.completed).toBe(0);
     const status = await run(alice, everything(preview, { completed: true }));
     expect(status.counts?.completedTasks).toBe(0);
+  });
+
+  it('never lets the request name who completed a task', async () => {
+    // A stranger's user id in the people map must not become completed_by: the completer has to
+    // be a BokyDo user who may see the project the task lands in.
+    const items = completedItems.map((c) =>
+      c.id === 'c-report' ? { ...c, completed_by_uid: 'u-stranger' } : c,
+    );
+    const { alice } = await withCompleted(items);
+    const preview = await connect(alice);
+    const stranger = id();
+    const choices = everything(preview, {
+      completed: true,
+      people: [
+        ...preview.people.map((p) => ({ id: p.id, userId: p.isYou ? alice.id : null })),
+        { id: 'u-stranger', userId: stranger },
+      ],
+      projects: preview.projects
+        .filter((p) => p.name !== 'Home')
+        .map((p) => ({ id: p.id, action: 'new' })),
+    });
+    const status = await run(alice, choices);
+    expect(status.counts?.completedTasks).toBe(3);
+    const rows = await t.db.db.select().from(tasks);
+    const report = rows.find((r) => r.content === 'Write report')!;
+    expect(report.completedById).toBeNull();
+    // ...and an import is never a completion event.
+    const activity = JSON.stringify(await t.db.db.execute(sql`select type from activity_log`));
+    expect(activity).not.toContain('task_completed');
+  });
+
+  it('keeps the account readable when the completed-items read fails', async () => {
+    // A 400/422 or a schema mismatch on that endpoint is Todoist's problem, not the user's.
+    const broken = fakeTodoist(todoistFixture, 200, () => ({ nope: true }));
+    const app = await testApp({
+      importFetch: broken.fetch,
+      importNow: () => NOW,
+      logger: { level: 'trace', stream: { write: () => {} } },
+    });
+    await app.app.services.settings.markSetupComplete({ userId: null, ip: null });
+    const userId = await createUser(app.db, { username: 'carol', password: 'x'.repeat(12) });
+    const http = new Client(app.app);
+    const { token, session } = await app.app.services.sessions.create(
+      { id: userId, username: 'carol', isAdmin: false, mustChangePassword: false },
+      { ip: null, userAgent: null, authMethod: 'password' },
+    );
+    http.cookies.set('bokydo_session', token);
+    http.csrfToken = session.csrfToken;
+    const res = await http.post('/api/v1/import/todoist/connect', { token: TOKEN });
+    expect(res.statusCode).toBe(200);
+    const preview = res.json() as TodoistPreview;
+    // The snapshot still arrived, so the account opens; the count is just zero.
+    expect(preview.totals.completed).toBe(0);
+    // Asking for completed tasks is refused instead of silently importing none.
+    const bad = await http.post(
+      '/api/v1/import/todoist/runs',
+      everything(preview, { completed: true }),
+    );
+    expect(bad.statusCode).toBe(400);
+    await app.close();
   });
 
   it('runs one import at a time per user', async () => {

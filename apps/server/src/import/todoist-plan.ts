@@ -413,8 +413,10 @@ export function planImport(input: PlanInput): Plan {
       if (userId && allowed) assigneeId = userId;
       else droppedAssignees++;
     }
-    // Who completed it: the original person when they are a BokyDo user, else left blank.
-    const completer = t.completedByUid ? (people.get(t.completedByUid) ?? null) : null;
+    // Who completed it: the original person, when they are a BokyDo user AND they may see this
+    // project. `people` comes from the request, so without the membership check a crafted call
+    // could name any user on the instance as the one who finished a task (W11a-c1 review).
+    const completer = completedBy(t, people, projectId, isNew, input.userId, input.members);
     if (t.completedByUid && !completer) droppedCompletions++;
     const parentLocal = completedParent(t);
     const sectionId = !parentLocal && t.sectionId ? localSection.get(t.sectionId) : undefined;
@@ -538,6 +540,28 @@ export function planImport(input: PlanInput): Plan {
   }
 
   return { steps, completed, counts, warnings };
+}
+
+/**
+ * Who recorded a completed task as finished: the original person when they are a BokyDo user
+ * and a member of the project it lands in (only you in a new project), else null — never a
+ * name the request made up.
+ */
+function completedBy(
+  t: TodoistCompletedTask,
+  people: ReadonlyMap<string, string | null>,
+  projectId: string,
+  isNew: ReadonlySet<string>,
+  importerId: string,
+  members: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  if (!t.completedByUid) return null;
+  const userId = people.get(t.completedByUid) ?? null;
+  if (!userId) return null;
+  const allowed = isNew.has(projectId)
+    ? userId === importerId
+    : (members.get(projectId)?.has(userId) ?? false);
+  return allowed ? userId : null;
 }
 
 function durationMinutes(t: TodoistTask): number | null {

@@ -40,6 +40,7 @@ import {
   fetchTodoistSnapshot,
   hasCompletionDate,
   TODOIST_COMPLETED_MAX_MONTHS,
+  TodoistError,
   type TodoistCompletedTask,
   type TodoistSnapshot,
 } from './todoist-client.js';
@@ -85,6 +86,8 @@ export class ImportSessionError extends Error {
 export class TodoistImporter {
   private readonly sessions = new Map<string, Session>();
   private readonly running = new Set<string>();
+  /** Sessions whose completed-items read failed: the choice stays off (W11a-c1). */
+  private readonly completedUnavailable = new Set<string>();
 
   constructor(
     private readonly deps: {
@@ -93,8 +96,14 @@ export class TodoistImporter {
       fetch: OutboundFetch;
       defaultTimeZone: () => string;
       log: FastifyBaseLogger;
+      /** Injected so the completed-task windows are testable rather than wall-clock bound. */
+      now?: () => Date;
     },
   ) {}
+
+  private now(): Date {
+    return (this.deps.now ?? (() => new Date()))();
+  }
 
   /** After a restart nothing is running: a run cut short is marked failed (re-running resumes). */
   async recover(): Promise<void> {
@@ -107,12 +116,6 @@ export class TodoistImporter {
   /** Read the Todoist account and open a preview session (replacing the user's previous one). */
   async connect(userId: string, token: string): Promise<TodoistPreview> {
     const snapshot = await fetchTodoistSnapshot(this.deps.fetch, token);
-    // The same token, still only for this read: the account's completed tasks over Todoist's
-    // capped window, so the preview can count them before the user chooses (W11a-c1).
-    const until = new Date();
-    const since = new Date(until);
-    since.setMonth(since.getMonth() - TODOIST_COMPLETED_MAX_MONTHS);
-    const completed = await fetchTodoistCompleted(this.deps.fetch, token, { since, until });
     this.sweep();
     for (const [id, s] of this.sessions) if (s.userId === userId) this.sessions.delete(id);
     while (this.sessions.size >= MAX_SESSIONS) {
@@ -122,8 +125,31 @@ export class TodoistImporter {
     }
     const sessionId = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + TODOIST_IMPORT_LIMITS.sessionMinutes * 60_000;
+    // The same token, still only for this read: the account's completed tasks over Todoist's
+    // capped window, so the preview can count them before the user chooses (W11a-c1).
+    // Best effort: this read is an extra for an import that may never ask for completed tasks,
+    // so a failure here leaves the count at zero and the choice off rather than failing the
+    // whole connect (the snapshot above is what the import needs).
+    const completed = await this.readCompleted(token, sessionId);
     this.sessions.set(sessionId, { userId, snapshot, expiresAt, completed });
     return this.preview(userId, sessionId, snapshot, expiresAt, completed);
+  }
+
+  /** Todoist's completed items over its capped window, or none when the read did not work. */
+  private async readCompleted(token: string, sessionId: string): Promise<TodoistCompletedTask[]> {
+    const until = this.now();
+    const since = new Date(until);
+    since.setMonth(since.getMonth() - TODOIST_COMPLETED_MAX_MONTHS);
+    try {
+      return await fetchTodoistCompleted(this.deps.fetch, token, { since, until });
+    } catch (err) {
+      if (err instanceof TodoistError) {
+        this.deps.log.warn({ reason: err.reason }, 'todoist completed items not read');
+        this.completedUnavailable.add(sessionId);
+        return [];
+      }
+      throw err;
+    }
   }
 
   /** Forget the snapshot now (the user closed the import). */
@@ -207,9 +233,16 @@ export class TodoistImporter {
 
   private async build(userId: string, choices: TodoistImportChoices) {
     const s = this.session(userId, choices.sessionId);
-    // Read at connect (Todoist's read window is capped at 3 months there); the choice only
-    // filters it, so the further-back history is out of scope rather than a second fetch.
-    const completed = choices.completed ? withinWindow(s.completed, choices.completedWindow) : [];
+    let completed: TodoistCompletedTask[] = [];
+    if (choices.completed) {
+      // The read at connect is best effort: if it did not work, the choice is refused rather
+      // than silently importing nothing (W11a-c1).
+      if (this.completedUnavailable.has(choices.sessionId))
+        throw new ImportSessionError('invalid_choice');
+      // Read at connect (Todoist's window is capped there); the choice only filters it, so
+      // further-back history is out of scope rather than a second fetch.
+      completed = withinWindow(s.completed, choices.completedWindow, this.now());
+    }
     const known = new Set(s.snapshot.projects.map((p) => p.id));
     if (choices.projects.some((p) => !known.has(p.id)))
       throw new ImportSessionError('invalid_choice');
@@ -490,13 +523,19 @@ export class TodoistImporter {
 }
 
 /** Completed tasks finished within the window the user picked (the read already capped it). */
+/**
+ * Completed tasks finished within the window the user picked. Same definition of a month as
+ * the reader (calendar months back from `now`), so the filter never drops the oldest day or
+ * two of what the read already fetched.
+ */
 function withinWindow(
   tasks: readonly TodoistCompletedTask[],
   window: TodoistCompletedWindow,
+  now: Date,
 ): TodoistCompletedTask[] {
-  const months = window === '1m' ? 1 : TODOIST_COMPLETED_MAX_MONTHS;
-  const from = Date.now() - months * 30 * 86_400_000;
-  return tasks.filter((t) => hasCompletionDate(t) && t.completedAt.getTime() >= from);
+  const from = new Date(now);
+  from.setMonth(from.getMonth() - (window === '1m' ? 1 : TODOIST_COMPLETED_MAX_MONTHS));
+  return tasks.filter((t) => hasCompletionDate(t) && t.completedAt.getTime() >= from.getTime());
 }
 
 /**
@@ -512,6 +551,8 @@ async function insertCompletedTask(
   step: CompletedStep,
 ): Promise<void> {
   const a = step.args;
+  // One id for the row, the change record and the mapping: never a fresh one part-way.
+  const id = typeof a.id === 'string' ? a.id : step.mapping.localId;
   const projectId = String(a.projectId);
   const parentId = typeof a.parentId === 'string' ? a.parentId : null;
   const sectionId = typeof a.sectionId === 'string' ? a.sectionId : null;
@@ -529,7 +570,7 @@ async function insertCompletedTask(
   await tx
     .insert(tasks)
     .values({
-      id: typeof a.id === 'string' ? a.id : newId(),
+      id,
       projectId,
       sectionId,
       parentId,
@@ -549,7 +590,7 @@ async function insertCompletedTask(
       createdById: userId,
     })
     .onConflictDoNothing();
-  changes.inProject('tasks', String(a.id), projectId);
+  changes.inProject('tasks', id, projectId);
 }
 
 /** The step index of the n-th real command in a chunk (mapping-only steps carry no command). */
