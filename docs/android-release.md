@@ -10,11 +10,14 @@ You need JDK 17+ and the Android SDK (`ANDROID_HOME` set, `~/Android/Sdk` works;
 release build is unsigned.
 
 ```bash
-# Two clean checkouts of the same commit, side by side.
+# Two clean checkouts of the same commit, side by side. Each needs its own Gradle home: the
+# shared build cache (apps/android sets org.gradle.caching=true) would otherwise hand build B
+# build A's outputs, and the comparison would pass without proving anything.
 git worktree add /tmp/bokydo-a <commit>      # or: git clone <url> /tmp/bokydo-a
 git worktree add /tmp/bokydo-b <commit>
 for d in /tmp/bokydo-a /tmp/bokydo-b; do
-  (cd "$d/apps/android" && ./gradlew --no-daemon :app:assembleRelease)
+  (cd "$d/apps/android" && \
+    GRADLE_USER_HOME=/tmp/gradle-$(basename "$d") ./gradlew --no-daemon --no-build-cache :app:assembleRelease)
 done
 A=/tmp/bokydo-a/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
 B=/tmp/bokydo-b/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
@@ -32,6 +35,13 @@ Reproducible Builds notes):
   unsigned APKs, so the signer version doesn't matter here.
 - **Timestamps in the environment** (e.g. a dirty clock or `SOURCE_DATE_EPOCH` set in one
   shell and not the other) can leak into zip entries. Build both checkouts back to back.
+
+**What this does not prove.** Both builds run on the same machine, with the same JDK and the
+same Android SDK, so it shows the build is deterministic there. F-Droid's builder is a
+different machine, a different SDK and a different NDK, and drift between machines - a
+different `build-tools` revision, a different R8 version - is exactly what it will hit. The
+job is a regression guard, not a certificate that F-Droid's APK will match; a mismatched
+build is diagnosed with F-Droid's own logs and `apksigcopier`.
 
 ## F-Droid metadata
 
