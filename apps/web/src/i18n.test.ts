@@ -8,6 +8,9 @@ import {
   setLanguage,
 } from './i18n.js';
 
+// setLanguage's second argument stands in for the browser's languages in tests.
+const languages = (...tags: string[]) => tags;
+
 /**
  * W12c step 1's acceptance: a fake second locale proves switching works, and the English
  * catalogue is the base every other one falls back to.
@@ -26,9 +29,9 @@ describe('i18n plumbing', () => {
   });
 
   it('falls back to English for a language with no catalogue', async () => {
-    expect(await setLanguage('af')).toBe('en');
-    expect(await setLanguage('not-a-tag')).toBe('en');
-    expect(await setLanguage('en-ZA')).toBe('en');
+    expect(await setLanguage('af', languages())).toBe('en');
+    expect(await setLanguage('not-a-tag', languages())).toBe('en');
+    expect(await setLanguage('en-ZA', languages())).toBe('en');
   });
 
   it('switches to a catalogue registered later', async () => {
@@ -61,6 +64,35 @@ describe('i18n plumbing', () => {
     expect(catalogueFor('EN')).toBe('en');
     expect(catalogueFor('en-ZA')).toBe('en');
     expect(catalogueFor('de')).toBeNull();
+  });
+
+  it('"auto" is followed, not short-circuited to English', async () => {
+    // A browser asking for a language we ship must switch, even with auto: the old path
+    // returned 'en' before consulting the browser and never touched <html lang>.
+    const { default: i18n } = await import('./i18n.js');
+    i18n.addResourceBundle(
+      'af',
+      'translation',
+      {
+        nav: { inbox: 'Inboxmandjie' },
+        count: {
+          invitation_one: '{{count}} uitnodiging',
+          invitation_other: '{{count}} uitnodigings',
+        },
+      },
+      true,
+      true,
+    );
+    expect(await setLanguage('auto', languages('af-ZA', 'en-ZA'))).toBe('af');
+    // ...and a pinned tag still wins over the browser.
+    expect(await setLanguage('en', languages('af-ZA'))).toBe('en');
+  });
+
+  it('the language used for dates and numbers follows the interface', async () => {
+    // The shared helpers read i18next's resolved language, so Intl localises with the UI.
+    const { localeTag } = await import('./lib/locale.js');
+    await setLanguage('en', languages());
+    expect(localeTag()).toBe('en');
   });
 
   it('remembers a pinned language and forgets it on "auto"', async () => {

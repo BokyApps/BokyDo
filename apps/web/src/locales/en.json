@@ -19,7 +19,8 @@
     },
     "settings": {
       "language": "Language",
-      "languageAuto": "Match the browser"
+      "languageAuto": "Match the browser",
+      "languageHint": "Translations are added over time; anything not yet translated stays in English."
     },
     "sidebar": {
       "addProject": "Add project",

@@ -291,7 +291,7 @@ function GeneralSettings({
               { value: AUTO_LANGUAGE, label: t('settings.languageAuto') },
               ...LANGUAGES.map((code) => ({ value: code, label: LANGUAGE_NAMES[code] })),
             ]}
-            hint="Translations are added over time; anything not yet translated stays in English."
+            hint={t('settings.languageHint')}
           />
           <SelectField
             label="Home view"

@@ -48,12 +48,23 @@ export function initI18n(): Promise<void> {
 }
 
 /**
- * The base tag of a browser or pinned language ("en-ZA" → "en"), or null when we have no
- * catalogue for it and English should be used.
+ * The catalogue to use for a tag: one we ship, or one registered later (a language added at
+ * runtime, as tests do), else null so English is used. "en-ZA" resolves to "en".
  */
 export function catalogueFor(tag: string): Language | null {
   const [base] = tag.toLowerCase().split('-');
-  return (LANGUAGES as readonly string[]).includes(base ?? '') ? (base as Language) : null;
+  const code = base ?? '';
+  if ((LANGUAGES as readonly string[]).includes(code)) return code as Language;
+  return i18next.hasResourceBundle(code, 'translation') ? (code as Language) : null;
+}
+
+/**
+ * The browser's languages, best first. Isolated here so "follow the browser" is testable and
+ * so 'auto' resolves the same way on the client and in a unit test.
+ */
+export function browserLanguages(): string[] {
+  if (typeof navigator === 'undefined') return [];
+  return [...(navigator.languages ?? [navigator.language])].filter(Boolean);
 }
 
 /** Resolve the preference against the browser: 'auto' follows navigator.language. */
@@ -92,21 +103,36 @@ export function rememberedLanguage(): string {
  * when its bundle is already registered (tests, or a catalogue added later); otherwise the
  * request falls back to English. `<html lang>` follows so screen readers use the right voice.
  */
-export async function setLanguage(tag: string): Promise<string> {
+export async function setLanguage(
+  preference: string,
+  /** Injected by tests; the browser's languages by default. */
+  navigatorLanguages: string[] = browserLanguages(),
+): Promise<string> {
   await startedOnce();
-  const [base] = tag.toLowerCase().split('-');
+  // 'auto' follows the browser; a pinned tag wins when we ship it.
+  const wanted =
+    preference === AUTO_LANGUAGE ? chosenLanguage(preference, navigatorLanguages) : preference;
+  const [base] = wanted.toLowerCase().split('-');
   const code = base ?? 'en';
   // The exact tag wins when its catalogue exists (a regional variant); otherwise the base.
-  const resolved = i18next.hasResourceBundle(tag, 'translation') ? tag : code;
-  const shipped = (LANGUAGES as readonly string[]).includes(resolved);
-  if (!shipped && !i18next.hasResourceBundle(resolved, 'translation')) return 'en';
+  const resolved = i18next.hasResourceBundle(wanted, 'translation') ? wanted : code;
+  if (
+    !(LANGUAGES as readonly string[]).includes(resolved) &&
+    !i18next.hasResourceBundle(resolved, 'translation')
+  )
+    return switchTo('en');
   if (!i18next.hasResourceBundle(resolved, 'translation')) {
     const bundle = (await import(`./locales/${resolved}.json`)).default;
     i18next.addResourceBundle(resolved, 'translation', bundle, true, true);
   }
-  await i18next.changeLanguage(resolved);
-  if (typeof document !== 'undefined') document.documentElement.lang = resolved;
-  return resolved;
+  return switchTo(resolved);
+}
+
+/** Adopt `code` and keep `<html lang>` in step, on every path including English. */
+async function switchTo(code: string): Promise<string> {
+  await i18next.changeLanguage(code);
+  if (typeof document !== 'undefined') document.documentElement.lang = code;
+  return code;
 }
 
 export default i18next;
