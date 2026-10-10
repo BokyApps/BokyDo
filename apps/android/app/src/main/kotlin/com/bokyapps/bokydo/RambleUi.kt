@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -46,6 +50,7 @@ import com.bokyapps.bokydo.core.RambleApi
 import com.bokyapps.bokydo.core.RambleDraft
 import com.bokyapps.bokydo.core.ServerException
 import com.bokyapps.bokydo.core.commitTasks
+import com.bokyapps.bokydo.sweepOrphanedRecordings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -72,6 +77,8 @@ fun RambleScreen(state: AppState, today: String) {
     val app = context.app
     val scope = rememberCoroutineScope()
     val api = remember(app) { RambleApi(app.client) }
+    // Files a process that died mid-recording left behind are not ours to upload.
+    LaunchedEffect(Unit) { sweepOrphanedRecordings(app) }
 
     var phase by remember { mutableStateOf<RamblePhase>(RamblePhase.Idle) }
     var transcript by remember { mutableStateOf("") }
@@ -83,8 +90,12 @@ fun RambleScreen(state: AppState, today: String) {
 
     fun fail(e: Exception) {
         error = when {
+            // Only an insufficient scope means the sign-in predates the Ramble scopes; a 403
+            // for any other reason must not send someone through a pointless re-sign-in.
+            e is ServerException && e.status == 403 && e.error == "insufficient_scope" ->
+                "This sign-in predates the Ramble scopes. Sign out and sign in again, then retry."
             e is ServerException && e.status == 403 ->
-                "The server refused: this sign-in predates the Ramble scopes. Sign out and sign in again, then retry."
+                "The server refused this action (${e.error ?: "no reason given"})."
             e is ServerException && e.status == 409 ->
                 "AI isn't configured on this server yet (Admin → Settings → AI)."
             e is ServerException && e.status == 429 ->
@@ -134,6 +145,26 @@ fun RambleScreen(state: AppState, today: String) {
         recorder = r
         elapsedMs = 0L
         phase = RamblePhase.Recording
+    }
+
+    // The mic belongs to this screen: leaving it (or the app stopping) cancels the recording,
+    // so nothing keeps capturing in the background and no half-written file is left behind.
+    // `recorder` is captured fresh through the state holder, so the last one started is stopped.
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(Unit) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                recorder?.cancel()
+                recorder = null
+                phase = RamblePhase.Idle
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose {
+            owner.lifecycle.removeObserver(observer)
+            recorder?.cancel()
+            recorder = null
+        }
     }
 
     // Elapsed clock while recording; the recorder itself caps at 60 s.

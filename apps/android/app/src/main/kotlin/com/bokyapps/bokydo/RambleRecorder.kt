@@ -5,6 +5,17 @@ import android.media.MediaRecorder
 import android.os.Build
 import java.io.File
 
+/**
+ * Delete recordings a previous process left behind: a recording in progress when the app was
+ * killed never gets to `stop()`, so without this its file sits in `cacheDir` until the OS
+ * reclaims it (and holds whatever was captured). Safe to call at any time: nothing live uses
+ * these names, and a finished recording is deleted by its own owner.
+ */
+fun sweepOrphanedRecordings(context: Context) {
+    cacheDir(context).listFiles { f -> f.name.startsWith(PREFIX) && f.name.endsWith(".m4a") }
+        ?.forEach { it.delete() }
+}
+
 /** One voice chunk, recorded on the device and sent to the server for transcription. */
 sealed interface Recording {
     data class Done(val file: File, val seconds: Double) : Recording
@@ -18,8 +29,10 @@ sealed interface Recording {
  * the returned file and deletes it after uploading. Must be stopped and released even when
  * the screen goes away mid-recording.
  */
+private const val PREFIX = "ramble-"
+
 class RambleRecorder(context: Context) {
-    private val file = File(context.cacheDir, "ramble-${System.currentTimeMillis()}.m4a")
+    private val file = File(cacheDir(context), "$PREFIX${System.currentTimeMillis()}.m4a")
     private val startedAt = System.currentTimeMillis()
     private var recorder: MediaRecorder? = runCatching {
         (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()).apply {
@@ -65,3 +78,5 @@ class RambleRecorder(context: Context) {
         file.delete()
     }
 }
+
+private fun cacheDir(context: Context): File = context.cacheDir
