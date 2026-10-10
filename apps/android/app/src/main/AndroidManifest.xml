@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Alarms don't survive a reboot: re-arm them. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Ramble voice capture: asked at recording time, only while the Ramble screen is open. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Voice is optional: devices without a mic still install and use text Ramble. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!-- To find a browser that supports Custom Tabs (Android 11+ package visibility). -->
     <queries>

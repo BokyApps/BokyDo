@@ -173,8 +173,38 @@ class BokyDoClient(
         throw ServerException(401, "invalid_access_token")
     }
 
-    /** Sign out: tell the server to end the grant (best effort), then forget everything. */
-    suspend fun signOut() {
+    /**
+     * A raw-body call with the session's token (e.g. a Ramble audio chunk), retried once with
+     * a refreshed token if refused. Same rules as [call]: server-relative `/api/` paths only,
+     * no redirects, size-capped responses. Returns the JSON body, or null for an empty one.
+     */
+    suspend fun postBytes(path: String, bytes: ByteArray, mime: String): JsonElement? {
+        require(path.startsWith("/api/") && !path.contains("..") && !path.contains("//"))
+        val session = sessions.load() ?: throw SignedOutException()
+        var token = accessToken()
+        for (attempt in 0..1) {
+            val res = withContext(Dispatchers.IO) {
+                http.newCall(
+                    Request.Builder().url(session.discovery.publicUrl.trimEnd('/') + path)
+                        .header("Authorization", "Bearer $token")
+                        .post(bytes.toRequestBody(mime.toMediaType()))
+                        .build(),
+                ).execute()
+            }
+            res.use {
+                if (it.code == 401 && attempt == 0) {
+                    token = accessToken(rejected = token)
+                } else {
+                    if (!it.isSuccessful) throw ServerException(it.code, errorOf(it))
+                    val text = it.bodyText()
+                    return if (text.isBlank()) null else Json.parseToJsonElement(text)
+                }
+            }
+        }
+        throw ServerException(401, "invalid_access_token")
+    }
+
+    /** Sign out: tell the server to end the grant (best effort), then forget everything. */    suspend fun signOut() {
         val session = sessions.load()
         sessions.clear()
         if (session == null) return
