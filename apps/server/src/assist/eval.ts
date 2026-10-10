@@ -243,12 +243,14 @@ const CASES: Record<EvalFeature, Case[]> = {
       },
     },
     {
-      name: 'Maps only the keys it was offered',
+      name: 'Raises the priority of an urgent task',
       run: async (ai, user) => {
-        const s = await suggestTriage(ai, user, triage('call Ana about the invoice'));
-        return s[0]?.projectId !== null || (s[0]?.labels.length ?? 0) > 0
-          ? 'used keys it was not offered'
-          : null;
+        const s = await suggestTriage(
+          ai,
+          user,
+          triage('pay the electricity bill before they cut us off tonight'),
+        );
+        return s[0]?.priority ? null : 'left it as it was';
       },
     },
   ],
@@ -352,7 +354,8 @@ function task(title: string) {
 
 export class EvalNotConfiguredError extends Error {}
 
-/** Run every case of `feature` against the user's routed model, one after another. */ export async function runEval(
+/** Run every case of `feature` against the user's routed model, one after another. */
+export async function runEval(
   ai: AiService,
   user: AiUser,
   feature: EvalFeature,

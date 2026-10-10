@@ -103,10 +103,13 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
     ).toBe(200);
   }
 
+  // Subtask items are .strict() with a required (nullable) due: an omitted key is invalid
+  // output, and its correction round eats the next scripted reply, so every step carries one.
+  const steps = (contents: string[]) => contents.map((content) => ({ content, due: null }));
   const taskReply = (extra: Record<string, unknown> = {}) =>
     JSON.stringify({
       content: null,
-      subtasks: [{ content: 'Book a hotel' }],
+      subtasks: steps(['Book a hotel']),
       due: null,
       priority: null,
       why: 'x',
@@ -117,7 +120,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
     await route('assist.task');
     // Case 1-4 are Task Assist's own; the four after them are the new triage cases.
     model.replies.push(
-      taskReply({ subtasks: [{ content: 'Book a hotel' }, { content: 'Pack' }] }),
+      taskReply({ subtasks: steps(['Book a hotel', 'Pack']) }),
       taskReply(),
       taskReply({ due: 'next friday' }),
       taskReply(),
@@ -137,15 +140,16 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
         ],
       }),
       JSON.stringify({
-        tasks: [
-          { task: 't1', project: 'p9', labels: ['l9'], priority: null, confidence: 0.7, why: 'x' },
-        ],
+        tasks: [{ task: 't1', project: null, labels: [], priority: 1, confidence: 0.7, why: 'x' }],
       }),
     );
     const res = await http.post('/api/v1/assist/eval', { feature: 'assist.task' });
     expect(res.statusCode).toBe(200);
     const out = res.json() as EvalResponse;
     expect(out).toMatchObject({ total: 8, passed: 8 });
+    // One model call per case: a doubled count means a script was rejected and retried, which
+    // would shift every later case onto the wrong reply.
+    expect(model.seen).toHaveLength(8);
     expect(out.cases.at(-4)?.name).toBe('Puts an obvious task in the project it belongs to');
     // The synthetic context is what the model saw: none of Alice's tasks.
     for (const sent of model.seen) expect(sent.user).not.toContain('Secret client');
@@ -154,7 +158,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
   it('reports what a weak model got wrong in the triage cases', async () => {
     await route('assist.task');
     model.replies.push(
-      taskReply({ subtasks: [{ content: 'a' }, { content: 'b' }] }),
+      taskReply({ subtasks: steps(['a', 'b']) }),
       taskReply(),
       taskReply({ due: 'next friday' }),
       taskReply(),
@@ -172,9 +176,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
         tasks: [{ task: 't1', project: null, labels: [], priority: 1, confidence: 0.9, why: 'x' }],
       }),
       JSON.stringify({
-        tasks: [
-          { task: 't1', project: 'p9', labels: ['l9'], priority: null, confidence: 0.7, why: 'x' },
-        ],
+        tasks: [{ task: 't1', project: null, labels: [], priority: 1, confidence: 0.7, why: 'x' }],
       }),
     );
     const out = (await http.post('/api/v1/assist/eval', { feature: 'assist.task' })).json();
@@ -286,17 +288,17 @@ describe('Triage and report eval cases', () => {
     ).toBe('followed the instruction in the title');
   });
 
-  it('only offered keys map back', async () => {
+  it('an urgent task gets its priority raised', async () => {
     expect(
-      await run('assist.task', 'Maps only the keys it was offered', [
-        answer({ project: 'p9', labels: ['l9'] }),
+      await run('assist.task', 'Raises the priority of an urgent task', [
+        answer({ project: null, priority: 1 }),
       ]),
     ).toBeNull();
     expect(
-      await run('assist.task', 'Maps only the keys it was offered', [
-        answer({ project: 'p2', labels: [] }),
+      await run('assist.task', 'Raises the priority of an urgent task', [
+        answer({ project: null, priority: null }),
       ]),
-    ).toBe('used keys it was not offered');
+    ).toBe('left it as it was');
   });
 
   it('a report names what is overdue and invents nothing', async () => {
