@@ -76,6 +76,20 @@ class ExploreTest {
         assertEquals(listOf("c1"), Views.commentsOf(s, "t1").map { it.id })
     }
 
+    @Test
+    fun editingAndDeletingACommentShowAtOnce() {
+        val base = state(
+            comments = listOf(
+                obj("""{"id":"c1","projectId":"inbox","taskId":"t1","userId":"u1","content":"first","createdAt":"2026-10-07T10:00:00.000Z","updatedAt":"2026-10-07T10:00:00.000Z"}"""),
+            ),
+        )
+        val edited = Optimistic.apply(base, listOf(cmd("comment_update", """{"id":"c1","content":"second"}""")))
+        assertEquals("second", edited.comments.getValue("c1").content)
+        assertTrue("the comment changed after it was written", edited.comments.getValue("c1").updatedAt > edited.comments.getValue("c1").createdAt)
+        val deleted = Optimistic.apply(edited, listOf(cmd("comment_delete", """{"id":"c1"}""")))
+        assertTrue(deleted.comments.isEmpty())
+    }
+
     // ---- labels ----
 
     @Test
@@ -168,5 +182,28 @@ class ExploreTest {
         assertEquals(emptyList<String>(), found.projects.map { it.id })
         assertEquals(listOf("Work"), Views.search(s, "wor").projects.map { it.name })
         assertTrue(Views.search(s, "  ").tasks.isEmpty())
+    }
+
+    // ---- the task's own labels ----
+
+    @Test
+    fun takingALabelOffATaskShowsAtOnce() {
+        val base = state(tasks = listOf(task("1", labels = listOf("shop", "home"))))
+        val s = Optimistic.apply(base, listOf(cmd("task_update", """{"id":"1","labels":["shop"]}""")))
+        assertEquals(listOf("shop"), s.tasks.getValue("1").labels)
+    }
+
+    // ---- how long ago ----
+
+    @Test
+    fun agoCountsMinutesHoursAndDays() {
+        val now = java.time.Instant.parse("2026-10-07T12:00:00.000Z").toEpochMilli()
+        assertEquals("just now", Dates.ago("2026-10-07T11:59:30.000Z", now))
+        assertEquals("5 min ago", Dates.ago("2026-10-07T11:55:00.000Z", now))
+        assertEquals("3 h ago", Dates.ago("2026-10-07T09:00:00.000Z", now))
+        // A day or more old: the date, not a count.
+        val older = Dates.ago("2026-10-01T09:00:00.000Z", now)
+        assertTrue(older.isNotEmpty() && !older.contains("ago"))
+        assertEquals("", Dates.ago("not a date", now))
     }
 }

@@ -160,6 +160,24 @@ object Dates {
     }
 
     /**
+     * How long ago a timestamp was, like the web's `ago`: "just now", "5 min ago", "3 h ago",
+     * and the date from a day on. A timestamp the device can't read gives an empty string.
+     */
+    fun ago(iso: String, nowMs: Long = System.currentTimeMillis(), locale: Locale = Locale.getDefault()): String {
+        val then = runCatching { java.time.Instant.parse(iso) }.getOrNull() ?: return ""
+        val seconds = (nowMs - then.toEpochMilli()) / 1000
+        return when {
+            seconds < 60 -> "just now"
+            seconds < 3_600 -> "${seconds / 60} min ago"
+            seconds < 86_400 -> "${seconds / 3_600} h ago"
+            else -> {
+                val day = java.time.LocalDate.ofInstant(then, java.time.ZoneId.systemDefault())
+                "${day.dayOfMonth} ${day.month.getDisplayName(TextStyle.SHORT, locale)}"
+            }
+        }
+    }
+
+    /**
      * A one-off due date as the web's `makeDue` stores it: the phrase is absolute ("6 Oct 17:00"),
      * never relative, because "Tomorrow" would be wrong by the next day.
      */

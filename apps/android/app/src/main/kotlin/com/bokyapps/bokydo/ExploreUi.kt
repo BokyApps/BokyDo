@@ -40,6 +40,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bokyapps.bokydo.core.AppState
+import com.bokyapps.bokydo.core.Comment
+import com.bokyapps.bokydo.core.Dates
 import com.bokyapps.bokydo.core.Filter
 import com.bokyapps.bokydo.core.Filters
 import com.bokyapps.bokydo.core.Ids
@@ -155,7 +157,7 @@ fun LabelsScreen(state: AppState, onOpenLabel: (String) -> Unit) {
     }
 
     if (adding || editing != null) {
-        LabelDialog(label = editing, onDismiss = { adding = false; editing = null })
+        LabelDialog(label = editing, state = state, onDismiss = { adding = false; editing = null })
     }
     deleting?.let { label ->
         AlertDialog(
@@ -201,10 +203,15 @@ private fun LabelRow(
 }
 
 @Composable
-private fun LabelDialog(label: Label?, onDismiss: () -> Unit) {
+private fun LabelDialog(label: Label?, state: AppState, onDismiss: () -> Unit) {
     val app = LocalContext.current.app
     var name by remember(label?.id) { mutableStateOf(label?.name ?: "") }
-    val valid = name.trim().isNotEmpty() && !name.trim().any { it.isWhitespace() || it == '@' || it == '#' }
+    val trimmed = name.trim()
+    val valid = trimmed.isNotEmpty() && !trimmed.any { it.isWhitespace() || it == '@' || it == '#' }
+    // The server keeps one label per name, so a second one with the same name is refused.
+    val taken = state.labels.values.any {
+        it.id != label?.id && it.name.equals(trimmed, ignoreCase = true)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (label == null) "Add label" else "Edit label") },
@@ -215,15 +222,16 @@ private fun LabelDialog(label: Label?, onDismiss: () -> Unit) {
                 label = { Text("Name") },
                 singleLine = true,
                 supportingText = { Text("No spaces, @ or #.") },
+                isError = taken,
             )
         },
         confirmButton = {
             TextButton(
-                enabled = valid,
+                enabled = valid && !taken,
                 onClick = {
                     val args = buildJsonObject {
                         put("id", label?.id ?: Ids.newId())
-                        put("name", name.trim())
+                        put("name", trimmed)
                     }
                     app.sendAll(listOf((if (label == null) "label_add" else "label_update") to args))
                     onDismiss()
@@ -347,6 +355,19 @@ private fun FilterDialog(filter: Filter?, state: AppState, onDismiss: () -> Unit
     var problem by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
 
+    fun save() {
+        app.sendAll(
+            listOf(
+                (if (filter == null) "filter_add" else "filter_update") to buildJsonObject {
+                    put("id", filter?.id ?: Ids.newId())
+                    put("name", name.trim())
+                    put("query", query.trim())
+                },
+            ),
+        )
+        onDismiss()
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (filter == null) "Add filter" else "Edit filter") },
@@ -386,23 +407,14 @@ private fun FilterDialog(filter: Filter?, state: AppState, onDismiss: () -> Unit
                         val answer = app.filterEngine.run(Filters.request(state, query.trim(), localNow(state)))
                         checking = false
                         if (answer == null) {
-                            problem = "Filters need an up-to-date Android System WebView."
+                            // No JavaScript sandbox here: the server still checks the query when
+                            // it saves the filter, and says so in Settings if it refuses it.
+                            save()
                             return@launch
                         }
                         when (val result = Filters.result(answer, state)) {
                             is Filters.Result.Error -> problem = result.message
-                            is Filters.Result.Ok -> {
-                                app.sendAll(
-                                    listOf(
-                                        (if (filter == null) "filter_add" else "filter_update") to buildJsonObject {
-                                            put("id", filter?.id ?: Ids.newId())
-                                            put("name", name.trim())
-                                            put("query", query.trim())
-                                        },
-                                    ),
-                                )
-                                onDismiss()
-                            }
+                            is Filters.Result.Ok -> save()
                         }
                     }
                 },
@@ -470,21 +482,34 @@ fun CommentsSection(state: AppState, taskId: String, canComment: Boolean) {
     val app = LocalContext.current.app
     val comments = remember(state, taskId) { Views.commentsOf(state, taskId) }
     var text by remember(taskId) { mutableStateOf("") }
+    var editing by remember { mutableStateOf<Comment?>(null) }
+    var deleting by remember { mutableStateOf<Comment?>(null) }
 
     Text("Comments", style = MaterialTheme.typography.titleSmall)
     if (comments.isEmpty()) {
         Text("No comments yet.", style = MaterialTheme.typography.bodySmall)
     }
     for (comment in comments) {
-        val mine = comment.userId != null && comment.userId == state.user?.id
-        val author = if (mine) "You" else comment.userId?.let { state.people[it]?.username } ?: "Former member"
-        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            Text(author, style = MaterialTheme.typography.labelMedium)
-            Text(comment.content, style = MaterialTheme.typography.bodyMedium)
-            if (comment.pending) {
-                Text("Sending…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        CommentItem(
+            comment = comment,
+            state = state,
+            editing = editing?.id == comment.id,
+            onEdit = { editing = comment },
+            onSave = { draft ->
+                editing = null
+                if (draft.trim() != comment.content) {
+                    app.sendAll(
+                        listOf(
+                            "comment_update" to buildJsonObject {
+                                put("id", comment.id)
+                                put("content", draft.trim())
+                            },
+                        ),
+                    )
+                }
+            },
+            onDelete = { deleting = comment },
+        )
     }
     if (!canComment) {
         Text("You can't comment on this project.", style = MaterialTheme.typography.bodySmall)
@@ -513,6 +538,72 @@ fun CommentsSection(state: AppState, taskId: String, canComment: Boolean) {
             text = ""
         },
     ) { Text("Comment") }
+
+    deleting?.let { comment ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete this comment?") },
+            text = { Text("It can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = null
+                    app.sendAll(listOf("comment_delete" to buildJsonObject { put("id", comment.id) }))
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** One comment: who wrote it, when, and (for your own) edit and delete. */
+@Composable
+private fun CommentItem(
+    comment: Comment,
+    state: AppState,
+    editing: Boolean,
+    onEdit: () -> Unit,
+    onSave: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val mine = comment.userId != null && comment.userId == state.user?.id
+    val author = if (mine) {
+        "You"
+    } else {
+        comment.userId?.let { state.people[it]?.username } ?: "Former member"
+    }
+    var draft by remember(comment.id, comment.content) { mutableStateOf(comment.content) }
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(author, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+            Text(
+                Dates.ago(comment.createdAt) + if (comment.updatedAt != comment.createdAt) " · edited" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (mine) {
+                IconButton(onClick = onEdit) { Icon(Icons.Filled.Edit, contentDescription = "Edit comment") }
+                IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "Delete comment") }
+            }
+        }
+        if (editing) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it.take(15000) },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onSave(draft) }) { Text("Save") }
+                TextButton(onClick = onEdit) { Text("Cancel") }
+            }
+        } else {
+            Text(comment.content, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (comment.pending) {
+            Text("Sending…", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 /** The user's local date and time in their synced zone (the "now" the filters use). */

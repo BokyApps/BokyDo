@@ -164,6 +164,12 @@ fun SettingsScreen() {
             syncedAt = app.store.syncedAt(),
         )
     }
+    // What the server refused, so a change that didn't work says why.
+    val refusals = remember(version) {
+        app.store.rejected().takeLast(5).map { r ->
+            (r.message ?: r.error) + " (" + r.command.type + ")"
+        }
+    }
     val host = app.sessions.load()?.origin ?: ""
     Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Signed in to $host" + (summary.username?.let { " as $it" } ?: ""))
@@ -174,6 +180,7 @@ fun SettingsScreen() {
         )
         if (summary.pending > 0) Text("${summary.pending} changes waiting to be sent")
         if (summary.rejected > 0) Text("${summary.rejected} changes were refused by the server", color = MaterialTheme.colorScheme.error)
+        for (r in refusals) Text("· $r", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         syncError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = { scope.launch { runCatching { app.sync() } } }) { Text("Sync now") }

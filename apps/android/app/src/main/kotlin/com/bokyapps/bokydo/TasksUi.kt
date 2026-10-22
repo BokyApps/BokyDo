@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
@@ -39,6 +40,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
@@ -88,8 +90,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.time.LocalDate
 
 /** Where the user is. Kept as a small back stack: no navigation library needed for these few. */
@@ -401,6 +405,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
     var description by remember(task.id, task.description) { mutableStateOf(task.description) }
     var priority by remember(task.id, task.priority) { mutableStateOf(task.priority) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var editingLabels by remember { mutableStateOf(false) }
     var savedNote by remember { mutableStateOf<String?>(null) }
     val dirty = content.trim() != task.content || description != task.description || priority != task.priority
     val contentOk = content.trim().isNotBlank() && content.trim().length <= 1000 && description.length <= 16000
@@ -417,6 +422,21 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
             app.sendAll(listOf("task_update" to args))
             savedNote = "Saved. Syncing…"
         }
+    }
+
+    /** Take a label off the task; the change shows at once and goes to the server with the rest. */
+    fun removeLabel(label: String) {
+        if (!writable) return
+        app.sendAll(
+            listOf(
+                "task_update" to buildJsonObject {
+                    put("id", task.id)
+                    putJsonArray("labels") {
+                        for (l in task.labels) if (l != label) add(JsonPrimitive(l))
+                    }
+                },
+            ),
+        )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -470,9 +490,23 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
                 color = toneColor(Dates.describe(it.date, it.time, today, prefs).tone),
             )
         }
-        if (task.labels.isNotEmpty()) {
+        if (task.labels.isNotEmpty() || writable) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (l in task.labels) AssistChip(onClick = {}, label = { Text("@$l") })
+                for (l in task.labels) {
+                    InputChip(
+                        selected = true,
+                        onClick = { if (writable) removeLabel(l) },
+                        label = { Text("@$l") },
+                        trailingIcon = if (writable) {
+                            { Icon(Icons.Filled.Close, contentDescription = "Remove @$l") }
+                        } else {
+                            null
+                        },
+                    )
+                }
+                if (writable) {
+                    AssistChip(onClick = { editingLabels = true }, label = { Text("+ Label") })
+                }
             }
         }
         if (!writable) {
@@ -511,6 +545,85 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
+
+    if (editingLabels) {
+        TaskLabelsDialog(state, task, onDismiss = { editingLabels = false })
+    }
+}
+
+/**
+ * The labels of a task: the user's own labels to tick, and a field for a new one. The server's
+ * rules apply: no spaces, @ or #, and one label per name.
+ */
+@Composable
+private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit) {
+    val app = LocalContext.current.app
+    var chosen by remember(task.id) { mutableStateOf(task.labels.toList()) }
+    var fresh by remember(task.id) { mutableStateOf("") }
+    val known = remember(state, task.id) {
+        (state.labels.values.map { it.name } + task.labels).distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+    }
+    val name = fresh.trim()
+    val valid = name.isNotEmpty() && !name.any { it.isWhitespace() || it == '@' || it == '#' }
+    val already = chosen.any { it.equals(name, ignoreCase = true) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Labels") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (l in known) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = chosen.any { it.equals(l, ignoreCase = true) },
+                            onCheckedChange = { on ->
+                                chosen = if (on) {
+                                    chosen + l
+                                } else {
+                                    chosen.filterNot { it.equals(l, ignoreCase = true) }
+                                }
+                            },
+                        )
+                        Text(l)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = fresh,
+                        onValueChange = { fresh = it.take(60) },
+                        label = { Text("New label") },
+                        singleLine = true,
+                        isError = already,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        enabled = valid && !already,
+                        onClick = {
+                            chosen = chosen + name
+                            fresh = ""
+                        },
+                    ) { Icon(Icons.Filled.Add, contentDescription = "Add label") }
+                }
+                Text("No spaces, @ or #.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    app.sendAll(
+                        listOf(
+                            "task_update" to buildJsonObject {
+                                put("id", task.id)
+                                putJsonArray("labels") { chosen.forEach { add(JsonPrimitive(it)) } }
+                            },
+                        ),
+                    )
+                    onDismiss()
+                },
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**
