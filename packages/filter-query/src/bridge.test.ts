@@ -76,6 +76,8 @@ describe('filterJson (the Android bridge)', () => {
   });
 
   it('is the same as running the filter directly', () => {
-    expect(runFilter(input('today'))).toEqual(JSON.parse(filterJson(JSON.stringify(input('today')))));
+    expect(runFilter(input('today'))).toEqual(
+      JSON.parse(filterJson(JSON.stringify(input('today')))),
+    );
   });
 });

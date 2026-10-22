@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -101,6 +102,11 @@ sealed interface Route {
     data class TaskDetail(val id: String) : Route
     data object Ramble : Route
     data object Settings : Route
+    data object Search : Route
+    data object Labels : Route
+    data class Label(val name: String) : Route
+    data object Filters : Route
+    data class Filter(val id: String) : Route
 }
 
 /** The signed-in app: task lists, quick add, browse and settings. */
@@ -138,10 +144,20 @@ fun AppShell() {
         is Route.Project -> state.projects[route.id]?.name ?: "Project"
         is Route.TaskDetail -> state.tasks[route.id]?.content?.take(30) ?: "Task"
         Route.Ramble -> "Ramble"
+        Route.Search -> "Search"
+        Route.Labels -> "Labels"
+        is Route.Label -> "@${route.name}"
+        Route.Filters -> "Filters"
+        is Route.Filter -> state.filters[route.id]?.name ?: "Filter"
     }
     val defaults = when (route) {
         is Route.Project -> route.id
         else -> state.user?.inboxProjectId
+    }
+    // A task added from a label view carries that label.
+    val defaultLabels = when (route) {
+        is Route.Label -> listOf(route.name)
+        else -> emptyList()
     }
 
     Scaffold(
@@ -156,6 +172,11 @@ fun AppShell() {
                     }
                 },
                 actions = {
+                    if (route != Route.Search) {
+                        IconButton(onClick = { go(Route.Search) }) {
+                            Icon(Icons.Filled.Search, contentDescription = "Search")
+                        }
+                    }
                     if (route != Route.Ramble) RambleAction { go(Route.Ramble) }
                 },
             )
@@ -170,7 +191,9 @@ fun AppShell() {
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble && defaults != null) {
+            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble &&
+                route != Route.Search && route != Route.Labels && route != Route.Filters && defaults != null
+            ) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
             }
         },
@@ -185,13 +208,18 @@ fun AppShell() {
                 is Route.TaskDetail -> TaskDetailScreen(state, route.id, today, { go(Route.TaskDetail(it)) }, { stack = stack.dropLast(1) })
                 Route.Ramble -> RambleScreen(state, today)
                 Route.Settings -> SettingsScreen()
+                Route.Search -> SearchScreen(state, today, { go(Route.TaskDetail(it)) }, { go(Route.Project(it)) })
+                Route.Labels -> LabelsScreen(state) { go(Route.Label(it)) }
+                is Route.Label -> LabelScreen(state, route.name, today) { go(Route.TaskDetail(it)) }
+                Route.Filters -> FiltersScreen(state) { go(Route.Filter(it)) }
+                is Route.Filter -> FilterScreen(state, state.filters[route.id], today) { go(Route.TaskDetail(it)) }
             }
         }
     }
 
     if (adding && defaults != null) {
         ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            QuickAddSheet(state, defaults, today)
+            QuickAddSheet(state, defaults, today, defaultLabels)
         }
     }
 }
@@ -250,6 +278,16 @@ private fun BrowseList(state: AppState, open: (Route) -> Unit) {
         if (tree.isEmpty()) item { Text("No projects yet.", Modifier.padding(16.dp)) }
         item { HorizontalDivider() }
         item {
+            Text("Filters", Modifier.fillMaxWidth().clickable { open(Route.Filters) }.padding(16.dp))
+        }
+        item {
+            Text("Labels", Modifier.fillMaxWidth().clickable { open(Route.Labels) }.padding(16.dp))
+        }
+        item {
+            Text("Search", Modifier.fillMaxWidth().clickable { open(Route.Search) }.padding(16.dp))
+        }
+        item { HorizontalDivider() }
+        item {
             Text("Ramble (voice → tasks)", Modifier.fillMaxWidth().clickable { open(Route.Ramble) }.padding(16.dp))
         }
         item {
@@ -273,7 +311,7 @@ private fun LazyListScope.group(
 }
 
 @Composable
-private fun Header(text: String) {
+fun Header(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleSmall,
@@ -283,14 +321,14 @@ private fun Header(text: String) {
 }
 
 @Composable
-private fun Empty(text: String) {
+fun Empty(text: String) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
+fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
     val app = LocalContext.current.app
     val prefs = state.prefs()
     val subtasks = remember(state, task.id) { Views.children(state, task.id) }
@@ -454,6 +492,8 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
         } else if (task.parentId == null) {
             Text("No sub-tasks. Add one from quick add with this task open? (Sub-task creation lands with the board slice.)", style = MaterialTheme.typography.bodySmall)
         }
+        HorizontalDivider()
+        CommentsSection(state, task.id, writable && !(project?.isArchived ?: false))
     }
 
     if (confirmDelete) {
@@ -479,7 +519,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
  * in the JavaScript sandbox; where that isn't available, the text is added as it is.
  */
 @Composable
-private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String) {
+private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String, defaultLabels: List<String> = emptyList()) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf("") }
@@ -512,7 +552,7 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
                 app.quickAddParser.parse(QuickAdd.input(text, state, defaultProjectId, now, disabled))
                     ?.let { QuickAdd.parseResult(it, text) } ?: QuickAdd.Parsed.plain(text)
             }
-            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs)
+            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs, defaultLabels)
             if (commands.isEmpty()) return@launch
             app.sendAll(commands)
             note = "Added “${current.content.ifBlank { text.trim() }}”"
@@ -608,7 +648,7 @@ private class TokenHighlight(private val tokens: List<QuickAdd.Highlight>, priva
     override fun hashCode() = tokens.hashCode() * 31 + color.hashCode()
 }
 
-private fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
+fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
 
 @Composable
 private fun priorityColor(p: Int): Color = when (p) {
@@ -628,7 +668,7 @@ private fun toneColor(t: Dates.Tone): Color = when (t) {
 }
 
 /** The web's project colours (a subset; the full theme engine arrives with A2's themes). */
-private fun projectColor(name: String): Color = when (name) {
+fun projectColor(name: String): Color = when (name) {
     "berry_red" -> Color(0xFFB8256F)
     "red" -> Color(0xFFDB4035)
     "orange" -> Color(0xFFFF9933)
