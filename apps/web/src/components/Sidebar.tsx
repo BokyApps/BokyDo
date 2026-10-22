@@ -30,6 +30,7 @@ import {
   WorkspaceDialog,
 } from './Workspaces.js';
 import { newId, useSend } from '../lib/sync.js';
+import { useTranslation } from 'react-i18next';
 
 const item = 'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fg hover:bg-surface-alt';
 const active = { className: 'bg-accent/10 font-medium text-fg hover:bg-accent/15' };
@@ -47,6 +48,8 @@ export function Sidebar({
   onAsk?: (() => void) | undefined;
   onNavigate?: () => void;
 }) {
+  const { t, i18n } = useTranslation();
+  const plural = (key: string, n: number) => i18n.t(key, { count: n });
   const state = useSyncState();
   const ui = useTaskUI();
   const today = todayIn(useTimeZone());
@@ -54,7 +57,7 @@ export function Sidebar({
   const [projectsOpen, setProjectsOpen] = useState(true);
   const open = liveTasks(state).filter(isOpen);
   const count = (projectId: string) => open.filter((t) => t.projectId === projectId).length;
-  const t = todayTasks(state, today);
+  const tally = todayTasks(state, today);
   const inboxId = state.user?.inboxProjectId;
   const all = projectTree(state);
   const teamIds = new Set(state.workspaces.map((w) => w.id));
@@ -82,51 +85,53 @@ export function Sidebar({
           <span className="flex size-5 items-center justify-center rounded-full bg-accent text-on-accent">
             <PlusIcon />
           </span>{' '}
-          Add task
+          {t('nav.addTask')}
         </button>
         {onRamble && (
           <button type="button" className={`${item} w-full`} onClick={onRamble}>
-            <MicIcon /> Ramble
+            <MicIcon /> {t('nav.ramble')}
           </button>
         )}
         {onAsk && (
           <button type="button" className={`${item} w-full`} onClick={onAsk}>
-            <AskIcon /> Ask
+            <AskIcon /> {t('nav.ask')}
           </button>
         )}
         <button type="button" className={`${item} w-full`} onClick={onSearch}>
-          <SearchIcon /> Search
+          <SearchIcon /> {t('nav.search')}
         </button>
         <Link to="/inbox" className={item} activeProps={active}>
           <span className="text-p3">
             <InboxIcon />
           </span>{' '}
-          Inbox <Count n={inboxId ? count(inboxId) : 0} />
+          {t('nav.inbox')} <Count n={inboxId ? count(inboxId) : 0} />
         </Link>
         <Link to="/today" className={item} activeProps={active}>
           <span className="text-success">
             <TodayIcon />
           </span>{' '}
-          Today <Count n={t.today.length + t.overdue.length} danger={t.overdue.length > 0} />
+          {t('nav.today')}{' '}
+          <Count n={tally.today.length + tally.overdue.length} danger={tally.overdue.length > 0} />
         </Link>
         <Link to="/upcoming" className={item} activeProps={active}>
           <span className="text-p2">
             <UpcomingIcon />
           </span>{' '}
-          Upcoming
+          {t('nav.upcoming')}
         </Link>
         <Link to="/completed" className={item} activeProps={active}>
           <span className="text-muted">
             <CheckIcon />
           </span>{' '}
-          Completed
+          {t('nav.completed')}
         </Link>
         <Link to="/productivity" className={item} activeProps={active}>
-          <span className="text-muted">▤</span> Productivity
+          <span className="text-muted">▤</span> {t('nav.productivity')}
         </Link>
         {state.invitations.length > 0 && (
           <Link to="/invitations" className={item} activeProps={active}>
-            <span className="text-accent">✉</span> Invitations{' '}
+            <span className="text-accent">✉</span>{' '}
+            {plural('count.invitation', state.invitations.length)}{' '}
             <Count n={state.invitations.length} danger />
           </Link>
         )}
@@ -134,19 +139,19 @@ export function Sidebar({
           <span className="text-p1">
             <TagIcon />
           </span>{' '}
-          Filters &amp; Labels
+          {t('nav.filtersLabels')}
         </Link>
         <Link to="/templates" className={item} activeProps={active}>
           <span className="text-muted">
             <TemplateIcon />
           </span>{' '}
-          Templates
+          {t('nav.templates')}
         </Link>
       </div>
 
       {(favorites.length > 0 || favoriteLabels.length > 0 || favoriteFilters.length > 0) && (
         <div className="space-y-0.5">
-          <h2 className="px-2 text-xs font-semibold text-muted">Favourites</h2>
+          <h2 className="px-2 text-xs font-semibold text-muted">{t('sidebar.favourites')}</h2>
           {favorites.map((p) => (
             <Link
               key={p.id}
@@ -187,11 +192,11 @@ export function Sidebar({
             aria-expanded={projectsOpen}
             onClick={() => setProjectsOpen(!projectsOpen)}
           >
-            My projects <ChevronIcon open={projectsOpen} />
+            {t('sidebar.myProjects')} <ChevronIcon open={projectsOpen} />
           </button>
           <button
             type="button"
-            aria-label="Add project"
+            aria-label={t('sidebar.addProject')}
             className="rounded p-0.5 text-muted hover:bg-surface-alt hover:text-fg"
             onClick={() => setAddingProject(true)}
           >
@@ -200,11 +205,11 @@ export function Sidebar({
         </div>
         {projectsOpen && <ProjectNodes nodes={tree} count={count} />}
         {projectsOpen && tree.length === 0 && (
-          <p className="px-2 py-1 text-xs text-muted">No projects yet.</p>
+          <p className="px-2 py-1 text-xs text-muted">{t('sidebar.noProjects')}</p>
         )}
         {[...state.projects.values()].some((p) => p.isArchived) && (
           <Link to="/archived" className={`${item} text-muted`} activeProps={active}>
-            <ArchiveIcon /> Archived projects
+            <ArchiveIcon /> {t('sidebar.archivedProjects')}
           </Link>
         )}
       </div>
@@ -238,6 +243,7 @@ function WorkspaceSection({
   nodes: ProjectNode[];
   count: (id: string) => number;
 }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const send = useSend();
   const [open, setOpen] = useState(true);
@@ -308,7 +314,7 @@ function WorkspaceSection({
           })}
           <ProjectNodes nodes={unfiled} count={count} />
           {nodes.length === 0 && folders.length === 0 && (
-            <p className="px-2 py-1 text-xs text-muted">No team projects yet.</p>
+            <p className="px-2 py-1 text-xs text-muted">{t('sidebar.noTeamProjects')}</p>
           )}
         </>
       )}
@@ -340,6 +346,7 @@ function FolderGroup({
   empty: boolean;
   children: [React.ReactNode, React.ReactNode];
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const [menu, list] = children;
   return (
@@ -356,7 +363,9 @@ function FolderGroup({
         {menu}
       </div>
       {open && list}
-      {open && empty && <p className="py-0.5 pl-8 text-xs text-muted">Empty folder</p>}
+      {open && empty && (
+        <p className="py-0.5 pl-8 text-xs text-muted">{t('sidebar.emptyFolder')}</p>
+      )}
     </div>
   );
 }

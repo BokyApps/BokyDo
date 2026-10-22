@@ -9,6 +9,7 @@ const LABEL: Record<EvalFeature, string> = {
   'assist.filter': 'Filter Assist',
   'assist.task': 'Task Assist',
   'ramble.extract': 'Ramble',
+  reports: 'Reports',
 };
 
 /**
@@ -28,8 +29,8 @@ export function AiEvalPanel() {
     <Card>
       <h2 className="mb-1 font-semibold">Check a model</h2>
       <p className="mb-4 text-sm text-muted">
-        Runs four short checks with made-up tasks (none of yours) on the model chosen above for a
-        feature, including two that try to trick it. Each check is an AI call on that model.
+        Runs a few short checks with made-up tasks (none of yours) on the model chosen above for a
+        feature, including ones that try to trick it. Each check is an AI call on that model.
       </p>
       <div className="flex flex-wrap gap-2">
         {features.map((f) => (

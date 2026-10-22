@@ -167,7 +167,7 @@ export interface TriageResponse {
 // ---- Eval harness ----
 
 /** Features the eval harness has cases for. */
-export const EVAL_FEATURES = ['assist.filter', 'assist.task', 'ramble.extract'] as const;
+export const EVAL_FEATURES = ['assist.filter', 'assist.task', 'ramble.extract', 'reports'] as const;
 export type EvalFeature = (typeof EVAL_FEATURES)[number];
 
 export const evalRequestSchema = z.object({ feature: z.enum(EVAL_FEATURES) }).strict();

@@ -38,6 +38,12 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    // F-Droid's scanner flags Google's encrypted dependency-metadata block (A7a).
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
 }
 
 dependencies {
@@ -54,4 +60,6 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
+    // Ramble's mic glyph lives in the extended set (BOM pins the version).
+    implementation(libs.androidx.compose.material.icons.extended)
 }
