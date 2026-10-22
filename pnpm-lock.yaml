@@ -364,6 +364,10 @@ importers:
       '@bokydo/nlp':
         specifier: workspace:*
         version: link:../nlp
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/nlp:
     devDependencies:

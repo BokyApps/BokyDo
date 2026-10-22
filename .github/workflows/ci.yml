@@ -48,6 +48,9 @@ jobs:
       # The Android app runs this parser (ADR 0016): the committed bundle must be the current one.
       - run: pnpm --filter @bokydo/nlp build:android
       - run: git diff --exit-code -- apps/android/app/src/main/assets/nlp.js
+      # The saved filters run on the same sandbox (A2c).
+      - run: pnpm --filter @bokydo/filter-query build:android
+      - run: git diff --exit-code -- apps/android/app/src/main/assets/filter.js
 
   android:
     name: Android (core tests, lint, build)
