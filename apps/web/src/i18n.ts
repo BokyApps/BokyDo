@@ -122,6 +122,10 @@ export async function setLanguage(
   )
     return switchTo('en');
   if (!i18next.hasResourceBundle(resolved, 'translation')) {
+    // Read a catalogue from disk only for a language we ship: `resolved` is built from the
+    // fixed LANGUAGES list, so no preference can point this import outside ./locales even if
+    // the schema's tag pattern ever loosens.
+    if (!(LANGUAGES as readonly string[]).includes(resolved)) return switchTo('en');
     const bundle = (await import(`./locales/${resolved}.json`)).default;
     i18next.addResourceBundle(resolved, 'translation', bundle, true, true);
   }

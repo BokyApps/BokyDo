@@ -13,8 +13,8 @@ export function localeTag(): string {
 /**
  * The browser's languages, best first. Isolated here so the "follow the browser" behaviour is
  * testable, and so `auto` can be resolved the same way on the client and in a unit test.
+ *
+ * One implementation: i18n.ts owns it (it is the default for setLanguage), and this re-export
+ * keeps the same helper reachable from here.
  */
-export function browserLanguages(): string[] {
-  if (typeof navigator === 'undefined') return [];
-  return [...(navigator.languages ?? [navigator.language])].filter(Boolean);
-}
+export { browserLanguages } from '../i18n.js';

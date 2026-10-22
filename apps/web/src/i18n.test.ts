@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   AUTO_LANGUAGE,
+  LANGUAGES,
   catalogueFor,
   chosenLanguage,
   initI18n,
@@ -20,6 +21,15 @@ describe('i18n plumbing', () => {
     await initI18n();
   });
 
+  // Bundles a test registers (af, en-XA) must not leak into the next one: the "no catalogue"
+  // case relies on af being unregistered, and must hold whatever order the tests run in.
+  afterEach(async () => {
+    const { default: i18n } = await import('./i18n.js');
+    for (const lng of Object.keys(i18n.store.data))
+      if (!(LANGUAGES as readonly string[]).includes(lng))
+        i18n.removeResourceBundle(lng, 'translation');
+  });
+
   it('starts in English, whose catalogue is the base', async () => {
     expect(await setLanguage('en')).toBe('en');
     const { default: en } = await import('./locales/en.json');
@@ -32,6 +42,12 @@ describe('i18n plumbing', () => {
     expect(await setLanguage('af', languages())).toBe('en');
     expect(await setLanguage('not-a-tag', languages())).toBe('en');
     expect(await setLanguage('en-ZA', languages())).toBe('en');
+  });
+
+  it('never imports a catalogue path outside ./locales', async () => {
+    // A tag that looks like a path can't select a file: only shipped languages are imported.
+    expect(await setLanguage('../../etc/passwd', languages())).toBe('en');
+    expect(await setLanguage('en/../../secret', languages())).toBe('en');
   });
 
   it('switches to a catalogue registered later', async () => {
