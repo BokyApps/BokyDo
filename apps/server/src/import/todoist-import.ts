@@ -551,7 +551,6 @@ export class TodoistImporter {
   }
 }
 
-/** Completed tasks finished within the window the user picked (the read already capped it). */
 /**
  * Completed tasks finished within the window the user picked. Same definition of a month as
  * the reader (calendar months back from `now`), so the filter never drops the oldest day or
