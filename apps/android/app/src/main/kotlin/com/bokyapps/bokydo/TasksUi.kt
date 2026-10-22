@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
@@ -40,7 +39,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
@@ -424,16 +422,16 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
         }
     }
 
-    /** Take a label off the task; the change shows at once and goes to the server with the rest. */
-    fun removeLabel(label: String) {
+    /**
+     * Take a label off the task; the change shows at once and goes to the server with the rest.
+     */
+    fun setLabels(labels: List<String>) {
         if (!writable) return
         app.sendAll(
             listOf(
                 "task_update" to buildJsonObject {
                     put("id", task.id)
-                    putJsonArray("labels") {
-                        for (l in task.labels) if (l != label) add(JsonPrimitive(l))
-                    }
+                    putJsonArray("labels") { labels.forEach { add(JsonPrimitive(it)) } }
                 },
             ),
         )
@@ -493,16 +491,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
         if (task.labels.isNotEmpty() || writable) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (l in task.labels) {
-                    InputChip(
-                        selected = true,
-                        onClick = { if (writable) removeLabel(l) },
-                        label = { Text("@$l") },
-                        trailingIcon = if (writable) {
-                            { Icon(Icons.Filled.Close, contentDescription = "Remove @$l") }
-                        } else {
-                            null
-                        },
-                    )
+                    AssistChip(onClick = { editingLabels = true }, label = { Text("@$l") })
                 }
                 if (writable) {
                     AssistChip(onClick = { editingLabels = true }, label = { Text("+ Label") })
@@ -547,7 +536,15 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
     }
 
     if (editingLabels) {
-        TaskLabelsDialog(state, task, onDismiss = { editingLabels = false })
+        TaskLabelsDialog(
+            state = state,
+            task = task,
+            onDismiss = { editingLabels = false },
+            onSave = { labels ->
+                setLabels(labels)
+                editingLabels = false
+            },
+        )
     }
 }
 
@@ -556,8 +553,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
  * rules apply: no spaces, @ or #, and one label per name.
  */
 @Composable
-private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit) {
-    val app = LocalContext.current.app
+private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
     var chosen by remember(task.id) { mutableStateOf(task.labels.toList()) }
     var fresh by remember(task.id) { mutableStateOf("") }
     val known = remember(state, task.id) {
@@ -608,19 +604,7 @@ private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit)
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    app.sendAll(
-                        listOf(
-                            "task_update" to buildJsonObject {
-                                put("id", task.id)
-                                putJsonArray("labels") { chosen.forEach { add(JsonPrimitive(it)) } }
-                            },
-                        ),
-                    )
-                    onDismiss()
-                },
-            ) { Text("Save") }
+            TextButton(onClick = { onSave(chosen) }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

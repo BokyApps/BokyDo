@@ -48,7 +48,9 @@ import com.bokyapps.bokydo.core.Ids
 import com.bokyapps.bokydo.core.Label
 import com.bokyapps.bokydo.core.QuickAdd
 import com.bokyapps.bokydo.core.Views
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -404,7 +406,9 @@ private fun FilterDialog(filter: Filter?, state: AppState, onDismiss: () -> Unit
                     checking = true
                     problem = null
                     scope.launch {
-                        val answer = app.filterEngine.run(Filters.request(state, query.trim(), localNow(state)))
+                        val answer = withContext(Dispatchers.Default) {
+                            app.filterEngine.run(Filters.request(state, query.trim(), localNow(state)))
+                        }
                         checking = false
                         if (answer == null) {
                             // No JavaScript sandbox here: the server still checks the query when
@@ -433,7 +437,10 @@ fun FilterScreen(state: AppState, filter: Filter?, today: String, onOpenTask: (S
     LaunchedEffect(filter?.id, filter?.query, state) {
         val f = filter ?: return@LaunchedEffect
         running = true
-        val answer = app.filterEngine.run(Filters.request(state, f.query, localNow(state)))
+        // The request is built off the main thread: it walks every open task.
+        val answer = withContext(Dispatchers.Default) {
+            app.filterEngine.run(Filters.request(state, f.query, localNow(state)))
+        }
         result = if (answer == null) {
             Filters.Result.Error("Filters need an up-to-date Android System WebView.")
         } else {
