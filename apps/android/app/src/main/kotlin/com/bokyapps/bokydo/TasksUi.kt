@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -87,8 +88,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.time.LocalDate
 
 /** Where the user is. Kept as a small back stack: no navigation library needed for these few. */
@@ -101,6 +104,11 @@ sealed interface Route {
     data class TaskDetail(val id: String) : Route
     data object Ramble : Route
     data object Settings : Route
+    data object Search : Route
+    data object Labels : Route
+    data class Label(val name: String) : Route
+    data object Filters : Route
+    data class Filter(val id: String) : Route
 }
 
 /** The signed-in app: task lists, quick add, browse and settings. */
@@ -138,10 +146,20 @@ fun AppShell() {
         is Route.Project -> state.projects[route.id]?.name ?: "Project"
         is Route.TaskDetail -> state.tasks[route.id]?.content?.take(30) ?: "Task"
         Route.Ramble -> "Ramble"
+        Route.Search -> "Search"
+        Route.Labels -> "Labels"
+        is Route.Label -> "@${route.name}"
+        Route.Filters -> "Filters"
+        is Route.Filter -> state.filters[route.id]?.name ?: "Filter"
     }
     val defaults = when (route) {
         is Route.Project -> route.id
         else -> state.user?.inboxProjectId
+    }
+    // A task added from a label view carries that label.
+    val defaultLabels = when (route) {
+        is Route.Label -> listOf(route.name)
+        else -> emptyList()
     }
 
     Scaffold(
@@ -156,6 +174,11 @@ fun AppShell() {
                     }
                 },
                 actions = {
+                    if (route != Route.Search) {
+                        IconButton(onClick = { go(Route.Search) }) {
+                            Icon(Icons.Filled.Search, contentDescription = "Search")
+                        }
+                    }
                     if (route != Route.Ramble) RambleAction { go(Route.Ramble) }
                 },
             )
@@ -170,7 +193,9 @@ fun AppShell() {
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble && defaults != null) {
+            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble &&
+                route != Route.Search && route != Route.Labels && route != Route.Filters && defaults != null
+            ) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
             }
         },
@@ -185,13 +210,18 @@ fun AppShell() {
                 is Route.TaskDetail -> TaskDetailScreen(state, route.id, today, { go(Route.TaskDetail(it)) }, { stack = stack.dropLast(1) })
                 Route.Ramble -> RambleScreen(state, today)
                 Route.Settings -> SettingsScreen()
+                Route.Search -> SearchScreen(state, today, { go(Route.TaskDetail(it)) }, { go(Route.Project(it)) })
+                Route.Labels -> LabelsScreen(state) { go(Route.Label(it)) }
+                is Route.Label -> LabelScreen(state, route.name, today) { go(Route.TaskDetail(it)) }
+                Route.Filters -> FiltersScreen(state) { go(Route.Filter(it)) }
+                is Route.Filter -> FilterScreen(state, state.filters[route.id], today) { go(Route.TaskDetail(it)) }
             }
         }
     }
 
     if (adding && defaults != null) {
         ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            QuickAddSheet(state, defaults, today)
+            QuickAddSheet(state, defaults, today, defaultLabels)
         }
     }
 }
@@ -250,6 +280,16 @@ private fun BrowseList(state: AppState, open: (Route) -> Unit) {
         if (tree.isEmpty()) item { Text("No projects yet.", Modifier.padding(16.dp)) }
         item { HorizontalDivider() }
         item {
+            Text("Filters", Modifier.fillMaxWidth().clickable { open(Route.Filters) }.padding(16.dp))
+        }
+        item {
+            Text("Labels", Modifier.fillMaxWidth().clickable { open(Route.Labels) }.padding(16.dp))
+        }
+        item {
+            Text("Search", Modifier.fillMaxWidth().clickable { open(Route.Search) }.padding(16.dp))
+        }
+        item { HorizontalDivider() }
+        item {
             Text("Ramble (voice → tasks)", Modifier.fillMaxWidth().clickable { open(Route.Ramble) }.padding(16.dp))
         }
         item {
@@ -273,7 +313,7 @@ private fun LazyListScope.group(
 }
 
 @Composable
-private fun Header(text: String) {
+fun Header(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleSmall,
@@ -283,14 +323,14 @@ private fun Header(text: String) {
 }
 
 @Composable
-private fun Empty(text: String) {
+fun Empty(text: String) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
+fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
     val app = LocalContext.current.app
     val prefs = state.prefs()
     val subtasks = remember(state, task.id) { Views.children(state, task.id) }
@@ -363,6 +403,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
     var description by remember(task.id, task.description) { mutableStateOf(task.description) }
     var priority by remember(task.id, task.priority) { mutableStateOf(task.priority) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var editingLabels by remember { mutableStateOf(false) }
     var savedNote by remember { mutableStateOf<String?>(null) }
     val dirty = content.trim() != task.content || description != task.description || priority != task.priority
     val contentOk = content.trim().isNotBlank() && content.trim().length <= 1000 && description.length <= 16000
@@ -379,6 +420,21 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
             app.sendAll(listOf("task_update" to args))
             savedNote = "Saved. Syncing…"
         }
+    }
+
+    /**
+     * Take a label off the task; the change shows at once and goes to the server with the rest.
+     */
+    fun setLabels(labels: List<String>) {
+        if (!writable) return
+        app.sendAll(
+            listOf(
+                "task_update" to buildJsonObject {
+                    put("id", task.id)
+                    putJsonArray("labels") { labels.forEach { add(JsonPrimitive(it)) } }
+                },
+            ),
+        )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -432,9 +488,14 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
                 color = toneColor(Dates.describe(it.date, it.time, today, prefs).tone),
             )
         }
-        if (task.labels.isNotEmpty()) {
+        if (task.labels.isNotEmpty() || writable) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (l in task.labels) AssistChip(onClick = {}, label = { Text("@$l") })
+                for (l in task.labels) {
+                    AssistChip(onClick = { editingLabels = true }, label = { Text("@$l") })
+                }
+                if (writable) {
+                    AssistChip(onClick = { editingLabels = true }, label = { Text("+ Label") })
+                }
             }
         }
         if (!writable) {
@@ -454,6 +515,8 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
         } else if (task.parentId == null) {
             Text("No sub-tasks. Add one from quick add with this task open? (Sub-task creation lands with the board slice.)", style = MaterialTheme.typography.bodySmall)
         }
+        HorizontalDivider()
+        CommentsSection(state, task.id, writable && !(project?.isArchived ?: false))
     }
 
     if (confirmDelete) {
@@ -471,6 +534,80 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
+
+    if (editingLabels) {
+        TaskLabelsDialog(
+            state = state,
+            task = task,
+            onDismiss = { editingLabels = false },
+            onSave = { labels ->
+                setLabels(labels)
+                editingLabels = false
+            },
+        )
+    }
+}
+
+/**
+ * The labels of a task: the user's own labels to tick, and a field for a new one. The server's
+ * rules apply: no spaces, @ or #, and one label per name.
+ */
+@Composable
+private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
+    var chosen by remember(task.id) { mutableStateOf(task.labels.toList()) }
+    var fresh by remember(task.id) { mutableStateOf("") }
+    val known = remember(state, task.id) {
+        (state.labels.values.map { it.name } + task.labels).distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+    }
+    val name = fresh.trim()
+    val valid = name.isNotEmpty() && !name.any { it.isWhitespace() || it == '@' || it == '#' }
+    val already = chosen.any { it.equals(name, ignoreCase = true) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Labels") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (l in known) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = chosen.any { it.equals(l, ignoreCase = true) },
+                            onCheckedChange = { on ->
+                                chosen = if (on) {
+                                    chosen + l
+                                } else {
+                                    chosen.filterNot { it.equals(l, ignoreCase = true) }
+                                }
+                            },
+                        )
+                        Text(l)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = fresh,
+                        onValueChange = { fresh = it.take(60) },
+                        label = { Text("New label") },
+                        singleLine = true,
+                        isError = already,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        enabled = valid && !already,
+                        onClick = {
+                            chosen = chosen + name
+                            fresh = ""
+                        },
+                    ) { Icon(Icons.Filled.Add, contentDescription = "Add label") }
+                }
+                Text("No spaces, @ or #.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(chosen) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**
@@ -479,7 +616,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
  * in the JavaScript sandbox; where that isn't available, the text is added as it is.
  */
 @Composable
-private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String) {
+private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String, defaultLabels: List<String> = emptyList()) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf("") }
@@ -512,7 +649,7 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
                 app.quickAddParser.parse(QuickAdd.input(text, state, defaultProjectId, now, disabled))
                     ?.let { QuickAdd.parseResult(it, text) } ?: QuickAdd.Parsed.plain(text)
             }
-            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs)
+            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs, defaultLabels)
             if (commands.isEmpty()) return@launch
             app.sendAll(commands)
             note = "Added “${current.content.ifBlank { text.trim() }}”"
@@ -608,7 +745,7 @@ private class TokenHighlight(private val tokens: List<QuickAdd.Highlight>, priva
     override fun hashCode() = tokens.hashCode() * 31 + color.hashCode()
 }
 
-private fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
+fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
 
 @Composable
 private fun priorityColor(p: Int): Color = when (p) {
@@ -628,7 +765,7 @@ private fun toneColor(t: Dates.Tone): Color = when (t) {
 }
 
 /** The web's project colours (a subset; the full theme engine arrives with A2's themes). */
-private fun projectColor(name: String): Color = when (name) {
+fun projectColor(name: String): Color = when (name) {
     "berry_red" -> Color(0xFFB8256F)
     "red" -> Color(0xFFDB4035)
     "orange" -> Color(0xFFFF9933)
