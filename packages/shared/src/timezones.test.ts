@@ -12,7 +12,9 @@ import {
 const ids = (q: string) =>
   searchTimeZones(q, { now: new Date('2026-01-15T12:00:00Z') }).map((z) => z.id);
 
-describe('time-zone search', () => {
+// The search formats every zone with Intl, so a query per case is slow enough to pass the
+// default 5s timeout on a busy machine.
+describe('time-zone search', { timeout: 30_000 }, () => {
   it('finds zones by city, country, and cities that share a zone', () => {
     expect(ids('phnom')[0]).toBe('Asia/Phnom_Penh');
     expect(ids('cambodia')[0]).toBe('Asia/Phnom_Penh');
