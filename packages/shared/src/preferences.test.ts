@@ -3,6 +3,7 @@ import {
   DEFAULT_PREFERENCES,
   mergeNotifications,
   preferencesPatchSchema,
+  preferencesSchema,
   resolvePreferences,
 } from './preferences.js';
 
@@ -53,6 +54,30 @@ describe('notification preferences', () => {
         notifications: { channels: { reminder: { push: false } } },
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('language preference', () => {
+  it('defaults to auto for a row stored before the field existed', () => {
+    // resolvePreferences merges over the defaults, so an old partial row still resolves.
+    expect(resolvePreferences({ timezone: 'Asia/Phnom_Penh' }).language).toBe('auto');
+    // ...and a strict parse of a full row that predates the field does too, rather than throwing.
+    const { language: _language, ...withoutLanguage } = DEFAULT_PREFERENCES;
+    const parsed = preferencesSchema.safeParse(withoutLanguage);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.language).toBe('auto');
+  });
+
+  it('takes a BCP 47 tag, rejects a path-shaped one, and is not injected by an empty patch', () => {
+    expect(preferencesSchema.parse({ ...DEFAULT_PREFERENCES, language: 'en-ZA' }).language).toBe(
+      'en-ZA',
+    );
+    expect(preferencesSchema.safeParse({ ...DEFAULT_PREFERENCES, language: '../en' }).success).toBe(
+      false,
+    );
+    // A patch that omits language must not carry the default back to the client.
+    expect(preferencesPatchSchema.parse({}).language).toBeUndefined();
+    expect(preferencesPatchSchema.parse({ language: 'af' }).language).toBe('af');
   });
 });
 
