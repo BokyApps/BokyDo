@@ -1,0 +1,13 @@
+BokyDo is a free, open-source task manager you host yourself. This app talks to your
+server and no one else's: no accounts with third parties, no tracking, no Google services
+required.
+
+- Inbox, Today and Upcoming lists, projects, labels, filters and boards
+- Natural-language quick add, parsed on the device
+- Sub-tasks, comments, reminders that fire offline as exact alarms
+- Voice capture (Ramble): speak a brain-dump, review the drafted tasks, commit
+- Homescreen widgets, Quick Settings tile, share target and shortcuts
+- Syncs over your connection; changes queue offline and send later
+
+Your tasks live in your PostgreSQL database. Source code (AGPL-3.0) and release builds
+are reproducible: anyone can rebuild this exact APK from the published source.
