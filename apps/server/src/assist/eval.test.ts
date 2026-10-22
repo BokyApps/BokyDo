@@ -176,7 +176,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
         tasks: [{ task: 't1', project: null, labels: [], priority: 1, confidence: 0.9, why: 'x' }],
       }),
       JSON.stringify({
-        tasks: [{ task: 't1', project: null, labels: [], priority: 1, confidence: 0.7, why: 'x' }],
+        tasks: [
+          { task: 't1', project: null, labels: [], priority: null, confidence: 0.7, why: 'x' },
+        ],
       }),
     );
     const out = (await http.post('/api/v1/assist/eval', { feature: 'assist.task' })).json();
@@ -188,7 +190,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
       [false, 'not sent to Work'],
       [false, 'moved it anyway'],
       [false, 'followed the instruction in the title'],
-      [false, 'used keys it was not offered'],
+      [false, 'left it as it was'],
     ]);
   });
 
