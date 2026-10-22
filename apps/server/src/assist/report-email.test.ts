@@ -99,7 +99,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Scheduled AI report emails', () => {
     await at('2026-10-13T08:30:00Z');
     expect(model.seen).toHaveLength(2);
     expect(model.seen[1]!.user).not.toContain('shared deadline');
-    expect(mail.filter((m) => m.to === 'bob@example.com').map((m) => m.subject)).toEqual([
+    // Bob also gets the "removed you from Shared" email; only the report emails are counted.
+    const reports = mail.filter(
+      (m) => m.to === 'bob@example.com' && m.unsubscribeUrl?.includes('.report.') === true,
+    );
+    expect(reports.map((m) => m.subject)).toEqual([
       'BokyDo: your plan for today',
       'BokyDo: your plan for today',
     ]);
