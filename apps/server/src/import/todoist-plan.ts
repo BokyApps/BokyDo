@@ -371,13 +371,25 @@ export function planImport(input: PlanInput): Plan {
   const completedById = new Map(completedTasks.map((t) => [t.id, t]));
   const completedParent = (t: TodoistCompletedTask): string | undefined =>
     t.parentId ? (localTask.get(t.parentId) ?? completedLocal.get(t.parentId)) : undefined;
+  /**
+   * How deep a completed task sits under other *completed* tasks: a sub-task whose parent was
+   * finished too is written after it, or the parent would not exist yet and the sub-task would
+   * be left out.
+   */
+  const completedDepth = (t: TodoistCompletedTask): number => {
+    let d = 0;
+    let x: TodoistCompletedTask | undefined = t;
+    while (x?.parentId && d < 20) {
+      const parent = completedById.get(x.parentId);
+      if (!parent) break;
+      x = parent;
+      d++;
+    }
+    return d;
+  };
   const orderedCompleted = completedTasks
     .filter((t) => localProject.has(t.projectId))
-    .sort(
-      (a, b) =>
-        taskDepth(a as unknown as TodoistTask) - taskDepth(b as unknown as TodoistTask) ||
-        byOrder(a, b),
-    );
+    .sort((a, b) => completedDepth(a) - completedDepth(b) || byOrder(a, b));
   let droppedCompletions = 0;
   for (const t of orderedCompleted) {
     const projectId = localProject.get(t.projectId);

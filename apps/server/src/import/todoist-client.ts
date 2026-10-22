@@ -163,14 +163,19 @@ const list = <T extends z.ZodType>(item: T, max: number) => z.array(item).max(ma
  * The completed-items endpoint. `items` is the page; `next_cursor` is null at the end. Unlike
  * the sync payload these are *finished* tasks, so presence is the fact — `checked` is not a
  * filter here (Todoist's sample shows it false).
+ *
+ * Todoist sends more fields than we read (`checked`, `added_at`, `user_id`, `v2_id`, …), so the
+ * page is loose like the sync payload's: a strict schema would refuse every real page.
  */
 const completedItemWire = itemWire
   .omit({ checked: true })
   .extend({ completed_at: str(40).nullish(), completed_by_uid: tid.nullish() })
-  .strict();
+  .loose();
 const completedWire = z
   .object({
-    items: list(completedItemWire, LIMITS.completedTasks),
+    // Todoist always sends the page. A body without it is a broken answer, not an empty page:
+    // the importer has to know that the read failed, or it would offer an empty history.
+    items: z.array(completedItemWire).max(LIMITS.completedTasks),
     next_cursor: str(500).nullish(),
   })
   .loose();
@@ -343,11 +348,28 @@ export interface TodoistCompletedTask {
   completedByUid: string | null;
 }
 
-/** Read the account's completed tasks over [since, until] (W11a-c1). */
+/**
+ * Read the account's completed tasks over [since, until] (W11a-c1).
+ *
+ * Todoist's endpoint answers one project at a time (`project_id` is required), so one request
+ * series is read per project and the answers are put together: a task that shows up in two
+ * series is kept once.
+ */
 export async function fetchTodoistCompleted(
   fetch: OutboundFetch,
   token: string,
-  { since, until, signal }: { since: Date; until: Date; signal?: AbortSignal },
+  {
+    since,
+    until,
+    projectIds,
+    signal,
+  }: {
+    since: Date;
+    until: Date;
+    /** The projects to read: the endpoint answers per project. */
+    projectIds: readonly string[];
+    signal?: AbortSignal;
+  },
 ): Promise<TodoistCompletedTask[]> {
   const span = monthsBetween(since, until);
   if (span <= 0 || span > TODOIST_COMPLETED_MAX_MONTHS) {
@@ -355,31 +377,38 @@ export async function fetchTodoistCompleted(
   }
   const out: TodoistCompletedTask[] = [];
   const seen = new Set<string>();
-  let cursor: string | undefined;
-  for (let page = 0; page < LIMITS.completedPages; page++) {
-    const url = new URL(TODOIST_COMPLETED_URL);
-    url.searchParams.set('since', since.toISOString());
-    url.searchParams.set('until', until.toISOString());
-    url.searchParams.set('limit', String(COMPLETED_PAGE_SIZE));
-    if (cursor) url.searchParams.set('cursor', cursor);
-    const res = await todoistGet(fetch, token, url.toString(), signal);
-    const body = await res.json();
-    const parsed = completedWire.safeParse(body);
-    if (!parsed.success) {
-      const tooMany = parsed.error.issues.some((i) => i.code === 'too_big' && i.origin === 'array');
-      throw new TodoistError(tooMany ? 'too_large' : 'invalid_response');
+  for (const projectId of projectIds) {
+    let cursor: string | undefined;
+    for (let page = 0; page < LIMITS.completedPages; page++) {
+      const url = new URL(TODOIST_COMPLETED_URL);
+      url.searchParams.set('project_id', projectId);
+      url.searchParams.set('since', since.toISOString());
+      url.searchParams.set('until', until.toISOString());
+      url.searchParams.set('limit', String(COMPLETED_PAGE_SIZE));
+      if (cursor) url.searchParams.set('cursor', cursor);
+      const res = await todoistGet(fetch, token, url.toString(), signal);
+      const body = await res.json();
+      const parsed = completedWire.safeParse(body);
+      if (!parsed.success) {
+        const tooMany = parsed.error.issues.some(
+          (i) => i.code === 'too_big' && i.origin === 'array',
+        );
+        throw new TodoistError(tooMany ? 'too_large' : 'invalid_response');
+      }
+      for (const raw of parsed.data.items) {
+        // A page can repeat an item while the account changes underneath us.
+        if (raw.is_deleted || seen.has(raw.id)) continue;
+        seen.add(raw.id);
+        out.push(normaliseCompleted(raw));
+        if (out.length >= LIMITS.completedTasks) return out;
+      }
+      cursor = parsed.data.next_cursor ?? undefined;
+      if (!cursor) break;
     }
-    for (const raw of parsed.data.items ?? []) {
-      // A page can repeat an item while the account changes underneath us.
-      if (raw.is_deleted || seen.has(raw.id)) continue;
-      seen.add(raw.id);
-      out.push(normaliseCompleted(raw));
-      if (out.length >= LIMITS.completedTasks) return out;
-    }
-    cursor = parsed.data.next_cursor ?? undefined;
-    if (!cursor) return out;
+    // The project still had pages after the cap: the account is simply very busy.
+    if (cursor) throw new TodoistError('too_many_pages');
   }
-  throw new TodoistError('too_many_pages');
+  return out;
 }
 
 /** One GET against Todoist, with the same status handling as the sync read. */

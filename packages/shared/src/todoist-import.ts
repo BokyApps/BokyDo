@@ -18,10 +18,13 @@ export const TODOIST_IMPORT_LIMITS = {
   collaborators: 2000,
   /**
    * Completed tasks (W11a-c1): Todoist's completed-items endpoint caps one request series at a
-   * 3-month window, so the offer is bounded and the paging is capped.
+   * 3-month window, so the offer is bounded and the paging is capped. It also answers one
+   * project at a time, so the number of projects read is capped too.
    */
   completedTasks: 20_000,
   completedPages: 100,
+  /** How many projects' completed history one connect reads (one request series each). */
+  completedProjects: 100,
   /** How long a connected preview stays usable before the user must connect again. */
   sessionMinutes: 30,
 } as const;

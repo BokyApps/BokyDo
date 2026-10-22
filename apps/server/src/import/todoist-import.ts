@@ -68,6 +68,8 @@ interface Session {
   expiresAt: number;
   /** The account's completed tasks read at connect (Todoist's capped window). */
   completed: TodoistCompletedTask[];
+  /** Projects past the read cap: their completed history was not read (W11a-c1). */
+  unread: string[];
 }
 
 export class ImportSessionError extends Error {
@@ -130,23 +132,39 @@ export class TodoistImporter {
     // Best effort: this read is an extra for an import that may never ask for completed tasks,
     // so a failure here leaves the count at zero and the choice off rather than failing the
     // whole connect (the snapshot above is what the import needs).
-    const completed = await this.readCompleted(token, sessionId);
-    this.sessions.set(sessionId, { userId, snapshot, expiresAt, completed });
+    const { completed, unread } = await this.readCompleted(token, sessionId, snapshot);
+    this.sessions.set(sessionId, { userId, snapshot, expiresAt, completed, unread });
     return this.preview(userId, sessionId, snapshot, expiresAt, completed);
   }
 
-  /** Todoist's completed items over its capped window, or none when the read did not work. */
-  private async readCompleted(token: string, sessionId: string): Promise<TodoistCompletedTask[]> {
+  /**
+   * Todoist's completed items over its capped window, or none when the read did not work. The
+   * endpoint answers one project at a time, so one series is read per project in the account;
+   * past the cap the remaining projects keep no history (the plan says which ones).
+   */
+  private async readCompleted(
+    token: string,
+    sessionId: string,
+    snapshot: TodoistSnapshot,
+  ): Promise<{ completed: TodoistCompletedTask[]; unread: string[] }> {
     const until = this.now();
     const since = new Date(until);
     since.setMonth(since.getMonth() - TODOIST_COMPLETED_MAX_MONTHS);
+    const projectIds = snapshot.projects.map((p) => p.id);
+    const read = projectIds.slice(0, TODOIST_IMPORT_LIMITS.completedProjects);
+    const unread = projectIds.slice(TODOIST_IMPORT_LIMITS.completedProjects);
     try {
-      return await fetchTodoistCompleted(this.deps.fetch, token, { since, until });
+      const completed = await fetchTodoistCompleted(this.deps.fetch, token, {
+        since,
+        until,
+        projectIds: read,
+      });
+      return { completed, unread };
     } catch (err) {
       if (err instanceof TodoistError) {
         this.deps.log.warn({ reason: err.reason }, 'todoist completed items not read');
         this.completedUnavailable.add(sessionId);
-        return [];
+        return { completed: [], unread: [] };
       }
       throw err;
     }
@@ -234,6 +252,7 @@ export class TodoistImporter {
   private async build(userId: string, choices: TodoistImportChoices) {
     const s = this.session(userId, choices.sessionId);
     let completed: TodoistCompletedTask[] = [];
+    let missed = 0;
     if (choices.completed) {
       // The read at connect is best effort: if it did not work, the choice is refused rather
       // than silently importing nothing (W11a-c1).
@@ -242,6 +261,9 @@ export class TodoistImporter {
       // Read at connect (Todoist's window is capped there); the choice only filters it, so
       // further-back history is out of scope rather than a second fetch.
       completed = withinWindow(s.completed, choices.completedWindow, this.now());
+      // Projects past the read cap keep no history: say so rather than count them as empty.
+      const chosen = new Set(choices.projects.map((p) => p.id));
+      missed = s.unread.filter((id) => chosen.has(id)).length;
     }
     const known = new Set(s.snapshot.projects.map((p) => p.id));
     if (choices.projects.some((p) => !known.has(p.id)))
@@ -269,6 +291,11 @@ export class TodoistImporter {
       members: ctx.members,
       dates: ctx.dates,
     });
+    if (missed)
+      plan.warnings.push({
+        kind: 'completed',
+        message: `No completed history was read for ${missed} of the chosen projects: this account has more projects than one import reads at a time.`,
+      });
     return { plan, snapshot: s.snapshot };
   }
 
@@ -453,6 +480,8 @@ export class TodoistImporter {
             await insertCompletedTask(tx, changes, userId, step);
             await recordMappings(tx, userId, [{ ...step, type: null }]);
           });
+          // The chunk write failed and this row went in on its own: it counts as written.
+          writtenCompleted += 1;
         } catch {
           failures.push({
             kind: 'completed',

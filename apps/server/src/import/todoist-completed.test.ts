@@ -58,15 +58,21 @@ function paged(pages: { items: unknown[]; next_cursor: string | null }[]) {
 const token = '0123456789abcdef0123456789abcdef01234567';
 const since = new Date('2026-07-01T00:00:00Z');
 const until = new Date('2026-09-30T00:00:00Z');
+const projects = ['p-work'];
 
 describe('Todoist completed items', () => {
   it('reads one page and stops when there is no next cursor', async () => {
     const fake = paged([{ items: [item('a'), item('b')], next_cursor: null }]);
-    const tasks = await fetchTodoistCompleted(fake.fetch, token, { since, until });
+    const tasks = await fetchTodoistCompleted(fake.fetch, token, {
+      since,
+      until,
+      projectIds: projects,
+    });
     expect(tasks.map((t) => t.id)).toEqual(['a', 'b']);
     expect(fake.seen).toHaveLength(1);
-    // The window and the page size travel as query parameters.
+    // The project, the window and the page size travel as query parameters.
     expect(fake.seen[0]).toContain(`${TODOIST_COMPLETED_URL}?`);
+    expect(fake.seen[0]).toContain('project_id=p-work');
     expect(fake.seen[0]).toContain('since=2026-07-01T00%3A00%3A00.000Z');
     expect(fake.seen[0]).toContain('until=2026-09-30T00%3A00%3A00.000Z');
     expect(fake.seen[0]).toContain('limit=200');
@@ -78,11 +84,51 @@ describe('Todoist completed items', () => {
       { items: [item('a'), item('b')], next_cursor: 'c2' },
       { items: [item('c')], next_cursor: null },
     ]);
-    const tasks = await fetchTodoistCompleted(fake.fetch, token, { since, until });
+    const tasks = await fetchTodoistCompleted(fake.fetch, token, {
+      since,
+      until,
+      projectIds: projects,
+    });
     expect(tasks.map((t) => t.id)).toEqual(['a', 'b', 'c']);
     expect(fake.seen).toHaveLength(3);
     expect(fake.seen[1]).toContain('cursor=c1');
     expect(fake.seen[2]).toContain('cursor=c2');
+  });
+
+  it('reads one series per project and keeps a task that shows up twice once', async () => {
+    // Todoist's endpoint answers one project at a time, so every project gets its own request.
+    const seen: string[] = [];
+    const fetch: OutboundFetch = async (url) => {
+      const projectId = new URL(String(url)).searchParams.get('project_id');
+      seen.push(String(projectId));
+      const items =
+        projectId === 'p-work' ? [item('a'), item('shared')] : [item('shared'), item('b')];
+      const text = JSON.stringify({ items, next_cursor: null });
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: (async function* () {
+          yield Buffer.from(text);
+        })(),
+        text: async () => text,
+        json: async () => JSON.parse(text) as unknown,
+        cancel: () => undefined,
+      } as OutboundResponse;
+    };
+    const tasks = await fetchTodoistCompleted(fetch, token, {
+      since,
+      until,
+      projectIds: ['p-work', 'p-home'],
+    });
+    expect(seen).toEqual(['p-work', 'p-home']);
+    expect(tasks.map((t) => t.id)).toEqual(['a', 'shared', 'b']);
+  });
+
+  it('asks for nothing when the account has no projects', async () => {
+    const fake = paged([{ items: [item('a')], next_cursor: null }]);
+    const tasks = await fetchTodoistCompleted(fake.fetch, token, { since, until, projectIds: [] });
+    expect(tasks).toEqual([]);
+    expect(fake.seen).toHaveLength(0);
   });
 
   it('refuses a window longer than Todoist allows before any call', async () => {
@@ -91,6 +137,7 @@ describe('Todoist completed items', () => {
       fetchTodoistCompleted(fake.fetch, token, {
         since: new Date('2026-01-01T00:00:00Z'),
         until: new Date('2026-09-30T00:00:00Z'),
+        projectIds: projects,
       }),
     ).rejects.toMatchObject({ reason: 'window_too_long' });
     expect(fake.seen).toHaveLength(0);
@@ -100,13 +147,16 @@ describe('Todoist completed items', () => {
     await fetchTodoistCompleted(ok.fetch, token, {
       since: new Date('2026-07-01T00:00:00Z'),
       until: new Date('2026-09-30T00:00:00Z'),
+      projectIds: projects,
     });
     expect(ok.seen).toHaveLength(1);
   });
 
   it('gives up rather than paging forever', async () => {
     const fake = paged([{ items: [item('a')], next_cursor: 'c1' }]);
-    await expect(fetchTodoistCompleted(fake.fetch, token, { since, until })).rejects.toMatchObject({
+    await expect(
+      fetchTodoistCompleted(fake.fetch, token, { since, until, projectIds: projects }),
+    ).rejects.toMatchObject({
       reason: 'too_many_pages',
     });
   });
@@ -122,10 +172,53 @@ describe('Todoist completed items', () => {
         next_cursor: null,
       },
     ]);
-    const [task] = await fetchTodoistCompleted(fake.fetch, token, { since, until });
+    const [task] = await fetchTodoistCompleted(fake.fetch, token, {
+      since,
+      until,
+      projectIds: projects,
+    });
     expect(task?.id).toBe('a');
     expect(task?.completedByUid).toBe('u2');
     expect(task?.completedAt.toISOString()).toBe('2026-09-16T10:00:00.000Z');
+  });
+
+  it('takes the fields Todoist sends that we do not read', async () => {
+    // A real page carries more than we need (`checked`, `added_at`, `user_id`, …). A schema that
+    // refused them would refuse every real page.
+    const fake = paged([
+      {
+        items: [item('a', { checked: false, added_at: '2026-09-16T09:00:00Z', user_id: 'u1' })],
+        next_cursor: null,
+      },
+    ]);
+    const tasks = await fetchTodoistCompleted(fake.fetch, token, {
+      since,
+      until,
+      projectIds: projects,
+    });
+    expect(tasks.map((t) => t.id)).toEqual(['a']);
+  });
+
+  it('treats a page without items as a broken answer', async () => {
+    // Not an empty history: a broken answer, so the importer can refuse the choice.
+    const broken: OutboundFetch = async () => {
+      const text = JSON.stringify({ nope: true });
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: (async function* () {
+          yield Buffer.from(text);
+        })(),
+        text: async () => text,
+        json: async () => JSON.parse(text) as unknown,
+        cancel: () => undefined,
+      } as OutboundResponse;
+    };
+    await expect(
+      fetchTodoistCompleted(broken, token, { since, until, projectIds: projects }),
+    ).rejects.toMatchObject({
+      reason: 'invalid_response',
+    });
   });
 
   it('distinguishes a window past the cap from a broken answer', async () => {
@@ -142,7 +235,9 @@ describe('Todoist completed items', () => {
       } as OutboundResponse;
       return res;
     };
-    await expect(fetchTodoistCompleted(bad, token, { since, until })).rejects.toMatchObject({
+    await expect(
+      fetchTodoistCompleted(bad, token, { since, until, projectIds: projects }),
+    ).rejects.toMatchObject({
       reason: 'window_too_long',
     });
   });
