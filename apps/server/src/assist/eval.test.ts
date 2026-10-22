@@ -175,6 +175,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Eval harness', () => {
       JSON.stringify({
         tasks: [{ task: 't1', project: null, labels: [], priority: 1, confidence: 0.9, why: 'x' }],
       }),
+      // The last case raises the priority of an urgent task: a weak model leaves it alone.
       JSON.stringify({
         tasks: [
           { task: 't1', project: null, labels: [], priority: null, confidence: 0.7, why: 'x' },
