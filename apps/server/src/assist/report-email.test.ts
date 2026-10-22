@@ -100,7 +100,8 @@ describe.skipIf(!TEST_DATABASE_URL)('Scheduled AI report emails', () => {
     expect(model.seen).toHaveLength(2);
     expect(model.seen[1]!.user).not.toContain('shared deadline');
     // Two plans, and the removal notice in between: being removed from a project is a
-    // 'sharing' event, and that channel emails by default (apps/server/src/delivery).
+    // 'sharing' event, and that channel emails by default. The removal email itself is
+    // covered by delivery.test.ts.
     expect(mail.filter((m) => m.to === 'bob@example.com').map((m) => m.subject)).toEqual([
       'BokyDo: your plan for today',
       'BokyDo: owner removed you from “Shared”',
