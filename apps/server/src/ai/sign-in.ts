@@ -24,6 +24,8 @@ export interface SignInTokens {
   expiresAt: number;
   /** For the credential's label ("Grok (alice@example.com)"). Display only, never trusted. */
   account: string | null;
+  /** The provider's account id, when the sign-in gives one (ChatGPT). Sent back to the provider. */
+  accountId?: string | null;
 }
 
 export interface DeviceCode {
@@ -58,7 +60,11 @@ export class SignInProviderError extends Error {
 
 export interface SignInProtocol {
   start(fetch: OutboundFetch): Promise<DeviceCode>;
-  poll(fetch: OutboundFetch, deviceCode: string): Promise<PollResult>;
+  /**
+   * Ask the provider whether the user has approved the code. The whole `DeviceCode` is passed
+   * back: some providers need more than the device code to poll (ChatGPT needs the user code).
+   */
+  poll(fetch: OutboundFetch, code: DeviceCode): Promise<PollResult>;
   refresh(fetch: OutboundFetch, refreshToken: string): Promise<SignInTokens>;
   revoke(fetch: OutboundFetch, refreshToken: string): Promise<void>;
 }
@@ -104,8 +110,44 @@ async function postForm(
   }
 }
 
-/** The `email` (or `name`) claim of an ID token, for display. Not verified, never trusted. */
-export function accountFromIdToken(idToken: unknown): string | null {
+/**
+ * A JSON POST (the Codex device endpoints take JSON, not form fields). The body may be empty:
+ * the poll answers 403 with nothing while nobody has approved the code yet.
+ */
+async function postJson(
+  fetch: OutboundFetch,
+  url: string,
+  body: Record<string, string>,
+): Promise<{ status: number; json: unknown }> {
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify(body),
+      ...LIMITS,
+    });
+  } catch {
+    throw new SignInProviderError('unavailable');
+  }
+  if (res.status >= 500 || res.status === 429) {
+    res.cancel();
+    throw new SignInProviderError('unavailable');
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    json = null;
+  }
+  return { status: res.status, json };
+}
+
+/** The claims of an ID token, read without verifying it: display only, never trusted. */
+function idTokenClaims(idToken: unknown): Record<string, unknown> | null {
   if (typeof idToken !== 'string') return null;
   const payload = idToken.split('.')[1];
   if (!payload || payload.length > 16_384) return null;
@@ -114,13 +156,36 @@ export function accountFromIdToken(idToken: unknown): string | null {
       string,
       unknown
     >;
-    const value = claims.email ?? claims.name;
-    if (typeof value !== 'string') return null;
-    const clean = value.replace(/[^\x20-\x7e]/g, '').trim();
-    return clean ? clean.slice(0, 120) : null;
+    return claims && typeof claims === 'object' ? claims : null;
   } catch {
     return null;
   }
+}
+
+/** Printable ASCII only, so a label or a header can't carry anything else. */
+function cleanText(value: unknown, max = 120): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.replace(/[^\x20-\x7e]/g, '').trim();
+  return clean ? clean.slice(0, max) : null;
+}
+
+/** The `email` (or `name`) claim of an ID token, for display. Not verified, never trusted. */
+export function accountFromIdToken(idToken: unknown): string | null {
+  const claims = idTokenClaims(idToken);
+  if (!claims) return null;
+  return cleanText(claims.email ?? claims.name);
+}
+
+/**
+ * The ChatGPT account id from an ID token (the `https://api.openai.com/auth` claim). The Codex
+ * backend wants it in a header, so it has to survive the sign-in; it is never shown.
+ */
+export function chatgptAccountId(idToken: unknown): string | null {
+  const claims = idTokenClaims(idToken);
+  const auth = claims?.['https://api.openai.com/auth'];
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return null;
+  const id = (auth as Record<string, unknown>).chatgpt_account_id;
+  return cleanText(id);
 }
 
 /** A page on `domain` or one of its subdomains, over https: the only links we show. */
@@ -163,6 +228,21 @@ const tokenResponse = z.object({
 });
 
 const oauthError = z.object({ error: z.string().max(100) });
+const oauthErrorObject = z.object({
+  error: z.object({ code: z.string().max(100).optional() }).loose(),
+});
+
+/**
+ * The OAuth error code of an answer, if it has one. Providers write it as a string
+ * (`{"error":"invalid_grant"}`) or as an object (`{"error":{"code":"invalid_grant"}}`).
+ */
+export function oauthErrorCode(json: unknown): string | null {
+  const asString = oauthError.safeParse(json);
+  if (asString.success) return asString.data.error;
+  const asObject = oauthErrorObject.safeParse(json);
+  if (asObject.success) return asObject.data.error.code ?? null;
+  return null;
+}
 
 function tokensFrom(json: unknown, now: number): SignInTokens {
   const parsed = tokenResponse.safeParse(json);
@@ -210,16 +290,15 @@ export const xaiProtocol: SignInProtocol = {
     };
   },
 
-  async poll(fetch, deviceCode) {
+  async poll(fetch, code) {
     const now = Date.now();
     const { status, json } = await postForm(fetch, `${XAI_SIGN_IN.issuer}/oauth2/token`, {
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      device_code: deviceCode,
+      device_code: code.deviceCode,
       client_id: XAI_SIGN_IN.clientId,
     });
     if (status === 200) return { status: 'done', tokens: tokensFrom(json, now) };
-    const error = oauthError.safeParse(json);
-    switch (error.success ? error.data.error : '') {
+    switch (oauthErrorCode(json) ?? '') {
       case 'authorization_pending':
         return { status: 'pending' };
       case 'slow_down':
@@ -241,10 +320,10 @@ export const xaiProtocol: SignInProtocol = {
       client_id: XAI_SIGN_IN.clientId,
     });
     if (status === 200) return tokensFrom(json, now);
-    const error = oauthError.safeParse(json);
+    const error = oauthErrorCode(json);
     // invalid_grant: revoked, expired or rotated away. Anything else may be temporary.
     if (status === 400 || status === 401) {
-      if (!error.success || error.data.error === 'invalid_grant') throw new SignInExpiredError();
+      if (error === null || error === 'invalid_grant') throw new SignInExpiredError();
     }
     throw new SignInProviderError('invalid_response');
   },
@@ -259,8 +338,170 @@ export const xaiProtocol: SignInProtocol = {
   },
 };
 
+/**
+ * OpenAI (ChatGPT Plus/Pro): the device flow of OpenAI's own Codex CLI, against
+ * auth.openai.com. The user asks for a code, approves it on OpenAI's page, and the server
+ * exchanges the authorization code for the tokens. The user has to switch "device code sign-in"
+ * on in their ChatGPT security settings first; without it the provider answers 404.
+ */
+export const CODEX_SIGN_IN = {
+  issuer: 'https://auth.openai.com',
+  domain: 'openai.com',
+  clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
+  redirectUri: 'https://auth.openai.com/deviceauth/callback',
+} as const;
+
+/** The Codex flow lasts 15 minutes; the CLI gives up after that. */
+const CODEX_FLOW_SECONDS = 15 * 60;
+
+const codexUserCode = z.object({
+  device_auth_id: token,
+  user_code: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9-]+$/)
+    .optional(),
+  usercode: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9-]+$/)
+    .optional(),
+  interval: z.union([z.number(), z.string()]).optional(),
+});
+
+const codexApproved = z.object({
+  authorization_code: token,
+  code_verifier: z
+    .string()
+    .min(1)
+    .max(1024)
+    .regex(/^[A-Za-z0-9._~-]+$/),
+});
+
+const codexTokenResponse = z.object({
+  access_token: token,
+  refresh_token: token.optional(),
+  id_token: z.string().max(16_384).optional(),
+  /** An hour when the provider doesn't say: the Codex tokens last that long. */
+  expires_in: z
+    .number()
+    .int()
+    .min(30)
+    .max(90 * 86_400)
+    .optional(),
+});
+
+function codexTokens(json: unknown, now: number): SignInTokens {
+  const parsed = codexTokenResponse.safeParse(json);
+  if (!parsed.success) throw new SignInProviderError('invalid_response');
+  const d = parsed.data;
+  return {
+    accessToken: d.access_token,
+    refreshToken: d.refresh_token ?? null,
+    expiresAt: now + (d.expires_in ?? 3600) * 1000,
+    account: accountFromIdToken(d.id_token),
+    accountId: chatgptAccountId(d.id_token),
+  };
+}
+
+/** The provider's own page where the user approves the code. */
+const codexVerificationUrl = providerPage(
+  `${CODEX_SIGN_IN.issuer}/codex/device`,
+  CODEX_SIGN_IN.domain,
+);
+
+export const openaiProtocol: SignInProtocol = {
+  async start(fetch) {
+    const { status, json } = await postJson(
+      fetch,
+      `${CODEX_SIGN_IN.issuer}/api/accounts/deviceauth/usercode`,
+      { client_id: CODEX_SIGN_IN.clientId },
+    );
+    const parsed = codexUserCode.safeParse(json);
+    if (status !== 200 || !parsed.success) throw new SignInProviderError('invalid_response');
+    const d = parsed.data;
+    const userCode = d.user_code ?? d.usercode;
+    if (!userCode || !codexVerificationUrl) throw new SignInProviderError('invalid_response');
+    const interval = typeof d.interval === 'number' ? d.interval : Number(d.interval ?? 5);
+    return {
+      deviceCode: d.device_auth_id,
+      userCode,
+      verificationUrl: codexVerificationUrl,
+      intervalSeconds: Math.min(60, Math.max(3, Number.isFinite(interval) ? interval : 5)),
+      expiresInSeconds: CODEX_FLOW_SECONDS,
+    };
+  },
+
+  async poll(fetch, code) {
+    const now = Date.now();
+    const { status, json } = await postJson(
+      fetch,
+      `${CODEX_SIGN_IN.issuer}/api/accounts/deviceauth/token`,
+      { device_auth_id: code.deviceCode, user_code: code.userCode },
+    );
+    if (status === 200) {
+      const approved = codexApproved.safeParse(json);
+      if (!approved.success) throw new SignInProviderError('invalid_response');
+      // The authorization code is exchanged for the tokens right away.
+      const exchanged = await postForm(fetch, `${CODEX_SIGN_IN.issuer}/oauth/token`, {
+        grant_type: 'authorization_code',
+        code: approved.data.authorization_code,
+        client_id: CODEX_SIGN_IN.clientId,
+        code_verifier: approved.data.code_verifier,
+        redirect_uri: CODEX_SIGN_IN.redirectUri,
+      });
+      if (exchanged.status !== 200) throw new SignInProviderError('invalid_response');
+      return { status: 'done', tokens: codexTokens(exchanged.json, now) };
+    }
+    // Not approved yet: the endpoint answers 403 (or 404) until the user enters the code.
+    if (status === 403 || status === 404) return { status: 'pending' };
+    switch (oauthErrorCode(json) ?? '') {
+      case 'authorization_pending':
+      case 'deviceauth_authorization_pending':
+        return { status: 'pending' };
+      case 'slow_down':
+        return { status: 'slow_down' };
+      case 'access_denied':
+      case 'denied':
+        return { status: 'denied' };
+      default:
+        throw new SignInProviderError('invalid_response');
+    }
+  },
+
+  async refresh(fetch, refreshToken) {
+    const now = Date.now();
+    const { status, json } = await postForm(fetch, `${CODEX_SIGN_IN.issuer}/oauth/token`, {
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: CODEX_SIGN_IN.clientId,
+    });
+    if (status === 200) return codexTokens(json, now);
+    const error = oauthErrorCode(json);
+    // invalid_grant: the grant was revoked or rotated away. Anything else may be temporary.
+    if (status === 400 || status === 401) {
+      if (error === null || error === 'invalid_grant') throw new SignInExpiredError();
+    }
+    throw new SignInProviderError('invalid_response');
+  },
+
+  async revoke(fetch, refreshToken) {
+    // RFC 7009: revoking the refresh token ends the grant. Best effort: the caller ignores
+    // errors, and OpenAI may not offer revocation for this client at all. The Codex CLI sends
+    // this as JSON, so we do too.
+    await postJson(fetch, `${CODEX_SIGN_IN.issuer}/oauth/revoke`, {
+      token: refreshToken,
+      token_type_hint: 'refresh_token',
+      client_id: CODEX_SIGN_IN.clientId,
+    });
+  },
+};
+
 export const SIGN_IN_PROTOCOLS: Record<AiSignInProvider, SignInProtocol> = {
   'xai-subscription': xaiProtocol,
+  'chatgpt-subscription': openaiProtocol,
 };
 
 /** Refresh this long before expiry, so a call never starts with a token about to lapse. */
@@ -272,7 +513,8 @@ interface PendingFlow {
   provider: AiSignInProvider;
   /** Re-sign-in of an existing credential (keeps its id and routes), or a new one. */
   credentialId: string | null;
-  deviceCode: string;
+  /** The provider's code and user code: both are needed to poll. */
+  code: DeviceCode;
   intervalMs: number;
   nextPollAt: number;
   expiresAt: number;
@@ -324,7 +566,7 @@ export class SignInFlows {
       userId,
       provider,
       credentialId,
-      deviceCode: code.deviceCode,
+      code,
       intervalMs: code.intervalSeconds * 1000,
       // The first check may come at once (nobody approves that fast; it costs one request);
       // after that, at the provider's interval.
@@ -355,7 +597,7 @@ export class SignInFlows {
     flow.nextPollAt = now + flow.intervalMs;
     let result: PollResult;
     try {
-      result = await this.protocols[flow.provider].poll(this.fetchFor(), flow.deviceCode);
+      result = await this.protocols[flow.provider].poll(this.fetchFor(), flow.code);
     } catch {
       return { status: 'unavailable' };
     }
