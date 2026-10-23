@@ -1,5 +1,6 @@
 import { countTemplate, serializeTemplateCsv } from '@bokydo/shared';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ImportTemplateDialog, type TemplateChoice } from '../components/ImportTemplateDialog.js';
 import { Alert, Button, Card } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
@@ -12,6 +13,7 @@ import {
 } from '../lib/templates/files.js';
 
 export function TemplatesPage() {
+  const { t } = useTranslation();
   const [choice, setChoice] = useState<TemplateChoice | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,28 +24,29 @@ export function TemplatesPage() {
       const { template, warnings } = await readTemplateFile(file);
       setChoice({ template, warnings, defaultName: template.name });
     } catch (err) {
-      setError(err instanceof TemplateFileError ? err.message : 'That file could not be read.');
+      setError(
+        err instanceof TemplateFileError ? err.message : t('import.readFailed'),
+      );
     }
   };
 
   return (
     <Page>
-      <ViewHeader title="Templates" subtitle="Start a project from a template or a CSV file" />
+      <ViewHeader
+        title={t('import.templatesTitle')}
+        subtitle={t('import.templatesSubtitle')}
+      />
 
       <Card className="mb-6">
-        <h2 className="mb-2 font-semibold">Import a CSV file</h2>
-        <p className="mb-4 text-sm text-muted">
-          Choose a project exported from Todoist, or a file in the same format (up to 1,000 rows and
-          1 MB). You see what it holds before anything is added. Exporting works the other way: open
-          a project's menu and choose “Export as CSV”.
-        </p>
+        <h2 className="mb-2 font-semibold">{t('import.csvTitle')}</h2>
+        <p className="mb-4 text-sm text-muted">{t('import.csvDescription')}</p>
         {error && (
           <div className="mb-4">
             <Alert>{error}</Alert>
           </div>
         )}
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-4 py-2 text-sm font-medium hover:bg-surface-alt focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
-          Choose CSV file…
+          {t('import.chooseCsv')}
           <input
             type="file"
             accept=".csv,text/csv"
@@ -56,20 +59,23 @@ export function TemplatesPage() {
         </label>
       </Card>
 
-      <h2 className="mb-3 font-semibold">Gallery</h2>
-      <ul className="mb-6 grid gap-4 sm:grid-cols-2" aria-label="Template gallery">
+      <h2 className="mb-3 font-semibold">{t('import.galleryTitle')}</h2>
+      <ul className="mb-6 grid gap-4 sm:grid-cols-2" aria-label={t('import.galleryAria')}>
         {GALLERY.map((g) => {
           const counts = countTemplate(g.template);
           return (
             <li key={g.id}>
               <Card className="flex h-full flex-col">
                 <h3 id={`tpl-${g.id}`} className="font-semibold">
-                  {g.title}
+                  {t(`import.gallery.${g.id}.title`, { defaultValue: g.title })}
                 </h3>
-                <p className="mt-1 flex-1 text-sm text-muted">{g.summary}</p>
+                <p className="mt-1 flex-1 text-sm text-muted">
+                  {t(`import.gallery.${g.id}.summary`, { defaultValue: g.summary })}
+                </p>
                 <p className="mt-2 text-xs text-muted">
-                  {counts.sections > 0 && `${counts.sections} sections · `}
-                  {counts.tasks} tasks
+                  {counts.sections > 0 &&
+                    `${t('import.countSection', { count: counts.sections })} · `}
+                  {t('import.countTask', { count: counts.tasks })}
                 </p>
                 <div className="mt-3 flex gap-2">
                   <Button
@@ -83,7 +89,7 @@ export function TemplatesPage() {
                       })
                     }
                   >
-                    Use template
+                    {t('import.useTemplate')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -93,7 +99,7 @@ export function TemplatesPage() {
                       downloadText(safeFilename(g.title), serializeTemplateCsv(g.template))
                     }
                   >
-                    Download CSV
+                    {t('import.downloadCsv')}
                   </Button>
                 </div>
               </Card>

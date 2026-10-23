@@ -31,24 +31,25 @@ const TAB_LABEL: Record<Tab, string> = {
 };
 
 export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }) {
+  const { t } = useTranslation();
   const prefs = usePreferences();
   const send = useSend();
   const [tab, setTab] = useState<Tab>(initialTab);
   const update = (patch: PreferencesPatch) => send('user_update_preferences', patch);
   return (
     <Page>
-      <ViewHeader title="Settings" />
+      <ViewHeader title={t('settings.title')} />
       <div role="tablist" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
-        {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
+        {(Object.keys(TAB_LABEL) as Tab[]).map((key) => (
           <button
-            key={t}
+            key={key}
             role="tab"
             type="button"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm ${tab === t ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm ${tab === key ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
           >
-            {TAB_LABEL[t]}
+            {t(`settings.tabs.${key}`)}
           </button>
         ))}
       </div>
@@ -72,6 +73,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     </Card>
   );
 }
+
+/* Labels for each text size come from the catalogue; the keys are the preference values. */
+const TEXT_SIZE_LABEL: Record<keyof typeof TEXT_SIZES, string> = {
+  small: 'settings.appearance.textSize.small',
+  default: 'settings.appearance.textSize.default',
+  large: 'settings.appearance.textSize.large',
+  larger: 'settings.appearance.textSize.larger',
+};
 
 function Segmented<T extends string>({
   label,
@@ -111,6 +120,7 @@ function AppearanceSettings({
   prefs: Preferences;
   update: (p: PreferencesPatch) => void;
 }) {
+  const { t } = useTranslation();
   const a = prefs.appearance;
   const set = (patch: Partial<Appearance>) => update({ appearance: patch });
   const activeFamily =
@@ -125,15 +135,15 @@ function AppearanceSettings({
 
   return (
     <>
-      <Section title="Theme">
+      <Section title={t('settings.appearance.theme')}>
         <div className="space-y-5">
           <Segmented
-            label="Mode"
+            label={t('settings.appearance.mode')}
             value={a.mode}
             options={[
-              ['system', 'Match system'],
-              ['light', 'Light'],
-              ['dark', 'Dark'],
+              ['system', t('settings.appearance.matchSystem')],
+              ['light', t('settings.appearance.light')],
+              ['dark', t('settings.appearance.dark')],
             ]}
             onChange={(mode) => set({ mode })}
           />
@@ -177,52 +187,51 @@ function AppearanceSettings({
             })}
           </div>
           <details className="text-sm">
-            <summary className="cursor-pointer text-muted">Pick variants separately</summary>
+            <summary className="cursor-pointer text-muted">
+              {t('settings.appearance.pickVariants')}
+            </summary>
             <div className="mt-3 grid gap-4 sm:grid-cols-2">
               <SelectField
-                label="Light variant"
+                label={t('settings.appearance.lightVariant')}
                 value={a.lightTheme}
                 onChange={(e) => set({ lightTheme: e.target.value })}
                 options={variants('light')}
               />
               <SelectField
-                label="Dark variant"
+                label={t('settings.appearance.darkVariant')}
                 value={a.darkTheme}
                 onChange={(e) => set({ darkTheme: e.target.value })}
                 options={variants('dark')}
               />
             </div>
           </details>
-          <p className="text-xs text-muted">
-            Every theme is checked for WCAG AA contrast; a few colours are nudged slightly where the
-            original palette falls short.
-          </p>
+          <p className="text-xs text-muted">{t('settings.appearance.contrastNote')}</p>
         </div>
       </Section>
-      <Section title="Text">
+      <Section title={t('settings.appearance.text')}>
         <div className="space-y-5">
           <SelectField
-            label="Font"
+            label={t('settings.appearance.font')}
             value={a.font}
             onChange={(e) => set({ font: e.target.value as Appearance['font'] })}
             options={FONTS.map((f) => ({ value: f.id, label: f.name }))}
-            hint="Fonts are served by your BokyDo server; only the one you pick is downloaded."
+            hint={t('settings.appearance.fontHint')}
           />
           <Segmented
-            label="Text size"
+            label={t('settings.appearance.textSize.label')}
             value={a.textSize}
             options={(Object.keys(TEXT_SIZES) as Appearance['textSize'][]).map((s) => [
               s,
-              s.charAt(0).toUpperCase() + s.slice(1),
+              t(TEXT_SIZE_LABEL[s]),
             ])}
             onChange={(textSize) => set({ textSize })}
           />
           <Segmented
-            label="Density"
+            label={t('settings.appearance.density')}
             value={a.density}
             options={[
-              ['comfortable', 'Comfortable'],
-              ['compact', 'Compact'],
+              ['comfortable', t('settings.appearance.comfortable')],
+              ['compact', t('settings.appearance.compact')],
             ]}
             onChange={(density) => set({ density })}
           />
@@ -242,22 +251,22 @@ function GeneralSettings({
   const { t } = useTranslation();
   return (
     <>
-      <Section title="Date & time">
+      <Section title={t('settings.general.dateAndTime')}>
         <div className="space-y-5">
           <TimeZonePicker value={prefs.timezone} onChange={(timezone) => update({ timezone })} />
           <div className="grid gap-4 sm:grid-cols-3">
             <SelectField
-              label="Week starts on"
+              label={t('settings.general.weekStartsOn')}
               value={prefs.weekStart}
               onChange={(e) => update({ weekStart: e.target.value as Preferences['weekStart'] })}
               options={[
-                { value: 'monday', label: 'Monday' },
-                { value: 'sunday', label: 'Sunday' },
-                { value: 'saturday', label: 'Saturday' },
+                { value: 'monday', label: t('settings.general.monday') },
+                { value: 'sunday', label: t('settings.general.sunday') },
+                { value: 'saturday', label: t('settings.general.saturday') },
               ]}
             />
             <SelectField
-              label="Time format"
+              label={t('settings.general.timeFormat')}
               value={prefs.timeFormat}
               onChange={(e) => update({ timeFormat: e.target.value as Preferences['timeFormat'] })}
               options={[
@@ -266,7 +275,7 @@ function GeneralSettings({
               ]}
             />
             <SelectField
-              label="Date format"
+              label={t('settings.general.dateFormat')}
               value={prefs.dateFormat}
               onChange={(e) => update({ dateFormat: e.target.value as Preferences['dateFormat'] })}
               options={[
@@ -278,7 +287,7 @@ function GeneralSettings({
           </div>
         </div>
       </Section>
-      <Section title="General">
+      <Section title={t('settings.tabs.general')}>
         <div className="space-y-5">
           <SelectField
             label={t('settings.language')}
@@ -294,24 +303,24 @@ function GeneralSettings({
             hint={t('settings.languageHint')}
           />
           <SelectField
-            label="Home view"
+            label={t('settings.general.homeView')}
             value={prefs.startPage}
             onChange={(e) => update({ startPage: e.target.value as Preferences['startPage'] })}
             options={[
-              { value: 'today', label: 'Today' },
-              { value: 'inbox', label: 'Inbox' },
-              { value: 'upcoming', label: 'Upcoming' },
+              { value: 'today', label: t('nav.today') },
+              { value: 'inbox', label: t('nav.inbox') },
+              { value: 'upcoming', label: t('nav.upcoming') },
             ]}
           />
           <Checkbox
-            label="Smart date recognition"
-            hint="Turn phrases like “tomorrow 5pm” or “every mon” in quick add into due dates."
+            label={t('settings.general.smartDate')}
+            hint={t('settings.general.smartDateHint')}
             checked={prefs.smartDateRecognition}
             onChange={(e) => update({ smartDateRecognition: e.target.checked })}
           />
           <Checkbox
-            label="Single-key keyboard shortcuts"
-            hint="Keys like q, /, g and j/k run commands when you aren't typing. Turn this off if speech input or assistive technology presses them by accident. Ctrl+K for search still works."
+            label={t('settings.general.shortcuts')}
+            hint={t('settings.general.shortcutsHint')}
             checked={prefs.keyboardShortcuts}
             onChange={(e) => update({ keyboardShortcuts: e.target.checked })}
           />

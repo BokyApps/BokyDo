@@ -9,12 +9,14 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { TaskItem } from '../components/TaskItem.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { Button, IconButton } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
 import { useTaskActions } from '../lib/actions.js';
 import { addDays, describeDate, formatDate, makeDue, startOfWeek, todayIn } from '../lib/dates.js';
+import { localeTag } from '../lib/locale.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { projectOrderIndex, sortTasks, tasksDueBetween, todayTasks } from '../lib/views.js';
@@ -23,6 +25,7 @@ const DAYS = 21;
 
 /** Day-by-day agenda with a week strip; drag a task onto another day to reschedule it. */
 export function UpcomingPage() {
+  const { t } = useTranslation();
   const state = useSyncState();
   const prefs = usePreferences();
   const today = todayIn(useTimeZone());
@@ -52,7 +55,7 @@ export function UpcomingPage() {
   const jump = (d: string) =>
     dayRefs.current.get(d)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const week = Array.from({ length: 7 }, (_, i) => addDays(weekOf, i));
-  const monthLabel = new Date(`${from}T00:00:00Z`).toLocaleDateString(undefined, {
+  const monthLabel = new Date(`${from}T00:00:00Z`).toLocaleDateString(localeTag(), {
     month: 'long',
     year: 'numeric',
     timeZone: 'UTC',
@@ -61,12 +64,12 @@ export function UpcomingPage() {
   return (
     <Page>
       <ViewHeader
-        title="Upcoming"
+        title={t('upcoming.title')}
         subtitle={monthLabel}
         actions={
           <>
             <IconButton
-              label="Previous week"
+              label={t('upcoming.previousWeek')}
               onClick={() => setWeekOf(addDays(weekOf, -7))}
               disabled={weekOf <= startOfWeek(today, prefs.weekStart)}
             >
@@ -77,9 +80,12 @@ export function UpcomingPage() {
               className="px-2 py-1"
               onClick={() => setWeekOf(startOfWeek(today, prefs.weekStart))}
             >
-              Today
+              {t('nav.today')}
             </Button>
-            <IconButton label="Next week" onClick={() => setWeekOf(addDays(weekOf, 7))}>
+            <IconButton
+              label={t('upcoming.nextWeek')}
+              onClick={() => setWeekOf(addDays(weekOf, 7))}
+            >
               ›
             </IconButton>
           </>
@@ -87,7 +93,7 @@ export function UpcomingPage() {
       />
       <ul
         className="mb-6 grid grid-cols-7 gap-1 border-b border-line pb-2 text-center"
-        aria-label="Week"
+        aria-label={t('upcoming.week')}
       >
         {week.map((d) => {
           const past = d < today;
@@ -101,7 +107,7 @@ export function UpcomingPage() {
                 className={`w-full rounded-lg py-1.5 text-sm ${d === today ? 'bg-accent text-on-accent' : past ? 'text-muted/60' : 'hover:bg-surface-alt'}`}
               >
                 <div className="text-xs">
-                  {new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, {
+                  {new Date(`${d}T00:00:00Z`).toLocaleDateString(localeTag(), {
                     weekday: 'short',
                     timeZone: 'UTC',
                   })}
@@ -121,8 +127,10 @@ export function UpcomingPage() {
       </ul>
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         {overdue.length > 0 && (
-          <section aria-label="Overdue" className="mb-6">
-            <h2 className="border-b border-line pb-1 font-semibold text-danger">Overdue</h2>
+          <section aria-label={t('today.overdue')} className="mb-6">
+            <h2 className="border-b border-line pb-1 font-semibold text-danger">
+              {t('today.overdue')}
+            </h2>
             <ul>
               {sortTasks(overdue, 'date', order).map((t) => (
                 <DraggableTask key={t.id} task={t} />
@@ -159,7 +167,7 @@ function DaySection({
   const { setNodeRef, isOver } = useDroppable({ id: `day:${day}` });
   const rel = describeDate(day, null, today, prefs).label;
   const date = formatDate(day, prefs);
-  const weekday = new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+  const weekday = new Date(`${day}T00:00:00Z`).toLocaleDateString(localeTag(), {
     weekday: 'long',
     timeZone: 'UTC',
   });

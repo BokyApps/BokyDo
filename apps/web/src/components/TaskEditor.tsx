@@ -9,6 +9,7 @@ import {
 } from '@bokydo/nlp';
 import type { Due } from '@bokydo/shared';
 import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTaskActions } from '../lib/actions.js';
 import { useConfirm } from '../lib/confirm.js';
 import { dueLabel, formatDate } from '../lib/dates.js';
@@ -36,6 +37,7 @@ export function TaskEditor({
   onDone: () => void;
   keepOpen?: boolean;
 }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const prefs = usePreferences();
   const timeZone = useTimeZone();
@@ -142,7 +144,10 @@ export function TaskEditor({
         .filter((l) => l.toLowerCase().includes(q))
         .map((l) => ({ value: l, label: `@${l}` }));
       if (LABEL_NAME.test(trigger.query) && !candidates.labels.some((l) => l.toLowerCase() === q))
-        matches.push({ value: trigger.query, label: `+ New label “@${trigger.query}”` });
+        matches.push({
+          value: trigger.query,
+          label: t('task.newLabel', { name: trigger.query }),
+        });
       return matches;
     }
     return [];
@@ -154,9 +159,9 @@ export function TaskEditor({
     if (
       nonEmpty.length > 1 &&
       !(await confirm({
-        title: `Add ${nonEmpty.length} tasks?`,
-        message: 'Each line of the text you entered becomes its own task.',
-        confirmLabel: `Add ${nonEmpty.length} tasks`,
+        title: t('task.confirmAddManyTitle', { count: nonEmpty.length }),
+        message: t('task.confirmAddManyMessage'),
+        confirmLabel: t('task.addTasks', { count: nonEmpty.length }),
       }))
     )
       return;
@@ -194,21 +199,21 @@ export function TaskEditor({
   const chips: { key: string; kind: Token['kind']; label: ReactNode; keys: string[] }[] = [];
   if (first) {
     let reminderIndex = 0;
-    for (const t of first.tokens) {
-      const key = tokenKey(t);
-      let label: ReactNode = t.text;
-      if (t.kind === 'due' && first.due)
+    for (const tok of first.tokens) {
+      const key = tokenKey(tok);
+      let label: ReactNode = tok.text;
+      if (tok.kind === 'due' && first.due)
         label = `${first.due.recurrence ? '↻ ' : ''}${dueLabel(toTaskDue(first.due, today, prefs), today, prefs)}`;
-      if (t.kind === 'project' && first.projectId)
-        label = `# ${state.projects.get(first.projectId)?.name ?? t.text}`;
-      if (t.kind === 'section' && first.sectionId)
-        label = `§ ${state.sections.get(first.sectionId)?.name ?? t.text}`;
-      if (t.kind === 'deadline' && first.deadline)
-        label = `Deadline ${formatDate(first.deadline, prefs)}`;
-      if (t.kind === 'duration' && first.durationMinutes)
+      if (tok.kind === 'project' && first.projectId)
+        label = `# ${state.projects.get(first.projectId)?.name ?? tok.text}`;
+      if (tok.kind === 'section' && first.sectionId)
+        label = `§ ${state.sections.get(first.sectionId)?.name ?? tok.text}`;
+      if (tok.kind === 'deadline' && first.deadline)
+        label = t('task.deadlineValue', { date: formatDate(first.deadline, prefs) });
+      if (tok.kind === 'duration' && first.durationMinutes)
         label = formatDuration(first.durationMinutes);
-      if (t.kind === 'priority') label = t.text.toUpperCase();
-      if (t.kind === 'reminder') {
+      if (tok.kind === 'priority') label = tok.text.toUpperCase();
+      if (tok.kind === 'reminder') {
         const rem = first.reminders[reminderIndex++];
         if (rem)
           label = `⏰ ${reminderLabel(
@@ -217,11 +222,11 @@ export function TaskEditor({
               : { type: 'absolute', minutesBefore: null, date: rem.date, time: rem.time },
             today,
             prefs,
-          )}${rem.type === 'relative' && !resolve(first).due?.time ? ' (needs a time)' : ''}`;
+          )}${rem.type === 'relative' && !resolve(first).due?.time ? ` ${t('task.needsTime')}` : ''}`;
       }
-      if (t.kind === 'assignee' && first.assigneeId)
-        label = `→ ${state.collaborators.get(first.assigneeId)?.username ?? t.text}`;
-      chips.push({ key: `${t.kind}:${t.start}`, kind: t.kind, label, keys: [key] });
+      if (tok.kind === 'assignee' && first.assigneeId)
+        label = `→ ${state.collaborators.get(first.assigneeId)?.username ?? tok.text}`;
+      chips.push({ key: `${tok.kind}:${tok.start}`, kind: tok.kind, label, keys: [key] });
     }
   }
 
@@ -241,10 +246,10 @@ export function TaskEditor({
         suggest={suggest}
         onSubmit={() => void submit()}
         inputRef={contentRef}
-        placeholder={isSubtask ? 'Sub-task name' : 'e.g. Call mom tomorrow 5pm #Family p1'}
+        placeholder={isSubtask ? t('task.subtaskName') : t('task.namePlaceholder')}
       />
       {chips.length > 0 && (
-        <ul className="flex flex-wrap gap-1" aria-label="Recognised in the task name">
+        <ul className="flex flex-wrap gap-1" aria-label={t('task.recognised')}>
           {chips.map((c) => (
             <li
               key={c.key}
@@ -254,8 +259,10 @@ export function TaskEditor({
               <button
                 type="button"
                 className="rounded px-0.5 text-muted hover:text-fg"
-                aria-label={`Keep “${typeof c.label === 'string' ? c.label : c.kind}” as text`}
-                title="Keep as text"
+                aria-label={t('task.keepAsTextAria', {
+                  label: typeof c.label === 'string' ? c.label : c.kind,
+                })}
+                title={t('task.keepAsText')}
                 onClick={() => {
                   unparse(c.keys);
                   contentRef.current?.focus();
@@ -268,12 +275,12 @@ export function TaskEditor({
         </ul>
       )}
       {nonEmpty.length > 1 && (
-        <p className="text-xs text-muted">{nonEmpty.length} tasks, one per line</p>
+        <p className="text-xs text-muted">{t('task.onePerLine', { count: nonEmpty.length })}</p>
       )}
       <textarea
         rows={1}
-        aria-label="Description"
-        placeholder="Description"
+        aria-label={t('task.description')}
+        placeholder={t('task.description')}
         className="w-full resize-none bg-transparent text-xs text-muted placeholder:text-muted/70 focus:outline-none"
         value={description}
         onChange={(e) => setDescription(e.target.value)}
@@ -324,10 +331,12 @@ export function TaskEditor({
         )}
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onDone}>
-            Cancel
+            {t('task.cancel')}
           </Button>
           <Button type="submit" disabled={nonEmpty.length === 0}>
-            {nonEmpty.length > 1 ? `Add ${nonEmpty.length} tasks` : 'Add task'}
+            {nonEmpty.length > 1
+              ? t('task.addTasks', { count: nonEmpty.length })
+              : t('task.addTask')}
           </Button>
         </div>
       </div>
@@ -341,13 +350,8 @@ export function formatDuration(minutes: number): string {
   return [h ? `${h} h` : '', m ? `${m} min` : ''].filter(Boolean).join(' ');
 }
 
-export function InlineAdd({
-  defaults,
-  label = 'Add task',
-}: {
-  defaults: AddDefaults;
-  label?: string;
-}) {
+export function InlineAdd({ defaults, label }: { defaults: AddDefaults; label?: string }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   if (open)
     return (
@@ -364,7 +368,7 @@ export function InlineAdd({
       <span className="flex size-[1.15rem] items-center justify-center rounded-full text-accent group-hover:bg-accent group-hover:text-on-accent">
         +
       </span>
-      {label}
+      {label ?? t('task.addTask')}
     </button>
   );
 }
