@@ -5,36 +5,9 @@ import { ROLE_LABEL } from '../components/Sharing.js';
 import { Alert, Button, Card, Spinner } from '../components/ui.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { api } from '../lib/api.js';
+import { clearJoinToken, pendingJoinToken } from '../lib/join.js';
 import { useStore, useSyncState } from '../lib/sync.js';
 import type { GrantableRole, GrantableWorkspaceRole, PendingInvite } from '@bokydo/shared';
-
-const JOIN_KEY = 'bokydo.join';
-
-/** The invite token travels in the URL fragment; keep it across the sign-in redirect. */
-export function stashJoinToken(): void {
-  if (location.pathname !== '/join' || location.hash.length < 2) return;
-  try {
-    sessionStorage.setItem(JOIN_KEY, location.hash.slice(1));
-  } catch {
-    // storage unavailable: the user can open the link again after signing in
-  }
-}
-
-export function pendingJoinToken(): string | null {
-  try {
-    return sessionStorage.getItem(JOIN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function clearJoinToken() {
-  try {
-    sessionStorage.removeItem(JOIN_KEY);
-  } catch {
-    // nothing to clear
-  }
-}
 
 /** Direct invitations waiting for the current user. */
 export function InvitationsPage() {

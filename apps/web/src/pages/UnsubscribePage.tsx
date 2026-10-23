@@ -2,23 +2,26 @@ import { NOTIFICATION_EVENTS, type NotificationEvent } from '@bokydo/shared';
 import { useMutation } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 import { Alert, AuthLayout, Button } from '../components/ui.js';
 import { api } from '../lib/api.js';
-import { EVENT_LABEL } from './NotificationSettings.js';
+import { EVENT_LABEL_KEY } from './NotificationSettings.js';
 
-const describe = (topic: string) =>
+const describe = (t: TFunction, topic: string) =>
   topic === 'digest'
-    ? 'the daily digest'
+    ? t('unsubscribe.digest')
     : topic === 'report'
-      ? 'the AI report'
+      ? t('unsubscribe.report')
       : (NOTIFICATION_EVENTS as readonly string[]).includes(topic)
-        ? `“${EVENT_LABEL[topic as NotificationEvent]}”`
+        ? t('unsubscribe.quoted', { topic: t(EVENT_LABEL_KEY[topic as NotificationEvent]) })
         : null;
 
 /** /unsubscribe#<token>: stop one kind of email, signed in or not (the link is the proof). */
 export function UnsubscribePage() {
+  const { t } = useTranslation();
   const [token] = useState(() => (location.hash.length > 1 ? location.hash.slice(1) : ''));
-  const topic = describe(token.split('.')[1] ?? '');
+  const topic = describe(t, token.split('.')[1] ?? '');
   useEffect(() => {
     if (location.hash) history.replaceState(null, '', '/unsubscribe');
   }, []);
@@ -28,28 +31,26 @@ export function UnsubscribePage() {
   return (
     <AuthLayout>
       <div className="space-y-4">
-        <h1 className="text-lg font-semibold">Email notifications</h1>
+        <h1 className="text-lg font-semibold">{t('unsubscribe.title')}</h1>
         {!topic ? (
-          <Alert tone="error">This link is incomplete. Open it from the email again.</Alert>
+          <Alert tone="error">{t('unsubscribe.incomplete')}</Alert>
         ) : stop.isSuccess ? (
           <>
-            <Alert tone="success">Done. You won't get emails about {topic} any more.</Alert>
+            <Alert tone="success">{t('unsubscribe.done', { topic })}</Alert>
             <p className="text-sm text-muted">
-              You can change this any time in{' '}
+              {t('unsubscribe.changeInPrefix')}{' '}
               <Link to="/settings/notifications" className="text-accent underline">
-                Settings → Notifications
+                {t('unsubscribe.changeInLink')}
               </Link>
               .
             </p>
           </>
         ) : (
           <>
-            <p>Stop emails about {topic}? You'll still see them in the app.</p>
-            {stop.isError && (
-              <Alert tone="error">This link isn't valid any more. Change it in Settings.</Alert>
-            )}
+            <p>{t('unsubscribe.confirm', { topic })}</p>
+            {stop.isError && <Alert tone="error">{t('unsubscribe.invalid')}</Alert>}
             <Button busy={stop.isPending} onClick={() => stop.mutate()}>
-              Stop these emails
+              {t('unsubscribe.stop')}
             </Button>
           </>
         )}

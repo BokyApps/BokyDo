@@ -14,12 +14,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:android": "node scripts/build-android.mjs"
   },
   "dependencies": {
     "@bokydo/filter-query": "workspace:*",
     "@bokydo/nlp": "workspace:*",
     "@bokydo/themes": "workspace:*",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

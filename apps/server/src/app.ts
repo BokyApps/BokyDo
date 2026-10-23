@@ -1,6 +1,7 @@
 import path from 'node:path';
 import cookie from '@fastify/cookie';
-import { type Health, type InstanceStatus } from '@bokydo/shared';
+import websocket from '@fastify/websocket';
+import { RAMBLE_LIVE, type Health, type InstanceStatus } from '@bokydo/shared';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { STATUS_CODES } from 'node:http';
 import { registerAdminSettingsRoutes } from './admin/settings-routes.js';
@@ -45,6 +46,7 @@ import { AiCredentialStore } from './ai/credentials.js';
 import { registerAiRoutes } from './ai/routes.js';
 import { AiService } from './ai/service.js';
 import { createOutbound, PUBLIC_ONLY, type OutboundFetch, type Resolver } from './net/outbound.js';
+import { createLiveConnector, type LiveConnector } from './net/outbound-ws.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
@@ -80,6 +82,8 @@ export interface AppDeps {
   importFetch?: OutboundFetch;
   /** Tests only: the importer's clock, so completed-task windows are not wall-clock bound. */
   importNow?: () => Date;
+  /** Tests only: how the live Ramble relay reaches a provider WebSocket. */
+  liveConnect?: LiveConnector;
 }
 
 export interface AppServices {
@@ -290,6 +294,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   await app.register(cookie);
+  // WebSocket upgrades for the live Ramble relay (must be registered before its route). The
+  // frame limit matches the relay's own message cap, so a hostile client can't buffer more.
+  await app.register(websocket, { options: { maxPayload: RAMBLE_LIVE.maxMessageChars } });
   await registerSecurityHeaders(app, settings);
   registerAccessControl(app, { settings, sessions, tokens: apiTokens });
 
@@ -361,7 +368,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sessionKey: deps.secrets.sessionKey,
   });
   registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
-  registerRambleRoutes(app, { db, settings, sync, ai });
+  registerRambleRoutes(app, {
+    db,
+    settings,
+    sync,
+    ai,
+    sessions,
+    tokens: apiTokens,
+    connect: deps.liveConnect ?? createLiveConnector(deps.resolver),
+  });
   registerAssistRoutes(app, { db, settings, ai, sync });
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });

@@ -62,6 +62,8 @@ class BokyDoApp : Application() {
     lateinit var client: BokyDoClient
     lateinit var engine: SyncEngine
     lateinit var quickAddParser: QuickAddParser
+    lateinit var device: DeviceSettings
+    lateinit var filterEngine: FilterEngine
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _screen = MutableStateFlow<AppScreen>(AppScreen.Connect())
@@ -77,7 +79,11 @@ class BokyDoApp : Application() {
         store = SqliteStore(this)
         client = BokyDoClient(sessions)
         engine = SyncEngine(client, store)
-        quickAddParser = QuickAddParser(this)
+        // One sandbox for the web's own parsers (quick add and saved filters).
+        val js = JsRuntime(this)
+        quickAddParser = QuickAddParser(js)
+        filterEngine = FilterEngine(js)
+        device = DeviceSettings(this)
         Notifier.createChannels(this)
         UnifiedPush.load(this)
         if (sessions.load() != null) {

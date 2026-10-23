@@ -1,6 +1,7 @@
 import { countTemplate, type Command, type Template, type TemplateWarning } from '@bokydo/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { planImport, type ImportTarget } from '../lib/templates/import-plan.js';
 import { usePreferences, useStore, useSyncState, useTimeZone } from '../lib/sync.js';
 import { Alert, Button, Checkbox, Dialog, SelectField, TextField } from './ui.js';
@@ -24,14 +25,16 @@ export function ImportTemplateDialog({
   choice: TemplateChoice | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <Dialog open={choice !== null} onClose={onClose} title="Use this template" wide>
+    <Dialog open={choice !== null} onClose={onClose} title={t('import.useTemplate')} wide>
       {choice && <ImportForm key={choice.defaultName} choice={choice} onClose={onClose} />}
     </Dialog>
   );
 }
 
 function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () => void }) {
+  const { t } = useTranslation();
   const { template } = choice;
   const state = useSyncState();
   const store = useStore();
@@ -94,10 +97,10 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
     return (
       <div role="status" className="space-y-3">
         <p className="text-sm">
-          Importing… {progress.saved} of {progress.total} saved
+          {t('import.importing', { saved: progress.saved, total: progress.total })}
         </p>
         <progress className="w-full" value={progress.saved} max={progress.total} />
-        <p className="text-xs text-muted">You can leave this page: it keeps going.</p>
+        <p className="text-xs text-muted">{t('import.keepsGoing')}</p>
       </div>
     );
 
@@ -105,19 +108,15 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
     return (
       <div className="space-y-4">
         {result.added === result.total ? (
-          <Alert tone="success">
-            Imported {result.added} {result.added === 1 ? 'task' : 'tasks'}.
-          </Alert>
+          <Alert tone="success">{t('import.importedAll', { count: result.added })}</Alert>
         ) : (
           <Alert tone="warning">
-            Imported {result.added} of {result.total} tasks. The rest were turned down by the server
-            (a limit was reached, or you can't add to that project) or are still waiting to be
-            saved.
+            {t('import.importedPartial', { added: result.added, total: result.total })}
           </Alert>
         )}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
-            Close
+            {t('import.close')}
           </Button>
           <Button
             onClick={() => {
@@ -125,7 +124,7 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
               void navigate({ to: '/project/$projectId', params: { projectId: result.projectId } });
             }}
           >
-            Open project
+            {t('import.openProject')}
           </Button>
         </div>
       </div>
@@ -141,12 +140,14 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted">
-        {counts.tasks} {counts.tasks === 1 ? 'task' : 'tasks'}, {counts.sections}{' '}
-        {counts.sections === 1 ? 'section' : 'sections'}, {counts.comments}{' '}
-        {counts.comments === 1 ? 'comment' : 'comments'}. Nothing is added until you press Import.
+        {t('import.previewSummary', {
+          tasks: t('import.countTask', { count: counts.tasks }),
+          sections: t('import.countSection', { count: counts.sections }),
+          comments: t('import.countComment', { count: counts.comments }),
+        })}
       </p>
       <ul
-        aria-label="What will be added"
+        aria-label={t('import.previewAria')}
         tabIndex={0}
         className="max-h-56 space-y-0.5 overflow-auto rounded-lg border border-line bg-surface-alt p-3 text-sm"
       >
@@ -163,18 +164,18 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
           ),
         )}
         {rows.length > PREVIEW_ROWS && (
-          <li className="text-muted">…and {rows.length - PREVIEW_ROWS} more.</li>
+          <li className="text-muted">{t('import.andMore', { count: rows.length - PREVIEW_ROWS })}</li>
         )}
       </ul>
       {warnings.length > 0 && (
         <details className="rounded-lg border border-line p-3 text-sm">
           <summary className="cursor-pointer font-medium">
-            {warnings.length} {warnings.length === 1 ? 'note' : 'notes'} about this file
+            {t('import.notes', { count: warnings.length })}
           </summary>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
             {warnings.map((w, i) => (
               <li key={i}>
-                {w.row !== null && `Line ${w.row}: `}
+                {w.row !== null && t('import.line', { row: w.row })}
                 {w.message}
               </li>
             ))}
@@ -183,43 +184,43 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
       )}
       <div className="grid gap-4 sm:grid-cols-2">
         <SelectField
-          label="Add it to"
+          label={t('import.addTo')}
           value={kind}
           onChange={(e) => setKind(e.target.value as 'new' | 'existing')}
           options={[
-            { value: 'new', label: 'A new project' },
-            { value: 'existing', label: 'An existing project' },
+            { value: 'new', label: t('import.newProject') },
+            { value: 'existing', label: t('import.existingProject') },
           ]}
         />
         {kind === 'new' ? (
           <TextField
-            label="Project name"
+            label={t('import.projectName')}
             value={name}
             maxLength={120}
             onChange={(e) => setName(e.target.value)}
           />
         ) : (
           <SelectField
-            label="Project"
+            label={t('task.project')}
             value={existingId}
             onChange={(e) => setExistingId(e.target.value)}
-            options={writable.map((p) => ({ value: p.id, label: p.isInbox ? 'Inbox' : p.name }))}
+            options={writable.map((p) => ({ value: p.id, label: p.isInbox ? t('project.inbox') : p.name }))}
           />
         )}
       </div>
       {counts.comments > 0 && (
         <Checkbox
-          label="Include comments"
+          label={t('import.includeComments')}
           checked={includeComments}
           onChange={(e) => setIncludeComments(e.target.checked)}
         />
       )}
       <div className="flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button onClick={() => void run()} disabled={!canImport}>
-          Import
+          {t('import.import')}
         </Button>
       </div>
     </div>

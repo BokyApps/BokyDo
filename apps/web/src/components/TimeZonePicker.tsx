@@ -1,5 +1,6 @@
 import { describeZone, detectTimeZone, searchTimeZones, type ZoneOption } from '@bokydo/shared';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { inputClass } from './ui.js';
 
 const describe = (z: ZoneOption) => [z.city, z.country].filter(Boolean).join(', ');
@@ -11,12 +12,13 @@ const describe = (z: ZoneOption) => [z.city, z.country].filter(Boolean).join(', 
 export function TimeZonePicker({
   value,
   onChange,
-  label = 'Time zone',
+  label,
 }: {
   value: string | null;
   onChange: (zone: string) => void;
   label?: string;
 }) {
+  const { t } = useTranslation();
   const id = useId();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -41,7 +43,7 @@ export function TimeZonePicker({
   return (
     <div className="space-y-1.5">
       <label htmlFor={id} className="block text-sm font-medium text-fg">
-        {label}
+        {label ?? t('settings.timezone')}
       </label>
       <div className="relative">
         <input
@@ -55,7 +57,7 @@ export function TimeZonePicker({
           placeholder={
             current
               ? `${describe(current)} (${current.offsetLabel})`
-              : 'Search a city, country, or offset like +7'
+              : t('settings.timezoneSearch')
           }
           value={query}
           onFocus={() => setOpen(true)}
@@ -113,7 +115,11 @@ export function TimeZonePicker({
       <p className="text-xs text-muted">
         {current ? (
           <>
-            Current: {describe(current)}, {current.offsetLabel}, {current.localTime} now.{' '}
+            {t('settings.timezoneCurrent', {
+              zone: describe(current),
+              offset: current.offsetLabel,
+              time: current.localTime,
+            })}{' '}
           </>
         ) : null}
         {detected && detected !== value && (
@@ -122,7 +128,10 @@ export function TimeZonePicker({
             className="text-accent hover:underline"
             onClick={() => choose(detected)}
           >
-            Use detected: {describe(describeZone(detected))} ({describeZone(detected).offsetLabel})
+            {t('settings.timezoneDetected', {
+              zone: describe(describeZone(detected)),
+              offset: describeZone(detected).offsetLabel,
+            })}
           </button>
         )}
       </p>

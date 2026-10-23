@@ -1,9 +1,10 @@
-import { InvitationsPage, JoinPage } from './pages/SharingPages.js';
 import type { InstanceStatus, SessionInfo } from '@bokydo/shared';
 import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
+  type RouteComponent,
   Outlet,
   redirect,
 } from '@tanstack/react-router';
@@ -11,32 +12,56 @@ import { AppShell } from './components/AppShell.js';
 import { RouteAnnouncer } from './components/RouteAnnouncer.js';
 import { Spinner } from './components/ui.js';
 import { instanceQuery, queryClient, sessionQuery } from './lib/queries.js';
-import { AccountSecurityPage } from './pages/AccountSecurityPage.js';
-import { AdminSettingsPage } from './pages/AdminSettingsPage.js';
-import { AdminUsersPage } from './pages/AdminUsersPage.js';
-import { ChangePasswordPage } from './pages/ChangePasswordPage.js';
-import { CompletedPage } from './pages/CompletedPage.js';
-import { ProductivityPage } from './pages/ProductivityPage.js';
-import { ArchivedPage, FilterPage, FiltersLabelsPage, LabelPage } from './pages/LabelsPages.js';
-import { TemplatesPage } from './pages/TemplatesPage.js';
-import { InboxPage, ProjectView } from './pages/ProjectPage.js';
-import { HomeRedirect, TaskLinkPage } from './pages/RoutePages.js';
-import { SettingsPage } from './pages/SettingsPage.js';
-import { TodayPage } from './pages/TodayPage.js';
-import { UpcomingPage } from './pages/UpcomingPage.js';
-import { LoginPage } from './pages/LoginPage.js';
-import {
-  ForgotPasswordPage,
-  RegisterPage,
-  ResetPasswordPage,
-  VerifyEmailPage,
-} from './pages/PublicPages.js';
-import { SetupPage } from './pages/SetupPage.js';
-import { SetupPendingPage } from './pages/SetupPendingPage.js';
-import { UnsubscribePage } from './pages/UnsubscribePage.js';
 import { stashOAuthRequest } from './lib/oauth.js';
-import { ConsentPage } from './pages/ConsentPage.js';
-import { AdminBackupsPage } from './pages/AdminBackupsPage.js';
+
+/**
+ * Route-level code splitting (F-023): each screen is its own chunk, loaded on navigation. The
+ * start-up bundle keeps only the shell and the guard; Settings, Admin, Productivity, the project
+ * views (board, calendar) and the import/AI panels arrive when they are opened.
+ */
+function lazy<T extends Record<string, unknown>, K extends keyof T & string>(
+  importer: () => Promise<T>,
+  name: K,
+) {
+  return lazyRouteComponent(importer, name);
+}
+
+const HomeRedirect = lazy(() => import('./pages/RoutePages.js'), 'HomeRedirect');
+const TaskLinkPage = lazy(() => import('./pages/RoutePages.js'), 'TaskLinkPage');
+const LoginPage = lazy(() => import('./pages/LoginPage.js'), 'LoginPage');
+const ForgotPasswordPage = lazy(() => import('./pages/PublicPages.js'), 'ForgotPasswordPage');
+const ResetPasswordPage = lazy(() => import('./pages/PublicPages.js'), 'ResetPasswordPage');
+const VerifyEmailPage = lazy(() => import('./pages/PublicPages.js'), 'VerifyEmailPage');
+const RegisterPage = lazy(() => import('./pages/PublicPages.js'), 'RegisterPage');
+const UnsubscribePage = lazy(() => import('./pages/UnsubscribePage.js'), 'UnsubscribePage');
+const ConsentPage = lazy(() => import('./pages/ConsentPage.js'), 'ConsentPage');
+const ChangePasswordPage = lazy(
+  () => import('./pages/ChangePasswordPage.js'),
+  'ChangePasswordPage',
+);
+const SetupPage = lazy(() => import('./pages/SetupPage.js'), 'SetupPage');
+const SetupPendingPage = lazy(() => import('./pages/SetupPendingPage.js'), 'SetupPendingPage');
+const InboxPage = lazy(() => import('./pages/ProjectPage.js'), 'InboxPage');
+const ProjectView = lazy(() => import('./pages/ProjectPage.js'), 'ProjectView');
+const LabelPage = lazy(() => import('./pages/LabelsPages.js'), 'LabelPage');
+const FilterPage = lazy(() => import('./pages/LabelsPages.js'), 'FilterPage');
+const FiltersLabelsPage = lazy(() => import('./pages/LabelsPages.js'), 'FiltersLabelsPage');
+const ArchivedPage = lazy(() => import('./pages/LabelsPages.js'), 'ArchivedPage');
+const TodayPage = lazy(() => import('./pages/TodayPage.js'), 'TodayPage');
+const UpcomingPage = lazy(() => import('./pages/UpcomingPage.js'), 'UpcomingPage');
+const CompletedPage = lazy(() => import('./pages/CompletedPage.js'), 'CompletedPage');
+const ProductivityPage = lazy(() => import('./pages/ProductivityPage.js'), 'ProductivityPage');
+const TemplatesPage = lazy(() => import('./pages/TemplatesPage.js'), 'TemplatesPage');
+const SettingsPage = lazy(() => import('./pages/SettingsPage.js'), 'SettingsPage');
+const InvitationsPage = lazy(() => import('./pages/SharingPages.js'), 'InvitationsPage');
+const JoinPage = lazy(() => import('./pages/SharingPages.js'), 'JoinPage');
+const AccountSecurityPage = lazy(
+  () => import('./pages/AccountSecurityPage.js'),
+  'AccountSecurityPage',
+);
+const AdminSettingsPage = lazy(() => import('./pages/AdminSettingsPage.js'), 'AdminSettingsPage');
+const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage.js'), 'AdminUsersPage');
+const AdminBackupsPage = lazy(() => import('./pages/AdminBackupsPage.js'), 'AdminBackupsPage');
 
 type Gate = '/login' | '/change-password' | '/account/security' | '/setup' | '/setup-pending';
 /** Screens that only make sense while signed out. */
@@ -75,7 +100,7 @@ const RootLayout = () => (
   </>
 );
 const rootRoute = createRootRoute({ component: RootLayout, pendingComponent: Spinner });
-const page = (path: string, component: () => React.ReactNode, opts?: { adminOnly?: boolean }) =>
+const page = (path: string, component: RouteComponent, opts?: { adminOnly?: boolean }) =>
   createRoute({
     getParentRoute: () => rootRoute,
     path,
@@ -84,7 +109,7 @@ const page = (path: string, component: () => React.ReactNode, opts?: { adminOnly
   });
 
 const appRoute = createRoute({ getParentRoute: () => rootRoute, id: 'app', component: AppShell });
-const appPage = (path: string, component: () => React.ReactNode, opts?: { adminOnly?: boolean }) =>
+const appPage = (path: string, component: RouteComponent, opts?: { adminOnly?: boolean }) =>
   createRoute({
     getParentRoute: () => appRoute,
     path,
@@ -133,20 +158,12 @@ const routeTree = rootRoute.addChildren([
   page('/login', LoginPage),
   page('/forgot-password', ForgotPasswordPage),
   page('/reset-password', ResetPasswordPage),
-  page('/register', () => <RegisterPage />),
+  page('/register', RegisterPage),
   page('/invite', () => <RegisterPage invite />),
   // Works signed in or out (the link may be opened on another device).
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/verify-email',
-    component: VerifyEmailPage,
-  }),
+  page('/verify-email', VerifyEmailPage),
   // Opened from an email; the signed link is enough (no sign-in).
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/unsubscribe',
-    component: UnsubscribePage,
-  }),
+  page('/unsubscribe', UnsubscribePage),
   // An app's sign-in request (OAuth). The handle moves from the fragment into this tab's
   // storage first, so it survives the detour through sign-in.
   createRoute({
@@ -172,12 +189,13 @@ const routeTree = rootRoute.addChildren([
     appPage('/filters-labels', FiltersLabelsPage),
     appPage('/templates', TemplatesPage),
     appPage('/archived', ArchivedPage),
-    appPage('/settings', () => <SettingsPage />),
+    appPage('/settings', SettingsPage),
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
     appPage('/settings/calendar', () => <SettingsPage initialTab="calendar" />),
     appPage('/settings/apps', () => <SettingsPage initialTab="apps" />),
     appPage('/settings/ai', () => <SettingsPage initialTab="ai" />),
     appPage('/settings/data', () => <SettingsPage initialTab="data" />),
+    appPage('/settings/device', () => <SettingsPage initialTab="device" />),
     appPage('/invitations', InvitationsPage),
     appPage('/join', JoinPage),
     projectRoute,

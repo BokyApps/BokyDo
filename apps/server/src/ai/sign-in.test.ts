@@ -6,6 +6,8 @@ import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import {
   accountFromIdToken,
+  chatgptAccountId,
+  openaiProtocol,
   providerPage,
   SignInExpiredError,
   SignInFlows,
@@ -16,6 +18,7 @@ import {
 
 // Look like real tokens so a leak would be obvious; not credentials for anything.
 const canary = (kind: string, n: number) => `xai-${kind}-SIGNINCANARY-${n}`;
+const openaiCanary = (kind: string, n: number) => `openai-${kind}-SIGNINCANARY-${n}`;
 
 const idToken = (claims: Record<string, unknown>) =>
   `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
@@ -152,15 +155,16 @@ describe('xAI device flow protocol', () => {
 
   it('maps every polling answer, and parses tokens strictly', async () => {
     const x = fakeXai();
-    expect(await xaiProtocol.poll(x.fetch, 'D')).toEqual({ status: 'pending' });
+    const code = await xaiProtocol.start(x.fetch);
+    expect(await xaiProtocol.poll(x.fetch, code)).toEqual({ status: 'pending' });
     x.state.slowDown = true;
-    expect(await xaiProtocol.poll(x.fetch, 'D')).toEqual({ status: 'slow_down' });
+    expect(await xaiProtocol.poll(x.fetch, code)).toEqual({ status: 'slow_down' });
     x.state.slowDown = false;
     x.state.denied = true;
-    expect(await xaiProtocol.poll(x.fetch, 'D')).toEqual({ status: 'denied' });
+    expect(await xaiProtocol.poll(x.fetch, code)).toEqual({ status: 'denied' });
     x.state.denied = false;
     x.state.approved = true;
-    const done = await xaiProtocol.poll(x.fetch, 'D');
+    const done = await xaiProtocol.poll(x.fetch, code);
     expect(done).toMatchObject({
       status: 'done',
       tokens: {
@@ -178,13 +182,13 @@ describe('xAI device flow protocol', () => {
       json: async () => ({ access_token: 'a\r\nInjected: 1', expires_in: 3600 }),
       cancel: () => undefined,
     });
-    await expect(xaiProtocol.poll(bad, 'D')).rejects.toBeInstanceOf(SignInProviderError);
+    await expect(xaiProtocol.poll(bad, code)).rejects.toBeInstanceOf(SignInProviderError);
   });
 
   it('treats invalid_grant as "sign in again" and outages as temporary', async () => {
     const x = fakeXai();
     x.state.approved = true;
-    await xaiProtocol.poll(x.fetch, 'D');
+    await xaiProtocol.poll(x.fetch, await xaiProtocol.start(x.fetch));
     await expect(xaiProtocol.refresh(x.fetch, 'not-the-token')).rejects.toBeInstanceOf(
       SignInExpiredError,
     );
@@ -201,6 +205,181 @@ describe('xAI device flow protocol', () => {
     expect(accountFromIdToken(idToken({ name: `Bob${rlo}\n<b>` }))).toBe('Bob<b>');
     expect(accountFromIdToken('garbage')).toBeNull();
     expect(accountFromIdToken(undefined)).toBeNull();
+  });
+});
+
+/**
+ * A scripted OpenAI: Codex's device flow (a user code, an approval, an authorization code that
+ * is exchanged for tokens) and a Responses endpoint that only accepts the current access token.
+ */
+function fakeOpenai() {
+  const state = {
+    approved: false,
+    issued: 0,
+    refreshes: 0,
+    current: { access: '', refresh: '' },
+    used: new Set<string>(),
+    revoked: [] as string[],
+    chats: [] as { auth: string; account: string }[],
+    seen: [] as { url: string; body: string }[],
+    accountId: 'acct-SIGNINCANARY-1',
+    expiresIn: 3600,
+    models: true,
+  };
+  const reply = (status: number, json: unknown) => ({
+    status,
+    headers: {},
+    body: (async function* () {
+      yield Buffer.from(JSON.stringify(json));
+    })(),
+    text: async () => JSON.stringify(json),
+    json: async () => json,
+    cancel: () => undefined,
+  });
+  const issue = (idToken?: string) => {
+    state.issued++;
+    state.current = {
+      access: openaiCanary('access', state.issued),
+      refresh: openaiCanary('refresh', state.issued),
+    };
+    return {
+      access_token: state.current.access,
+      refresh_token: state.current.refresh,
+      expires_in: state.expiresIn,
+      ...(idToken ? { id_token: idToken } : {}),
+    };
+  };
+  const fetch: OutboundFetch = async (url: string, init: OutboundRequest = {}) => {
+    const body = String(init.body ?? '');
+    state.seen.push({ url, body });
+    if (url === 'https://auth.openai.com/api/accounts/deviceauth/usercode')
+      return reply(200, {
+        device_auth_id: 'DEVICE-AUTH-1',
+        user_code: 'WXYZ-1234',
+        interval: 5,
+      });
+    if (url === 'https://auth.openai.com/api/accounts/deviceauth/token') {
+      if (!state.approved) return reply(403, {});
+      return reply(200, { authorization_code: 'AUTH-CODE-1', code_verifier: 'verifier-1' });
+    }
+    if (url === 'https://auth.openai.com/oauth/token') {
+      const form = new URLSearchParams(body);
+      const grant = form.get('grant_type');
+      if (grant === 'authorization_code') {
+        return reply(
+          200,
+          issue(
+            idToken({
+              email: 'alice@example.com',
+              'https://api.openai.com/auth': { chatgpt_account_id: state.accountId },
+            }),
+          ),
+        );
+      }
+      if (grant === 'refresh_token') {
+        const token = form.get('refresh_token') ?? '';
+        if (token !== state.current.refresh || state.used.has(token))
+          return reply(400, { error: { code: 'invalid_grant' } });
+        state.used.add(token);
+        state.refreshes++;
+        return reply(200, issue());
+      }
+    }
+    if (url === 'https://auth.openai.com/oauth/revoke') {
+      state.revoked.push((JSON.parse(body) as { token?: string }).token ?? '');
+      return reply(200, {});
+    }
+    if (url === 'https://chatgpt.com/backend-api/codex/models') {
+      // Not every deployment has the model list: the test falls back to a real call then.
+      if (!state.models) return reply(404, {});
+      return reply(200, { models: [{ slug: 'gpt-5-codex' }, { slug: 'gpt-5.1-codex' }] });
+    }
+    if (url === 'https://chatgpt.com/backend-api/codex/responses') {
+      const auth = init.headers?.authorization ?? init.headers?.Authorization ?? '';
+      if (auth !== `Bearer ${state.current.access}`) return reply(401, {});
+      state.chats.push({
+        auth,
+        account: init.headers?.['chatgpt-account-id'] ?? '',
+      });
+      // The backend answers as a stream, never as one JSON document.
+      return {
+        status: 200,
+        headers: {},
+        body: (async function* () {
+          yield Buffer.from('data: {"type":"response.output_text.delta","delta":"OK"}\n\n');
+          yield Buffer.from(
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":1}}}\n\n',
+          );
+        })(),
+        text: async () => '',
+        json: async () => ({}),
+        cancel: () => undefined,
+      };
+    }
+    throw new Error(`unexpected request to ${url}`);
+  };
+  return { fetch, state };
+}
+
+describe('OpenAI (Codex) device flow protocol', () => {
+  it('asks for a user code with the public Codex client', async () => {
+    const o = fakeOpenai();
+    const code = await openaiProtocol.start(o.fetch);
+    expect(code).toEqual({
+      deviceCode: 'DEVICE-AUTH-1',
+      userCode: 'WXYZ-1234',
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      intervalSeconds: 5,
+      expiresInSeconds: 900,
+    });
+    expect(JSON.parse(o.state.seen[0]!.body)).toEqual({
+      client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+    });
+  });
+
+  it('waits for the approval and exchanges the authorization code for tokens', async () => {
+    const o = fakeOpenai();
+    const code = await openaiProtocol.start(o.fetch);
+    // Nobody has approved yet: the provider answers 403.
+    expect(await openaiProtocol.poll(o.fetch, code)).toEqual({ status: 'pending' });
+    o.state.approved = true;
+    const done = await openaiProtocol.poll(o.fetch, code);
+    expect(done).toMatchObject({
+      status: 'done',
+      tokens: {
+        accessToken: openaiCanary('access', 1),
+        refreshToken: openaiCanary('refresh', 1),
+        account: 'alice@example.com',
+        accountId: o.state.accountId,
+      },
+    });
+    const exchange = new URLSearchParams(o.state.seen.at(-1)!.body);
+    expect(exchange.get('grant_type')).toBe('authorization_code');
+    expect(exchange.get('code')).toBe('AUTH-CODE-1');
+    expect(exchange.get('code_verifier')).toBe('verifier-1');
+    expect(exchange.get('redirect_uri')).toBe('https://auth.openai.com/deviceauth/callback');
+  });
+
+  it('renews the tokens once and ends the sign-in on invalid_grant', async () => {
+    const o = fakeOpenai();
+    const code = await openaiProtocol.start(o.fetch);
+    o.state.approved = true;
+    await openaiProtocol.poll(o.fetch, code);
+    const renewed = await openaiProtocol.refresh(o.fetch, openaiCanary('refresh', 1));
+    expect(renewed.accessToken).toBe(openaiCanary('access', 2));
+    expect(renewed.accountId).toBeNull();
+    // The old refresh token is rotated away: reusing it ends the sign-in.
+    await expect(
+      openaiProtocol.refresh(o.fetch, openaiCanary('refresh', 1)),
+    ).rejects.toBeInstanceOf(SignInExpiredError);
+  });
+
+  it('reads the ChatGPT account id from the ID token, and nothing else', () => {
+    const claims = { 'https://api.openai.com/auth': { chatgpt_account_id: 'acct-1' } };
+    expect(chatgptAccountId(idToken(claims))).toBe('acct-1');
+    expect(chatgptAccountId(idToken({ email: 'alice@example.com' }))).toBeNull();
+    expect(chatgptAccountId('garbage')).toBeNull();
+    expect(chatgptAccountId(undefined)).toBeNull();
   });
 });
 
@@ -234,7 +413,7 @@ describe('SignInFlows', () => {
         (async () => {
           throw new Error('no network');
         }) as OutboundFetch,
-      { 'xai-subscription': s.protocol },
+      { 'xai-subscription': s.protocol, 'chatgpt-subscription': s.protocol },
       () => now,
     );
     const { flowId } = await flows.start('alice', 'xai-subscription', null);
@@ -262,7 +441,7 @@ describe('SignInFlows', () => {
         (async () => {
           throw new Error('no network');
         }) as OutboundFetch,
-      { 'xai-subscription': s.protocol },
+      { 'xai-subscription': s.protocol, 'chatgpt-subscription': s.protocol },
       () => now,
     );
     const first = await flows.start('alice', 'xai-subscription', null);
@@ -462,4 +641,155 @@ describe.skipIf(!TEST_DATABASE_URL)('subscription sign-in (app)', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(x.state.revoked).toEqual([x.state.current.refresh]);
   }, 30_000);
+});
+
+describe.skipIf(!TEST_DATABASE_URL)('subscription sign-in (ChatGPT, app)', () => {
+  let t: TestApp;
+  let o: ReturnType<typeof fakeOpenai>;
+  const responses: string[] = [];
+
+  async function person(name: string) {
+    const id = await createUser(t.db, { username: name, password: PASSWORD });
+    const client = new Client(t.app);
+    await client.login(name, PASSWORD);
+    const request = client.request.bind(client);
+    client.request = async (opts) => {
+      const res = await request(opts);
+      responses.push(res.body);
+      return res;
+    };
+    return { id, http: client };
+  }
+  const settings = (patch: Parameters<TestApp['app']['services']['settings']['update']>[0]) =>
+    t.app.services.settings.update(patch, { userId: null, ip: null });
+
+  /** Sign alice in all the way; returns the credential. */
+  async function signIn(client: Client, credentialId?: string) {
+    const start = await client.post(
+      '/api/v1/ai/sign-in/chatgpt-subscription/start',
+      credentialId ? { credentialId } : {},
+    );
+    expect(start.statusCode).toBe(200);
+    const { flowId, userCode, verificationUrl } = start.json();
+    expect(userCode).toBe('WXYZ-1234');
+    expect(verificationUrl).toBe('https://auth.openai.com/codex/device');
+    o.state.approved = true;
+    const res = await client.post(`/api/v1/ai/sign-in/flows/${flowId}/poll`);
+    expect(res.json().status).toBe('done');
+    o.state.approved = false;
+    return res.json().credential as { id: string; label: string; hasKey: boolean; scope: string };
+  }
+
+  beforeEach(async () => {
+    responses.length = 0;
+    o = fakeOpenai();
+    t = await testApp({ aiUserFetch: o.fetch });
+    await t.app.services.settings.markSetupComplete({ userId: null, ip: null });
+    await settings({ 'ai.subscriptionSignIn': true });
+  });
+  afterEach(async () => {
+    for (const body of responses) expect(body).not.toContain('SIGNINCANARY');
+    await t.close();
+  });
+
+  it('signs in, keeps the tokens secret and answers a call through the Codex backend', async () => {
+    const alice = await person('alice');
+    const cred = await signIn(alice.http);
+    expect(cred).toMatchObject({
+      scope: 'user',
+      hasKey: true,
+      label: 'ChatGPT (alice@example.com)',
+    });
+    const [row] = await t.db.db.select().from(aiCredentials).where(eq(aiCredentials.id, cred.id));
+    expect(JSON.stringify(row)).not.toContain('SIGNINCANARY');
+    expect(JSON.stringify(await t.db.db.select().from(auditLog))).not.toContain('SIGNINCANARY');
+    // Never through the key form.
+    expect(
+      (
+        await alice.http.post('/api/v1/ai/credentials', {
+          provider: 'chatgpt-subscription',
+          label: 'x',
+          apiKey: 'k',
+        })
+      ).statusCode,
+    ).toBe(400);
+
+    // A feature routed to it really calls the Codex backend.
+    expect(
+      (
+        await alice.http.put('/api/v1/ai/routing', {
+          'assist.task': { credentialId: cred.id, model: 'gpt-5-codex' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const user = { id: alice.id, isAdmin: false };
+    const ask = () =>
+      t.app.services.ai.chat(user, 'assist.task', {
+        messages: [{ role: 'user', content: 'hi' }],
+        maxOutputTokens: 10,
+      });
+    expect((await ask()).text).toBe('OK');
+    // The bearer token and the account id travel in the headers.
+    expect(o.state.chats.at(-1)).toEqual({
+      auth: `Bearer ${o.state.current.access}`,
+      account: o.state.accountId,
+    });
+
+    // "Test" lists the models the subscription has.
+    const tested = await alice.http.post(`/api/v1/ai/credentials/${cred.id}/test`);
+    expect(tested.json()).toMatchObject({
+      ok: true,
+      models: ['gpt-5-codex', 'gpt-5.1-codex'],
+    });
+
+    // Without that list, "Test" makes a real (tiny) call, with the model the route names.
+    o.state.models = false;
+    const tested2 = await alice.http.post(`/api/v1/ai/credentials/${cred.id}/test`);
+    expect(tested2.json()).toMatchObject({ ok: true });
+    expect(JSON.parse(o.state.seen.at(-1)!.body).model).toBe('gpt-5-codex');
+  }, 30_000);
+
+  it('renews the sign-in before a call, keeps the account id and ends on invalid_grant', async () => {
+    const alice = await person('alice');
+    const cred = await signIn(alice.http);
+    const user = { id: alice.id, isAdmin: false };
+    const ask = () =>
+      t.app.services.ai.chat(user, 'assist.task', {
+        messages: [{ role: 'user', content: 'hi' }],
+        maxOutputTokens: 10,
+      });
+    expect(
+      (
+        await alice.http.put('/api/v1/ai/routing', {
+          'assist.task': { credentialId: cred.id, model: 'gpt-5-codex' },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    // A token that is about to expire: two calls at once renew it once (the provider rotates
+    // refresh tokens, so a second renewal with the old one would end the sign-in).
+    o.state.expiresIn = 60;
+    await signIn(alice.http, cred.id);
+    o.state.expiresIn = 3600;
+    const [a, b] = await Promise.all([ask(), ask()]);
+    expect([a.text, b.text]).toEqual(['OK', 'OK']);
+    expect(o.state.refreshes).toBe(1);
+    // The account id survives the renewal: the backend needs it in every request.
+    expect(o.state.chats.at(-1)).toEqual({
+      auth: `Bearer ${o.state.current.access}`,
+      account: o.state.accountId,
+    });
+
+    // The keep-alive job renews sign-ins idle for days.
+    const later = new Date(Date.now() + 4 * 86_400_000);
+    expect(await t.app.services.ai.renewIdleSignIns(later, 3 * 86_400_000)).toBe(1);
+    expect(o.state.refreshes).toBe(2);
+
+    // The provider forgets the grant: the next renewal ends the sign-in.
+    o.state.current.refresh = 'rotated-away';
+    expect(await t.app.services.ai.renewIdleSignIns(later, 3 * 86_400_000)).toBe(0);
+    const listed = (await alice.http.get('/api/v1/ai/credentials')).json().credentials;
+    expect(listed[0]).toMatchObject({ id: cred.id, hasKey: false });
+    await expect(ask()).rejects.toThrow();
+  }, 60_000);
 });

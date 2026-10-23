@@ -20,6 +20,7 @@ import {
 import { api } from './api.js';
 import { applyAppearance, watchSystemMode } from './appearance.js';
 import { rememberLanguage, setLanguage } from '../i18n.js';
+import { offlineEnabled, pruneOffline, readOffline, writeOffline } from './offline.js';
 import { useToast } from './toasts.js';
 
 const SyncContext = createContext<SyncStore | null>(null);
@@ -45,19 +46,40 @@ export function SyncProvider({ children }: { children: ReactNode }) {
               tone: 'error',
               message: REJECTIONS[result.error] ?? 'A change could not be saved.',
             }),
+          // Keep the opt-in offline copy current after every change and every confirmation.
+          onPersist: (snapshot) => {
+            const userId = snapshot.state.user?.id;
+            if (userId) void writeOffline(userId, snapshot);
+          },
         },
       ),
   );
   useEffect(() => {
-    void store.pull();
-    const events = new EventSource('/api/v1/sync/events');
-    events.addEventListener('poke', () => void store.pull());
+    let disposed = false;
+    let events: EventSource | null = null;
     // Catch up after the tab was in the background or the network blipped.
     const onVisible = () => document.visibilityState === 'visible' && void store.pull();
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('online', onVisible);
+    void (async () => {
+      // Hydrate from the device before the first network round trip, when the setting is on.
+      if (offlineEnabled()) {
+        const snapshot = await readOffline();
+        if (disposed) return;
+        if (snapshot) store.hydrate(snapshot);
+      }
+      if (disposed) return;
+      await store.pull();
+      const userId = store.state.user?.id;
+      // A different user on this browser: their copy is not ours to keep.
+      if (userId) void pruneOffline(userId);
+      if (disposed) return;
+      events = new EventSource('/api/v1/sync/events');
+      events.addEventListener('poke', () => void store.pull());
+      document.addEventListener('visibilitychange', onVisible);
+      window.addEventListener('online', onVisible);
+    })();
     return () => {
-      events.close();
+      disposed = true;
+      events?.close();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('online', onVisible);
     };

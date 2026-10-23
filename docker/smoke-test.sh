@@ -375,6 +375,11 @@ check "an import can't write into a project the user can't edit" \
 as_admin
 check "the Templates page is served by the web app" test "$(http_code -H 'accept: text/html' "$BASE/templates")" = 200
 
+echo "== PWA: installable app shell (W12a)"
+check "the web app manifest is served" test "$(http_code "$BASE/manifest.webmanifest")" = 200
+check "the built service worker keeps its push handlers and injects a version" \
+  bash -c "curl -s \"$BASE/sw.js\" | grep -q \"addEventListener('push'\" && curl -s \"$BASE/sw.js\" | grep -q 'bokydo-shell-' && ! curl -s \"$BASE/sw.js\" | grep -q '__BOKYDO'"
+
 echo "== accessibility (W12b)"
 # Single-key shortcuts can be turned off (WCAG 2.1.4): the server stores a boolean and only a boolean.
 shortcuts_off() { jq -e '.user.preferences.keyboardShortcuts == false' <<<"$1"; }

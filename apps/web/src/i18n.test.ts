@@ -111,6 +111,25 @@ describe('i18n plumbing', () => {
     expect(localeTag()).toBe('en');
   });
 
+  it('has the task and project areas in the English catalogue', async () => {
+    await setLanguage('en');
+    const { default: en } = await import('./locales/en.json');
+    expect(en.translation.task).toHaveProperty('addTask', 'Add task');
+    expect(en.translation.task).toHaveProperty('complete', 'Complete “{{content}}”');
+    expect(en.translation.project).toHaveProperty('notFoundTitle', 'Project not found');
+    expect(en.translation.board).toHaveProperty('move', 'Move “{{content}}”');
+    expect(en.translation.today).toHaveProperty('title', 'Today');
+    expect(en.translation.upcoming).toHaveProperty('title', 'Upcoming');
+  });
+
+  it('interpolates and pluralises the extracted task keys', async () => {
+    await setLanguage('en');
+    const { default: i18n } = await import('./i18n.js');
+    expect(i18n.t('task.addTasks', { count: 1 })).toBe('Add 1 task');
+    expect(i18n.t('task.addTasks', { count: 3 })).toBe('Add 3 tasks');
+    expect(i18n.t('task.complete', { content: 'Milk' })).toBe('Complete “Milk”');
+  });
+
   it('remembers a pinned language and forgets it on "auto"', async () => {
     // No storage in this environment: both paths are no-ops that must not throw.
     expect(() => rememberedLanguage()).not.toThrow();

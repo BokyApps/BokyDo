@@ -4,7 +4,7 @@ import { Spinner } from '../components/ui.js';
 import { usePreferences, useSyncState } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { ProjectView } from './ProjectPage.js';
-import { pendingJoinToken } from './SharingPages.js';
+import { pendingJoinToken } from '../lib/join.js';
 
 /** "/" goes to the user's chosen home view once their preferences have synced. */
 export function HomeRedirect() {

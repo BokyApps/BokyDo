@@ -1,6 +1,7 @@
 import {
   AI_FEATURES,
   AI_FEATURE_KEYS,
+  AI_PROVIDERS,
   aiRoutingSchema,
   isSignInProvider,
   providerSupports,
@@ -16,6 +17,7 @@ import {
   createOutbound,
   PUBLIC_ONLY,
   type OutboundFetch,
+  type OutboundPolicy,
   type Resolver,
 } from '../net/outbound.js';
 import type { SettingsService } from '../settings/settings-service.js';
@@ -77,6 +79,9 @@ export class AiCallError extends Error {
 }
 
 const NO_USAGE: ReportedUsage = { inputTokens: 0, outputTokens: 0, audioSeconds: 0 };
+
+/** The model to test a ChatGPT subscription with when no route names one. */
+const DEFAULT_CODEX_MODEL = 'gpt-5-codex';
 
 const addUsage = (a: ReportedUsage, b: ReportedUsage): ReportedUsage => ({
   inputTokens: a.inputTokens + b.inputTokens,
@@ -179,16 +184,23 @@ export class AiService {
   }
 
   /**
+   * The network policy for a credential's scope. Users' own credentials only reach the public
+   * internet; instance credentials may also reach admin-allow-listed private networks. Shared by
+   * the HTTP client and the WebSocket relay so both enforce the same SSRF rules.
+   */
+  outboundPolicy(owner: CredentialOwner): OutboundPolicy {
+    return owner === null
+      ? allowlistPolicy(this.deps.settings.get('network.privateAllowlist'))
+      : PUBLIC_ONLY;
+  }
+
+  /**
    * The outbound client for a credential. Users' own credentials only reach the public internet
    * over https; instance credentials may also reach admin-allow-listed private networks.
    */
   outboundFor(owner: CredentialOwner): OutboundFetch {
     if (owner !== null && this.deps.userFetch) return this.deps.userFetch;
-    const policy =
-      owner === null
-        ? allowlistPolicy(this.deps.settings.get('network.privateAllowlist'))
-        : PUBLIC_ONLY;
-    return createOutbound(policy, this.deps.resolver);
+    return createOutbound(this.outboundPolicy(owner), this.deps.resolver);
   }
 
   /** Subscription sign-in talks to the provider's own servers: public internet, https only. */
@@ -533,6 +545,21 @@ export class AiService {
   async test(owner: CredentialOwner, id: string): Promise<TestResult | null> {
     const stored = await this.deps.credentials.usable(owner, id);
     if (!stored || !this.allowed(stored)) return null;
+    if (AI_PROVIDERS[stored.provider].dialect === 'responses') {
+      // The ChatGPT (Codex) backend lists its models; when it doesn't, a tiny real call is the
+      // test that always works.
+      const listed = await this.modelList(owner, stored);
+      if (listed?.ok) return listed;
+      const result = await this.tryModel(owner, id, await this.modelFor(owner, id), 'chat');
+      if (!result) return null;
+      return result.ok
+        ? { ok: true, models: [] }
+        : {
+            ok: false,
+            error: result.error ?? 'error',
+            ...(result.status ? { status: result.status } : {}),
+          };
+    }
     try {
       const credential = await this.fresh(stored);
       return await listModels({ credential, fetch: this.outboundFor(owner) });
@@ -541,5 +568,27 @@ export class AiService {
         return { ok: false, error: err.code, ...(err.status ? { status: err.status } : {}) };
       throw err;
     }
+  }
+
+  /** The provider's model list, or null when it doesn't give one (or the call failed). */
+  private async modelList(
+    owner: CredentialOwner,
+    stored: UsableCredential,
+  ): Promise<TestResult | null> {
+    try {
+      const credential = await this.fresh(stored);
+      return await listModels({ credential, fetch: this.outboundFor(owner) });
+    } catch {
+      return null;
+    }
+  }
+
+  /** The model a route uses for this credential: what to test with. */
+  private async modelFor(owner: CredentialOwner, id: string): Promise<string> {
+    const routing =
+      owner === null ? this.deps.settings.get('ai.routing') : await this.userRouting(owner);
+    for (const route of Object.values(routing))
+      if (route.credentialId === id && route.model.trim()) return route.model.trim();
+    return DEFAULT_CODEX_MODEL;
   }
 }

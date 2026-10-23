@@ -9,6 +9,7 @@ import type {
   WorkspaceRole,
 } from '@bokydo/shared';
 import type { SyncState } from '@bokydo/sync-client';
+import type { TFunction } from 'i18next';
 import { flattenTree, projectTree } from './views.js';
 
 /**
@@ -51,7 +52,7 @@ const WRITABLE_ROLES: ReadonlySet<string> = new Set(['owner', 'admin', 'editor']
 const TEAM_CREATE_ROLES: ReadonlySet<WorkspaceRole> = new Set(['owner', 'admin', 'member']);
 
 /** Writable, non-archived BokyDo projects a Todoist project can be added to. Inbox first. */
-export function mergeTargets(state: SyncState): MergeTarget[] {
+export function mergeTargets(state: SyncState, t: TFunction): MergeTarget[] {
   const inbox = state.user ? state.projects.get(state.user.inboxProjectId) : undefined;
   const ordered = [
     ...(inbox ? [inbox] : []),
@@ -59,7 +60,7 @@ export function mergeTargets(state: SyncState): MergeTarget[] {
   ];
   return ordered
     .filter((p) => WRITABLE_ROLES.has(p.role) && !p.isArchived)
-    .map((p) => ({ id: p.id, label: p.isInbox ? 'Inbox' : pathOf(state, p.id) }));
+    .map((p) => ({ id: p.id, label: p.isInbox ? t('project.inbox') : pathOf(state, p.id) }));
 }
 
 function pathOf(state: SyncState, id: string): string {
@@ -202,13 +203,14 @@ export function projectRows(projects: TodoistPreviewProject[]): ProjectRow[] {
 
 /** A filter's notes for its row: why it is disabled, and what it mentions that is not selected. */
 export function filterNotes(
+  t: TFunction,
   f: TodoistPreviewFilter,
   preview: TodoistPreview,
   draft: ImportDraft,
 ): string[] {
   const notes: string[] = [];
-  if (!f.supported) notes.push("BokyDo's filter language doesn't understand this query yet.");
-  if (f.importedAs) notes.push('Imported before.');
+  if (!f.supported) notes.push(t('import.notesUnsupported'));
+  if (f.importedAs) notes.push(t('import.notesImportedBefore'));
   const chosenProjects = new Set(
     preview.projects
       .filter((p) => isImporting(draft.projects.get(p.id)))
@@ -216,28 +218,18 @@ export function filterNotes(
   );
   const missingProjects = f.projects.filter((n) => !chosenProjects.has(n.toLowerCase()));
   if (missingProjects.length)
-    notes.push(`Mentions ${missingProjects.join(', ')}, which you aren't importing.`);
+    notes.push(t('import.notesMissingProjects', { names: missingProjects.join(', ') }));
   const chosenLabels = new Set(
     preview.labels.filter((l) => draft.labels.has(l.id)).map((l) => l.name.toLowerCase()),
   );
   const missingLabels = f.labels.filter((n) => !chosenLabels.has(n.toLowerCase()));
   if (missingLabels.length)
-    notes.push(`Mentions label ${missingLabels.join(', ')}, which isn't selected.`);
+    notes.push(t('import.notesMissingLabels', { names: missingLabels.join(', ') }));
   return notes;
 }
 
-export const WARNING_KIND_LABEL: Record<TodoistImportWarning['kind'], string> = {
-  recurrence: 'Repeating dates',
-  timezone: 'Time zones',
-  assignee: 'Assignees',
-  label: 'Labels',
-  filter: 'Filters',
-  truncated: 'Shortened text',
-  duration: 'Durations',
-  nesting: 'Nesting',
-  completed: 'Completed tasks',
-  failed: 'Not imported',
-};
+// Group labels come from the catalogue; the keys are the raw warning kinds.
+const warningKindKey = (kind: TodoistImportWarning['kind']) => `import.warningKind.${kind}`;
 
 export interface WarningGroup {
   kind: TodoistImportWarning['kind'];
@@ -245,39 +237,54 @@ export interface WarningGroup {
   messages: string[];
 }
 
-/** Warnings grouped by kind, in the order of WARNING_KIND_LABEL. Empty kinds are left out. */
-export function groupWarnings(warnings: TodoistImportWarning[]): WarningGroup[] {
-  return (Object.keys(WARNING_KIND_LABEL) as TodoistImportWarning['kind'][])
+/** Warnings grouped by kind, in catalogue order. Empty kinds are left out. */
+export function groupWarnings(
+  t: TFunction = ((k: string) => k) as TFunction,
+  warnings: TodoistImportWarning[],
+): WarningGroup[] {
+  const kinds: TodoistImportWarning['kind'][] = [
+    'recurrence',
+    'timezone',
+    'assignee',
+    'label',
+    'filter',
+    'truncated',
+    'duration',
+    'nesting',
+    'completed',
+    'failed',
+  ];
+  return kinds
     .map((kind) => ({
       kind,
-      label: WARNING_KIND_LABEL[kind],
+      label: t(warningKindKey(kind)),
       messages: warnings.filter((w) => w.kind === kind).map((w) => w.message),
     }))
     .filter((g) => g.messages.length > 0);
 }
 
 /** The counts of a dry run or a finished import, as labelled rows. */
-export function countRows(c: TodoistImportCounts): { label: string; value: number }[] {
+export function countRows(t: TFunction, c: TodoistImportCounts): { label: string; value: number }[] {
   return [
-    { label: 'New projects', value: c.projects },
-    { label: 'Projects added to', value: c.merged },
-    { label: 'Sections', value: c.sections },
-    { label: 'Tasks', value: c.tasks },
-    { label: 'Comments', value: c.comments },
-    { label: 'Labels', value: c.labels },
-    { label: 'Filters', value: c.filters },
-    { label: 'Already imported (skipped)', value: c.alreadyImported },
+    { label: t('import.rowNewProjects'), value: c.projects },
+    { label: t('import.rowMerged'), value: c.merged },
+    { label: t('import.rowSections'), value: c.sections },
+    { label: t('import.rowTasks'), value: c.tasks },
+    { label: t('import.rowComments'), value: c.comments },
+    { label: t('import.rowLabels'), value: c.labels },
+    { label: t('import.rowFilters'), value: c.filters },
+    { label: t('import.rowAlreadyImported'), value: c.alreadyImported },
   ];
 }
 
 /** Human text for a finished or failed run's error code. */
-export function runErrorMessage(error: string | null): string {
+export function runErrorMessage(t: TFunction, error: string | null): string {
   switch (error) {
     case 'interrupted':
-      return 'The server restarted during the import. Start the import again to finish it.';
+      return t('import.runInterrupted');
     case 'internal':
-      return 'Something went wrong on the server during the import. Start it again to finish.';
+      return t('import.runInternal');
     default:
-      return 'The import stopped unexpectedly. Start it again to finish.';
+      return t('import.runDefault');
   }
 }
