@@ -53,6 +53,8 @@ function Layout() {
   const catalog = useQuery(aiCatalogQuery);
   const ramble = catalog.data?.available.includes('ramble.extract') ?? false;
   const voice = catalog.data?.available.includes('ramble.transcribe') ?? false;
+  // Live Ramble needs a model that can listen in real time (ramble.live).
+  const liveRamble = catalog.data?.available.includes('ramble.live') ?? false;
   // Ask your tasks is offered only when the server says this user has the feature (ask).
   const ask = catalog.data?.available.includes('ask') ?? false;
 
@@ -172,7 +174,12 @@ function Layout() {
       <QuickAddDialog />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
       {ramble && (
-        <RambleDialog open={rambleOpen} onClose={() => setRambleOpen(false)} voice={voice} />
+        <RambleDialog
+          open={rambleOpen}
+          onClose={() => setRambleOpen(false)}
+          voice={voice}
+          live={liveRamble}
+        />
       )}
       {ask && <AskDialog open={askOpen} onClose={() => setAskOpen(false)} />}
       <ShortcutsDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
