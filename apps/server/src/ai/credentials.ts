@@ -32,6 +32,8 @@ export interface UsableCredential {
   headers: Record<string, string>;
   /** Sign-in credentials: when the access token (`apiKey`) expires, epoch ms. */
   expiresAt?: number | null;
+  /** The provider's account id (ChatGPT): sent back to the provider in a header. */
+  accountId?: string | null;
 }
 
 interface StoredSecret {
@@ -40,6 +42,8 @@ interface StoredSecret {
   /** Subscription sign-in (W7d): the access token is `apiKey`; this renews it. */
   refreshToken?: string;
   expiresAt?: number;
+  /** The provider's account id (ChatGPT), needed in a header for every call. */
+  accountId?: string;
 }
 
 export const MAX_USER_CREDENTIALS = 20;
@@ -270,6 +274,7 @@ export class AiCredentialStore {
       apiKey: secret.apiKey ?? null,
       headers: secret.headers ?? {},
       expiresAt: secret.expiresAt ?? null,
+      accountId: secret.accountId ?? null,
     };
   }
 
@@ -285,21 +290,13 @@ export class AiCredentialStore {
     tokens: SignInTokens,
     actor: Actor,
   ): Promise<AiCredential | null> {
-    if (!tokens.refreshToken) throw new SignInExpiredError();
-    const secret: StoredSecret = {
-      apiKey: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresAt: tokens.expiresAt,
-    };
+    const refreshToken = tokens.refreshToken;
+    if (!refreshToken) throw new SignInExpiredError();
     if (credentialId) {
       const row = await this.db.transaction(async (tx) => {
-        const [updated] = await tx
-          .update(aiCredentials)
-          .set({
-            secret: this.seal(credentialId, owner, secret),
-            hasKey: true,
-            updatedAt: new Date(),
-          })
+        const [current] = await tx
+          .select()
+          .from(aiCredentials)
           .where(
             and(
               eq(aiCredentials.id, credentialId),
@@ -307,6 +304,24 @@ export class AiCredentialStore {
               eq(aiCredentials.provider, provider),
             ),
           )
+          .for('update');
+        if (!current) return null;
+        // A sign-in that gives no account id keeps the one it had.
+        const accountId = tokens.accountId ?? this.unseal(current).accountId ?? null;
+        const next: StoredSecret = {
+          apiKey: tokens.accessToken,
+          refreshToken,
+          expiresAt: tokens.expiresAt,
+          ...(accountId ? { accountId } : {}),
+        };
+        const [updated] = await tx
+          .update(aiCredentials)
+          .set({
+            secret: this.seal(credentialId, owner, next),
+            hasKey: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(aiCredentials.id, credentialId))
           .returning();
         if (!updated) return null;
         await audit(tx, {
@@ -322,6 +337,12 @@ export class AiCredentialStore {
       });
       return row && toPublic(row);
     }
+    const secret: StoredSecret = {
+      apiKey: tokens.accessToken,
+      refreshToken,
+      expiresAt: tokens.expiresAt,
+      ...(tokens.accountId ? { accountId: tokens.accountId } : {}),
+    };
     const label = (
       tokens.account
         ? `${AI_PROVIDERS[provider].name.split(' (')[0]} (${tokens.account})`
@@ -407,10 +428,12 @@ export class AiCredentialStore {
         });
         return 'expired' as const;
       }
+      const accountId = tokens.accountId ?? secret.accountId ?? null;
       const next: StoredSecret = {
         apiKey: tokens.accessToken,
         refreshToken: tokens.refreshToken ?? secret.refreshToken,
         expiresAt: tokens.expiresAt,
+        ...(accountId ? { accountId } : {}),
       };
       await tx
         .update(aiCredentials)

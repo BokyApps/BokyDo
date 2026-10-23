@@ -136,12 +136,12 @@ export async function chat(
   const dialect = AI_PROVIDERS[ctx.credential.provider].dialect;
   const onText = opts.onText;
   const stream = !!onText;
-  const send = async (body: unknown, url: string) =>
+  const send = async (body: unknown, url: string, accept = 'application/json') =>
     postWithRetry(
       ctx,
       {
         url,
-        headers: { ...authHeaders(ctx.credential), 'content-type': 'application/json' },
+        headers: { ...authHeaders(ctx.credential), accept, 'content-type': 'application/json' },
         body: JSON.stringify(body),
         timeoutMs: opts.timeoutMs ?? 120_000,
         maxResponseBytes: MAX_REPLY_BYTES,
@@ -161,6 +161,11 @@ export async function chat(
       : `${base}/models/${model}:generateContent`;
     const res = await send(geminiBody(req), url);
     return stream ? geminiStream(res, req, onText) : geminiReply(await readJson(res), req);
+  }
+  if (dialect === 'responses') {
+    // The ChatGPT backend answers only as a stream; the whole answer is assembled here.
+    const res = await send(responsesBody(ctx.model, req), `${base}/responses`, 'text/event-stream');
+    return responsesStream(res, req, onText);
   }
   const url = `${base}/chat/completions`;
   let res: OutboundResponse;
@@ -677,4 +682,181 @@ async function geminiStream(
     stop: geminiStop(reason, blocked, toolCalls.length),
     usage: withFallbackUsage(usage, req, outputChars(text, toolCalls)),
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Responses dialect (OpenAI's Responses API: the ChatGPT / Codex backend)
+
+/**
+ * The ChatGPT backend expects the Codex identity at the start of the instructions; without it the
+ * model answers as a plain assistant instead of as Codex. W7d, experimental.
+ */
+const CODEX_IDENTITY = 'You are Codex, based on GPT-5.';
+
+/**
+ * A Responses-API request. The system prompt goes in `instructions`, the conversation in
+ * `input`: messages, function calls and their answers as separate items.
+ *
+ * The backend takes an allowlist of fields: `max_output_tokens`, `temperature` and `metadata`
+ * are refused, so a request carries only what it needs. It also answers only as a stream, so
+ * every call asks for one.
+ */
+function responsesBody(model: string, req: ChatRequest): Obj {
+  const input: Obj[] = [];
+  for (const m of req.messages) {
+    if (m.role === 'user') input.push({ role: 'user', content: m.content });
+    else if (m.role === 'tool')
+      input.push({ type: 'function_call_output', call_id: m.toolCallId, output: m.content });
+    else {
+      if (m.content) input.push({ role: 'assistant', content: m.content });
+      for (const c of m.toolCalls ?? [])
+        input.push({
+          type: 'function_call',
+          call_id: c.id,
+          name: c.name,
+          arguments: JSON.stringify(c.input ?? {}),
+        });
+    }
+  }
+  // A JSON reply is a tool the model has to call: the answer is in the call's arguments.
+  const tools = req.json
+    ? [
+        {
+          type: 'function',
+          name: req.json.name,
+          description: 'Give your answer by calling this tool.',
+          parameters: req.json.schema,
+        },
+      ]
+    : (req.tools ?? []).map((t) => ({
+        type: 'function',
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      }));
+  const choice = req.json ? { type: 'function', name: req.json.name } : req.toolChoice;
+  return {
+    model,
+    input,
+    instructions: req.system ? `${CODEX_IDENTITY}\n\n${req.system}` : CODEX_IDENTITY,
+    // The backend only answers as a stream: the caller gets the whole answer either way.
+    stream: true,
+    // The ChatGPT backend doesn't keep the answer: only the caller needs it.
+    store: false,
+    ...(tools.length ? { tools } : {}),
+    ...(choice
+      ? {
+          tool_choice:
+            typeof choice === 'object' ? { type: 'function', name: choice.name } : choice,
+        }
+      : {}),
+  };
+}
+
+function responsesStop(status: string, refused: boolean, calls: number): ChatStop {
+  if (refused) return 'refused';
+  if (status === 'incomplete') return 'length';
+  if (calls) return 'tool_use';
+  if (status === 'completed') return 'end';
+  return 'other';
+}
+
+/** With `json`, the forced tool call becomes the reply text. */
+function responsesResult(
+  req: ChatRequest,
+  text: string,
+  calls: AiToolCall[],
+  status: string,
+  refused: boolean,
+  usage: ReportedUsage,
+): ChatResult {
+  let stop = responsesStop(status, refused, calls.length);
+  const json = req.json;
+  if (json) {
+    const answer = calls.find((c) => c.name === json.name);
+    text = answer && answer.input !== undefined ? JSON.stringify(answer.input) : '';
+    calls = [];
+    if (stop === 'tool_use') stop = 'end';
+  }
+  return {
+    text,
+    toolCalls: calls,
+    stop,
+    usage: withFallbackUsage(usage, req, outputChars(text, calls)),
+  };
+}
+
+/** A refusal is a message whose content is a refusal, not text. */
+function responsesRefused(output: unknown): boolean {
+  for (const item of arr(output).map(obj)) {
+    if (item.type !== 'message') continue;
+    for (const part of arr(item.content).map(obj)) if (part.type === 'refusal') return true;
+  }
+  return false;
+}
+
+/**
+ * The streamed answer. The backend sends the text in pieces, the tool calls as they finish and
+ * the usage with the last event.
+ */
+async function responsesStream(
+  res: OutboundResponse,
+  req: ChatRequest,
+  onText?: (delta: string) => void,
+): Promise<ChatResult> {
+  let text = '';
+  let status = '';
+  let refused = false;
+  const usage: ReportedUsage = { inputTokens: 0, outputTokens: 0, audioSeconds: 0 };
+  const calls: AiToolCall[] = [];
+  // The calls the backend is still writing: the arguments come in pieces.
+  const pending = new Map<number, { id: string; name: string; args: string }>();
+  for await (const ev of sseEvents(res.body)) {
+    if (ev.data === '[DONE]') break;
+    const data = obj(eventJson(ev.data));
+    const type = str(data.type);
+    if (type === 'error' || type === 'response.failed')
+      throw new AiProviderError('unavailable', undefined, usage);
+    if (type === 'response.output_text.delta') {
+      const piece = str(data.delta);
+      if (piece) {
+        text += piece;
+        // With `json` the answer is the tool call, not the text around it.
+        if (!req.json) onText?.(piece);
+      }
+    } else if (type === 'response.output_item.added') {
+      const item = obj(data.item);
+      if (item.type === 'function_call')
+        pending.set(num(data.output_index), {
+          id: str(item.call_id),
+          name: str(item.name),
+          args: '',
+        });
+    } else if (type === 'response.function_call_arguments.delta') {
+      const call = pending.get(num(data.output_index));
+      if (call) call.args += str(data.delta);
+    } else if (type === 'response.output_item.done') {
+      const item = obj(data.item);
+      if (item.type === 'function_call') {
+        const call = pending.get(num(data.output_index));
+        const args = str(item.arguments) || call?.args || '';
+        calls.push({
+          id: str(item.call_id) || call?.id || `call_${calls.length}`,
+          name: str(item.name) || call?.name || '',
+          input: parseArgs(args),
+        });
+        pending.delete(num(data.output_index));
+      }
+    } else if (type === 'response.completed' || type === 'response.incomplete') {
+      const r = obj(data.response);
+      status = str(r.status);
+      refused = responsesRefused(r.output);
+      const u = obj(r.usage);
+      if (u.input_tokens !== undefined) usage.inputTokens = num(u.input_tokens);
+      if (u.output_tokens !== undefined) usage.outputTokens = num(u.output_tokens);
+    }
+  }
+  const result = responsesResult(req, text, calls, status, refused, usage);
+  if (req.json && result.text) onText?.(result.text);
+  return result;
 }

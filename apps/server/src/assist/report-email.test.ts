@@ -99,10 +99,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Scheduled AI report emails', () => {
     await at('2026-10-13T08:30:00Z');
     expect(model.seen).toHaveLength(2);
     expect(model.seen[1]!.user).not.toContain('shared deadline');
-    expect(mail.filter((m) => m.to === 'bob@example.com').map((m) => m.subject)).toEqual([
-      'BokyDo: your plan for today',
-      'BokyDo: your plan for today',
-    ]);
+    // Bob also gets the "removed from Shared" email: only the report emails are this test's.
+    expect(
+      mail
+        .filter((m) => m.to === 'bob@example.com' && m.subject === 'BokyDo: your plan for today')
+        .map((m) => m.subject),
+    ).toEqual(['BokyDo: your plan for today', 'BokyDo: your plan for today']);
   });
 
   it('skips the day quietly when no model is routed, and unsubscribes from the link', async () => {

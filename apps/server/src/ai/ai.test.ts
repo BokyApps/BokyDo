@@ -633,6 +633,25 @@ describe('listModels', () => {
       error: 'invalid_response',
     });
   });
+
+  it('reads the Codex model list, and sends the account id in a header', async () => {
+    const result = await listModels({
+      credential: {
+        id: 'c',
+        ownerUserId: null,
+        provider: 'chatgpt-subscription' as const,
+        baseUrl: 'https://chatgpt.com/backend-api/codex',
+        apiKey: KEY,
+        headers: {},
+        accountId: 'acct-1',
+      },
+      fetch: reply(200, { models: [{ slug: 'gpt-5-codex' }, { slug: 'gpt-5.1-codex' }] }),
+    });
+    expect(result).toEqual({ ok: true, models: ['gpt-5-codex', 'gpt-5.1-codex'] });
+    expect(calls[0]!.url).toBe('https://chatgpt.com/backend-api/codex/models');
+    expect(calls[0]!.headers['chatgpt-account-id']).toBe('acct-1');
+    expect(calls[0]!.url).not.toContain(KEY);
+  });
 });
 
 describe.skipIf(!TEST_DATABASE_URL)('AI calls through the service', () => {
