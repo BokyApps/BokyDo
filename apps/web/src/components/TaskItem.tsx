@@ -14,6 +14,7 @@ import { describeDate, describeDue, TONE_CLASS } from '../lib/dates.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { todayIn } from '../lib/dates.js';
 import { useTaskUI } from '../lib/task-ui.js';
+import { rowControlClasses, rowInsetRem, subtaskToggleLeftRem } from '../lib/task-row-layout.js';
 import { useTranslation } from 'react-i18next';
 import { taskMoves } from '../lib/task-moves.js';
 import { subtaskProgress } from '../lib/views.js';
@@ -122,6 +123,11 @@ export function TaskItem({
   const readOnly = project ? !['owner', 'admin', 'editor'].includes(project.role) : true;
   const firstLine = task.description.split('\n').find((l) => l.trim()) ?? '';
   const assignee = task.assigneeId ? state.collaborators.get(task.assigneeId) : undefined;
+  const controls = rowControlClasses({
+    depth,
+    hasDragHandle: Boolean(dragHandle && !readOnly),
+    hasCollapseToggle: Boolean(onToggleCollapsed),
+  });
   let commentCount = 0;
   for (const c of state.comments.values()) if (c.taskId === task.id) commentCount++;
 
@@ -191,9 +197,12 @@ export function TaskItem({
         onClick={onClick}
         onKeyDown={onKeyDown}
         className={`group relative flex cursor-pointer items-start gap-2 border-b border-line px-1 py-[var(--bk-row-py)] focus-visible:bg-surface-alt focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${selected ? 'bg-accent/10' : 'hover:bg-surface-alt/60'}`}
-        style={{ paddingLeft: `${0.25 + depth * 1.75}rem` }}
+        style={{ paddingLeft: `${rowInsetRem(depth)}rem` }}
       >
         {dragHandle && !readOnly ? (
+          // The handle sits in the page gutter from md up; on a phone it moves onto the row, at
+          // its right edge, where a finger can reach it (`touch-none` lets a touch drag reorder
+          // the task instead of scrolling the page).
           <button
             type="button"
             {...dragHandle.attributes}
@@ -208,7 +217,7 @@ export function TaskItem({
                   'aria-roledescription': undefined,
                 }
               : {})}
-            className="absolute top-1 -left-6 flex size-6 cursor-grab items-center justify-center rounded text-muted opacity-0 group-hover:opacity-100 hover:text-fg focus-visible:opacity-100"
+            className={controls.dragHandle ?? undefined}
             onClick={(e) => e.stopPropagation()}
           >
             <GripIcon />
@@ -219,11 +228,12 @@ export function TaskItem({
             type="button"
             aria-label={collapsed ? t('task.showSubtasks') : t('task.hideSubtasks')}
             aria-expanded={!collapsed}
-            // A full 24 px target (WCAG 2.5.8). Sub-tasks have it in their indent; a top-level
-            // row has its drag handle there, so on wider screens the toggle moves left of the
-            // handle (phones have no room: it stays where it was).
-            className={`absolute top-1 flex size-6 items-center justify-center rounded text-muted hover:text-fg ${depth === 0 ? '-left-6 md:-left-12' : ''}`}
-            style={depth === 0 ? undefined : { left: `${depth * 1.75 - 1.5}rem` }}
+            // A full 24 px target (WCAG 2.5.8) that never overlaps the drag handle: below md it
+            // leads the row (a phone has no gutter left of it); from md it sits in the sub-task
+            // indent, or, for a top-level row, left of the handle in the page gutter. The offset
+            // below only applies to the positioned (md and up) toggle.
+            className={controls.collapseToggle ?? undefined}
+            style={depth === 0 ? undefined : { left: `${subtaskToggleLeftRem(depth)}rem` }}
             onClick={(e) => {
               e.stopPropagation();
               onToggleCollapsed();

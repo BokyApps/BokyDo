@@ -5,6 +5,7 @@ import {
   filterQuerySchema,
   isKnownTimeZone,
   labelNameSchema,
+  TODOIST_IMPORT_LIMITS as LIMITS,
   type Color,
   type CommandType,
   type Due,
@@ -46,6 +47,8 @@ export interface PlanInput {
     labels: string[];
     filters: string[];
     comments: boolean;
+    /** Download the files attached to comments and store them (W11a follow-up). */
+    attachments: boolean;
     people: { id: string; userId: string | null }[];
   };
   userId: string;
@@ -70,6 +73,11 @@ export interface PlannedStep {
   mapping: { kind: MappingKind; externalId: string; localId: string } | null;
   /** What the user would call it, for failure messages. */
   label: string;
+  /**
+   * A file in this comment, to fetch through the outbound client before the comment is written
+   * and claim in the same `comment_add`. Present only when the attachment choice is on.
+   */
+  attachment?: { name: string; url: string; projectId: string };
 }
 
 /**
@@ -146,6 +154,7 @@ export function planImport(input: PlanInput): Plan {
     comments: 0,
     labels: 0,
     filters: 0,
+    attachments: 0,
     completedTasks: 0,
     completedAlreadyImported: 0,
     alreadyImported: 0,
@@ -159,12 +168,13 @@ export function planImport(input: PlanInput): Plan {
     args: Record<string, unknown>,
     mapping: PlannedStep['mapping'],
     label: string,
+    attachment?: PlannedStep['attachment'],
   ): boolean => {
     if (!commandArgs[type].safeParse(args).success) {
       warn('failed', `“${label}” could not be imported (it doesn't fit BokyDo's limits).`);
       return false;
     }
-    steps.push({ type, args, mapping, label });
+    steps.push({ type, args, mapping, label, ...(attachment ? { attachment } : {}) });
     return true;
   };
 
@@ -475,11 +485,17 @@ export function planImport(input: PlanInput): Plan {
     const sorted = [...s.comments].sort((a, b) =>
       (a.postedAt ?? '').localeCompare(b.postedAt ?? ''),
     );
+    let attachments = 0;
+    let attachmentsCapped = false;
     for (const c of sorted) {
       const target = c.taskId
         ? { taskId: localTask.get(c.taskId) }
         : { projectId: c.projectId ? localProject.get(c.projectId) : undefined };
       if (!target.taskId && !('projectId' in target && target.projectId)) continue;
+      // The BokyDo project the comment lands in: a file attachment's row must live there too.
+      const targetProject = c.taskId
+        ? localProject.get(tasksById.get(c.taskId)?.projectId ?? '')
+        : (target as { projectId?: string }).projectId;
       const before = imported.get(mappingKey('comment', c.id));
       if (before) {
         counts.alreadyImported++;
@@ -490,6 +506,18 @@ export function planImport(input: PlanInput): Plan {
         c.postedUid && c.postedUid !== s.user.id ? names.get(c.postedUid) : undefined,
       );
       if (!content) continue;
+      // A file in the comment (opt-in): only an https URL is fetched, through the outbound client.
+       let attachment: PlannedStep['attachment'];
+       const url = c.attachment?.url;
+       if (choices.attachments && targetProject && url && /^https:\/\//i.test(url) && c.attachment) {
+         if (attachments < LIMITS.attachments) {
+           attachment = { name: c.attachment.name, url, projectId: targetProject };
+           attachments++;
+         } else if (!attachmentsCapped) {
+           attachmentsCapped = true;
+           warn('attachment', `Only the first ${LIMITS.attachments} comment files are downloaded.`);
+         }
+       }
       const id = newId();
       const args = {
         id,
@@ -499,9 +527,17 @@ export function planImport(input: PlanInput): Plan {
         content,
       };
       if (
-        step('comment_add', args, { kind: 'comment', externalId: c.id, localId: id }, 'a comment')
-      )
+        step(
+          'comment_add',
+          args,
+          { kind: 'comment', externalId: c.id, localId: id },
+          'a comment',
+          attachment,
+        )
+      ) {
         counts.comments++;
+        if (attachment) counts.attachments++;
+      }
     }
   }
 
