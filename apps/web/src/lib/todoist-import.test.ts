@@ -383,10 +383,12 @@ describe('filterNotes', () => {
       ]),
       labels: new Set(),
     });
-    expect(filterNotes(t, f({ projects: ['Work', 'Home'], labels: ['urgent'] }), p, draft)).toEqual([
-      "Mentions Home, which you aren't importing.",
-      "Mentions label urgent, which isn't selected.",
-    ]);
+    expect(filterNotes(t, f({ projects: ['Work', 'Home'], labels: ['urgent'] }), p, draft)).toEqual(
+      [
+        "Mentions Home, which you aren't importing.",
+        "Mentions label urgent, which isn't selected.",
+      ],
+    );
   });
 });
 

@@ -264,7 +264,10 @@ export function groupWarnings(
 }
 
 /** The counts of a dry run or a finished import, as labelled rows. */
-export function countRows(t: TFunction, c: TodoistImportCounts): { label: string; value: number }[] {
+export function countRows(
+  t: TFunction,
+  c: TodoistImportCounts,
+): { label: string; value: number }[] {
   return [
     { label: t('import.rowNewProjects'), value: c.projects },
     { label: t('import.rowMerged'), value: c.merged },

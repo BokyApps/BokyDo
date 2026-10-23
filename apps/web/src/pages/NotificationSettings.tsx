@@ -60,8 +60,12 @@ export function NotificationSettings({
           <thead>
             <tr className="text-left text-xs text-muted">
               <th className="pb-2 font-medium">{t('settings.notifications.tableHeader')}</th>
-              <th className="w-16 pb-2 text-center font-medium">{t('settings.notifications.email')}</th>
-              <th className="w-16 pb-2 text-center font-medium">{t('settings.notifications.push')}</th>
+              <th className="w-16 pb-2 text-center font-medium">
+                {t('settings.notifications.email')}
+              </th>
+              <th className="w-16 pb-2 text-center font-medium">
+                {t('settings.notifications.push')}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -227,7 +231,11 @@ function PushSection() {
                 onClick={() =>
                   void run(async () => {
                     const r = await api<{ sent: number }>('POST', '/api/v1/push/test');
-                    setMessage(r.sent ? t('settings.notifications.pushSent') : t('settings.notifications.pushNothing'));
+                    setMessage(
+                      r.sent
+                        ? t('settings.notifications.pushSent')
+                        : t('settings.notifications.pushNothing'),
+                    );
                   })
                 }
               >
