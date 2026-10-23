@@ -196,7 +196,11 @@ function ScheduleForm({ settings }: { settings: PublicSettings }) {
     <form onSubmit={submit} className="space-y-3">
       <h2 className="text-base font-semibold">{t('admin.backups.scheduleTitle')}</h2>
       <TextField
-        label={hasPassphrase ? t('admin.backups.newPassphrase') : t('admin.backups.passphrase')}
+        label={
+          hasPassphrase
+            ? t('admin.backups.newPassphrase')
+            : t('admin.backups.passphrase')
+        }
         type="password"
         autoComplete="new-password"
         minLength={12}
@@ -284,7 +288,9 @@ function RestoreDialog({ backup, onClose }: { backup: BackupInfo; onClose: () =>
           <p className="text-sm">
             {t('admin.backups.restoreDescription', {
               name: backup.name,
-              created: backup.createdAt ? ` (${new Date(backup.createdAt).toLocaleString()})` : '',
+              created: backup.createdAt
+                ? ` (${new Date(backup.createdAt).toLocaleString()})`
+                : '',
             })}
           </p>
           <TextField

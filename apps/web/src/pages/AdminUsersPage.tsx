@@ -177,11 +177,7 @@ function DeleteUserDialog({ user, onClose }: { user: AdminUser; onClose: () => v
   const b = blockers.data;
   const blocked = !!b && (b.projects.length > 0 || b.workspaces.length > 0 || b.lastAdmin);
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      title={t('admin.users.deleteDialogTitle', { username: user.username })}
-    >
+    <Dialog open onClose={onClose} title={t('admin.users.deleteDialogTitle', { username: user.username })}>
       <div className="space-y-3">
         <p className="text-sm">{t('admin.users.deleteDescription')}</p>
         {blocked && b && (

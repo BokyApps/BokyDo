@@ -134,17 +134,10 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
         hint={t('admin.instance.proxiesHint')}
         options={['0', '1', '2', '3', '4', '5'].map((v) => ({
           value: v,
-          label:
-            v === '0'
-              ? t('admin.instance.noProxies')
-              : t('admin.instance.proxyCount', { count: Number(v) }),
+          label: v === '0' ? t('admin.instance.noProxies') : t('admin.instance.proxyCount', { count: Number(v) }),
         }))}
       />
-      <TimeZonePicker
-        label={t('admin.instance.defaultTimezone')}
-        value={timezone}
-        onChange={setTimezone}
-      />
+      <TimeZonePicker label={t('admin.instance.defaultTimezone')} value={timezone} onChange={setTimezone} />
       <div className="grid gap-4 sm:grid-cols-2">
         <SelectField
           label={t('settings.general.weekStartsOn')}

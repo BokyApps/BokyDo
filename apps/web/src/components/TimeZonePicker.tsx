@@ -55,7 +55,9 @@ export function TimeZonePicker({
           aria-activedescendant={open && results[active] ? `${id}-opt-${active}` : undefined}
           className={inputClass}
           placeholder={
-            current ? `${describe(current)} (${current.offsetLabel})` : t('settings.timezoneSearch')
+            current
+              ? `${describe(current)} (${current.offsetLabel})`
+              : t('settings.timezoneSearch')
           }
           value={query}
           onFocus={() => setOpen(true)}

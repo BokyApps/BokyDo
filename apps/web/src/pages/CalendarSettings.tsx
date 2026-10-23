@@ -162,7 +162,9 @@ export function CalendarSettings() {
                     </span>
                   </p>
                   <p className="text-xs text-muted">
-                    {feed.targetName === null ? `${t('settings.calendar.targetGoneNote')} ` : ''}
+                    {feed.targetName === null
+                      ? `${t('settings.calendar.targetGoneNote')} `
+                      : ''}
                     {t('settings.calendar.created', {
                       date: when(feed.createdAt),
                       last: feed.lastUsedAt
@@ -222,14 +224,10 @@ export function CalendarSettings() {
               ]}
             />
             <SelectField
-              label={
-                kind === 'project' ? t('settings.calendar.project') : t('settings.calendar.filter')
-              }
+              label={kind === 'project' ? t('settings.calendar.project') : t('settings.calendar.filter')}
               value={chosen}
               onChange={(e) => setTargetId(e.target.value)}
-              options={
-                targets.length ? targets : [{ value: '', label: t('settings.calendar.noneYet') }]
-              }
+              options={targets.length ? targets : [{ value: '', label: t('settings.calendar.noneYet') }]}
               disabled={targets.length === 0}
               hint={
                 kind === 'filter' && targets.length === 0

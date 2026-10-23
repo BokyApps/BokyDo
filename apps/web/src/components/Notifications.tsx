@@ -88,9 +88,7 @@ export function NotificationBell() {
       trigger={(p) => (
         <button
           type="button"
-          aria-label={
-            unread ? t('notifications.unread', { count: unread }) : t('notifications.bell')
-          }
+          aria-label={unread ? t('notifications.unread', { count: unread }) : t('notifications.bell')}
           className="relative rounded-md p-1.5 text-muted hover:bg-surface-alt hover:text-fg"
           {...p}
         >

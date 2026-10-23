@@ -455,9 +455,7 @@ function ProjectNotes({
       {p.isArchived && <p className="text-xs text-muted">{t('import.notesArchived')}</p>}
       {p.isShared && <p className="text-xs text-muted">{t('import.notesShared')}</p>}
       {p.importedAs && (
-        <p className="text-xs text-muted">
-          {t('import.notesImportedAs', { name: nameOf(p.importedAs) })}
-        </p>
+        <p className="text-xs text-muted">{t('import.notesImportedAs', { name: nameOf(p.importedAs) })}</p>
       )}
     </>
   );
@@ -510,9 +508,7 @@ function FiltersSection({
   const { t } = useTranslation();
   return (
     <Section title={t('import.filtersTitle')}>
-      {preview.filters.length === 0 && (
-        <p className="text-sm text-muted">{t('import.noFilters')}</p>
-      )}
+      {preview.filters.length === 0 && <p className="text-sm text-muted">{t('import.noFilters')}</p>}
       {preview.filters.map((f: TodoistPreviewFilter) => (
         <Checkbox
           key={f.id}
@@ -612,8 +608,13 @@ function PeopleSection({
     ...collaboratorOptions(state).map((c) => ({ value: c.id, label: c.username })),
   ];
   return (
-    <Section title={t('import.peopleTitle')} hint={t('import.peopleHint')}>
-      {others.length === 0 && <p className="text-sm text-muted">{t('import.noOthers')}</p>}
+    <Section
+      title={t('import.peopleTitle')}
+      hint={t('import.peopleHint')}
+    >
+      {others.length === 0 && (
+        <p className="text-sm text-muted">{t('import.noOthers')}</p>
+      )}
       {others.map((p) => (
         <div key={p.id} className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
@@ -688,9 +689,7 @@ function WarningGroups({ warnings, more }: { warnings: TodoistImportWarning[]; m
           </ul>
         </details>
       ))}
-      {more > 0 && (
-        <p className="text-sm text-muted">{t('import.andMoreWarning', { count: more })}</p>
-      )}
+      {more > 0 && <p className="text-sm text-muted">{t('import.andMoreWarning', { count: more })}</p>}
     </div>
   );
 }

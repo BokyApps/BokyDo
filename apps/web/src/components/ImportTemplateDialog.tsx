@@ -164,9 +164,7 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
           ),
         )}
         {rows.length > PREVIEW_ROWS && (
-          <li className="text-muted">
-            {t('import.andMore', { count: rows.length - PREVIEW_ROWS })}
-          </li>
+          <li className="text-muted">{t('import.andMore', { count: rows.length - PREVIEW_ROWS })}</li>
         )}
       </ul>
       {warnings.length > 0 && (
@@ -206,10 +204,7 @@ function ImportForm({ choice, onClose }: { choice: TemplateChoice; onClose: () =
             label={t('task.project')}
             value={existingId}
             onChange={(e) => setExistingId(e.target.value)}
-            options={writable.map((p) => ({
-              value: p.id,
-              label: p.isInbox ? t('project.inbox') : p.name,
-            }))}
+            options={writable.map((p) => ({ value: p.id, label: p.isInbox ? t('project.inbox') : p.name }))}
           />
         )}
       </div>

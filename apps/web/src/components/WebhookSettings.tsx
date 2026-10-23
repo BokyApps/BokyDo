@@ -8,7 +8,8 @@ import { errorMessage } from '../lib/messages.js';
 import { useSensitive } from '../lib/reauth.js';
 import { Alert, Button, Card, Checkbox, SecretList, TextField } from './ui.js';
 
-const day = (iso: string | null, never: string) => (iso ? new Date(iso).toLocaleString() : never);
+const day = (iso: string | null, never: string) =>
+  iso ? new Date(iso).toLocaleString() : never;
 
 // Labels come from the catalogue; the keys are the raw event/status values.
 const eventKey = (name: string) => `settings.webhooks.events.${name}`;
