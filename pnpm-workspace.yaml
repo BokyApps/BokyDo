@@ -6,6 +6,9 @@ packages:
 # Only these packages may run install scripts.
 allowBuilds:
   esbuild: true
+  # i18next-cli (W12c) depends on @swc/core, whose postinstall only verifies a native binary we
+  # already get from @swc/core's own platform packages; deny the script and keep the allowlist.
+  '@swc/core': false
 # Don't install versions published less than 7 days ago (time for hijacked releases to be caught).
 minimumReleaseAge: 10080
 # Transitive deps may only come from the registry (no git/tarball URLs).

@@ -5,14 +5,24 @@
  *
  * Keys are the literal paths used in t() ("sidebar.noProjects"), nested by keySeparator.
  * Values already in en.json are kept, so English stays English; a key that is not a literal
- * (built at runtime) is not extracted, which is why such keys carry a comment where they
- * are used.
+ * (built at runtime) is not extracted. preservePatterns below keeps those dynamic keys
+ * from being pruned on each run: each group is a fixed set of values known at compile
+ * time (error codes, warning kinds, tab labels, webhook events/statuses).
+ * See docs/translating.md.
  */
 export default {
   locales: ['en'],
   extract: {
     input: ['src/**/*.{ts,tsx}'],
     output: 'src/locales/{{language}}.json',
+    preservePatterns: [
+      'admin.backups.restoreError.*',
+      'import.warningKind.*',
+      'settings.reminders.*',
+      'settings.tabs.*',
+      'settings.webhooks.events.*',
+      'settings.webhooks.status.*',
+    ],
   },
   defaultNamespace: 'translation',
   keySeparator: '.',

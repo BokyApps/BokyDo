@@ -1,6 +1,7 @@
 import { localNow, parseDate } from '@bokydo/nlp';
 import type { Due, Project, Section } from '@bokydo/shared';
 import { useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   addDays,
   diffDays,
@@ -12,6 +13,7 @@ import {
   weekday,
   weekdayNames,
 } from '../lib/dates.js';
+import { localeTag } from '../lib/locale.js';
 import { toTaskDue } from '../lib/quick-add.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { allLabelNames, flattenTree, projectTree, sectionsOf } from '../lib/views.js';
@@ -56,6 +58,7 @@ export function DatePicker({
   chip?: boolean;
   label?: string;
 }) {
+  const { t } = useTranslation();
   const prefs = usePreferences();
   const now = localNow(useTimeZone());
   const today = now.date;
@@ -83,13 +86,13 @@ export function DatePicker({
   const daysToSaturday = (6 - weekday(today) + 7) % 7 || 7;
   const nextWeek = addDays(startOfWeek(today, prefs.weekStart), 7);
   const shortcuts: [string, string | null, string][] = [
-    ['Today', today, ''],
-    ['Tomorrow', addDays(today, 1), ''],
-    ['This weekend', addDays(today, daysToSaturday), ''],
-    ['Next week', nextWeek, ''],
-    ['No date', null, ''],
+    ['picker.today', today, ''],
+    ['picker.tomorrow', addDays(today, 1), ''],
+    ['picker.thisWeekend', addDays(today, daysToSaturday), ''],
+    ['picker.nextWeek', nextWeek, ''],
+    ['picker.noDateShortcut', null, ''],
   ];
-  const monthTitle = new Date(`${month}T00:00:00Z`).toLocaleDateString(undefined, {
+  const monthTitle = new Date(`${month}T00:00:00Z`).toLocaleDateString(localeTag(), {
     month: 'long',
     year: 'numeric',
     timeZone: 'UTC',
@@ -100,11 +103,16 @@ export function DatePicker({
       trigger={(p) =>
         chip ? (
           <Chip {...p} active={Boolean(value)}>
-            <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? 'Date')}
+            <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? t('picker.date'))}
           </Chip>
         ) : (
-          <Button variant="ghost" {...p} {...(value || label ? {} : { 'aria-label': 'Schedule' })}>
-            <CalendarIcon /> {value ? dueLabel(value, today, prefs) : (label ?? 'Schedule')}
+          <Button
+            variant="ghost"
+            {...p}
+            {...(value || label ? {} : { 'aria-label': t('picker.schedule') })}
+          >
+            <CalendarIcon />{' '}
+            {value ? dueLabel(value, today, prefs) : (label ?? t('picker.schedule'))}
           </Button>
         )
       }
@@ -115,8 +123,8 @@ export function DatePicker({
           <div>
             <input
               className={`${inputClass} py-1`}
-              placeholder="Type a date: next fri 5pm, every mon…"
-              aria-label="Type a date"
+              placeholder={t('picker.typeDatePlaceholder')}
+              aria-label={t('picker.typeDate')}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -141,8 +149,8 @@ export function DatePicker({
                       {dueLabel(toTaskDue(typed, today, prefs), today, prefs)}
                     </span>
                     <span className="text-xs text-muted">
-                      {typed.recurrence ? 'First: ' : ''}
-                      {new Date(`${typed.date}T00:00:00Z`).toLocaleDateString(undefined, {
+                      {typed.recurrence ? t('picker.first') : ''}
+                      {new Date(`${typed.date}T00:00:00Z`).toLocaleDateString(localeTag(), {
                         weekday: 'short',
                         day: 'numeric',
                         month: 'short',
@@ -153,7 +161,7 @@ export function DatePicker({
                     </span>
                   </>
                 ) : (
-                  <span className="text-muted">No date recognised</span>
+                  <span className="text-muted">{t('picker.noDate')}</span>
                 )}
               </button>
             )}
@@ -166,10 +174,10 @@ export function DatePicker({
                   className="flex w-full justify-between rounded-md px-2 py-1.5 hover:bg-surface-alt"
                   onClick={() => pick(date, close)}
                 >
-                  <span>{name}</span>
+                  <span>{t(name)}</span>
                   {date && (
                     <span className="text-muted">
-                      {new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
+                      {new Date(`${date}T00:00:00Z`).toLocaleDateString(localeTag(), {
                         weekday: 'short',
                         timeZone: 'UTC',
                       })}
@@ -185,7 +193,7 @@ export function DatePicker({
               <span>
                 <button
                   type="button"
-                  aria-label="Previous month"
+                  aria-label={t('picker.previousMonth')}
                   className="rounded px-2 hover:bg-surface-alt"
                   onClick={() => setMonth(addDays(month, -1).slice(0, 7) + '-01')}
                 >
@@ -193,7 +201,7 @@ export function DatePicker({
                 </button>
                 <button
                   type="button"
-                  aria-label="Next month"
+                  aria-label={t('picker.nextMonth')}
                   className="rounded px-2 hover:bg-surface-alt"
                   onClick={() => setMonth(addDays(month, 32).slice(0, 7) + '-01')}
                 >
@@ -231,7 +239,7 @@ export function DatePicker({
           </div>
           <div className="flex items-center gap-2 border-t border-line pt-2">
             <label className="text-xs text-muted" htmlFor="due-time">
-              Time
+              {t('picker.time')}
             </label>
             <input
               id="due-time"
@@ -255,7 +263,7 @@ export function DatePicker({
                   close();
                 }}
               >
-                Stop repeating
+                {t('picker.stopRepeating')}
               </button>
             </div>
           )}
@@ -272,19 +280,20 @@ export function PriorityPicker({
   value: number;
   onChange: (p: number) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Popover
       trigger={(p) => (
         <Chip
           {...p}
           active={value !== 4}
-          aria-label={value === 4 ? 'Priority 4' : `P${value} priority`}
+          aria-label={t('picker.priorityValue', { priority: value })}
         >
           <FlagIcon
             className={PRIORITY_CLASS[value]}
             fill={value !== 4 ? 'currentColor' : 'none'}
           />{' '}
-          {value === 4 ? 'Priority' : `P${value}`}
+          {value === 4 ? t('picker.priority') : `P${value}`}
         </Chip>
       )}
     >
@@ -300,7 +309,7 @@ export function PriorityPicker({
             }}
           >
             <FlagIcon className={PRIORITY_CLASS[p]} fill={p !== 4 ? 'currentColor' : 'none'} />
-            Priority {p}
+            {t('picker.priorityValue', { priority: p })}
             {value === p && (
               <span className="ml-auto text-accent">
                 <CheckIcon />
@@ -320,6 +329,7 @@ export function LabelPicker({
   value: string[];
   onChange: (labels: string[]) => void;
 }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const [query, setQuery] = useState('');
   const names = allLabelNames(state);
@@ -333,7 +343,7 @@ export function LabelPicker({
     <Popover
       trigger={(p) => (
         <Chip {...p} active={value.length > 0}>
-          <TagIcon /> {value.length ? value.map((l) => `@${l}`).join(' ') : 'Labels'}
+          <TagIcon /> {value.length ? value.map((l) => `@${l}`).join(' ') : t('picker.labels')}
         </Chip>
       )}
       panelClassName="w-60"
@@ -341,10 +351,10 @@ export function LabelPicker({
       <div className="space-y-1 p-1">
         <input
           className={`${inputClass} py-1`}
-          placeholder="Type a label"
+          placeholder={t('picker.typeLabel')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          aria-label="Find or create label"
+          aria-label={t('picker.findLabel')}
           autoFocus
         />
         <ul className="max-h-56 overflow-y-auto">
@@ -394,6 +404,7 @@ export function ProjectPicker({
     label: string,
   ) => ReactNode;
 }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const [query, setQuery] = useState('');
   const inbox = state.user ? state.projects.get(state.user.inboxProjectId) : undefined;
@@ -412,7 +423,7 @@ export function ProjectPicker({
     : rows;
   const current = state.projects.get(projectId);
   const currentSection = sectionId ? state.sections.get(sectionId) : undefined;
-  const label = `${current?.name ?? 'Project'}${currentSection ? ` / ${currentSection.name}` : ''}`;
+  const label = `${current?.name ?? t('picker.project')}${currentSection ? ` / ${currentSection.name}` : ''}`;
   return (
     <Popover
       trigger={(p) =>
@@ -428,10 +439,10 @@ export function ProjectPicker({
         <div className="space-y-1 p-1">
           <input
             className={`${inputClass} py-1`}
-            placeholder="Type a project name"
+            placeholder={t('picker.typeProject')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Find project"
+            aria-label={t('picker.findProject')}
             autoFocus
           />
           <ul className="max-h-64 overflow-y-auto">

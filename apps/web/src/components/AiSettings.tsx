@@ -260,7 +260,7 @@ function AiPolicyForm() {
       />
       <Checkbox
         label="Let people sign in with their own AI subscription (experimental)"
-        hint="SuperGrok / X Premium instead of an API key. Each person signs in to their own account; it can't be shared or used for the instance. These sign-ins aren't official APIs and may stop working."
+        hint="ChatGPT Plus/Pro or SuperGrok / X Premium instead of an API key. Each person signs in to their own account; it can't be shared or used for the instance. These sign-ins aren't official APIs and may stop working."
         checked={signIn ?? settings['ai.subscriptionSignIn']}
         disabled={!(userKeys ?? settings['ai.userKeys'])}
         onChange={(e) => setSignIn(e.target.checked)}
@@ -368,6 +368,16 @@ function CredentialsPanel({
                     {aiFailure(test.data.error, test.data.status)}
                   </p>
                 ))}
+              {test.isSuccess &&
+                test.variables === c.id &&
+                test.data.ok &&
+                !!test.data.models?.length && (
+                  // The names to put in the routing field below.
+                  <p className="text-xs text-muted break-words">
+                    {test.data.models.slice(0, 8).join(', ')}
+                    {test.data.models.length > 8 ? '…' : ''}
+                  </p>
+                )}
               {test.isError && test.variables === c.id && (
                 <p className="text-xs text-danger">{errorMessage(test.error)}</p>
               )}
@@ -434,7 +444,7 @@ function CredentialsPanel({
                 variant="secondary"
                 onClick={() => setSigningIn({ provider: p, credentialId: null })}
               >
-                Sign in to {AI_PROVIDERS[p].name.replace(/ sign-in\)$/, ')')}
+                Sign in to {signInName(p)}
               </Button>
             ))}
         </div>
@@ -624,6 +634,24 @@ const SIGN_IN_ENDED: Record<Exclude<SignInStatus, 'pending' | 'done'>, string> =
   unavailable: "The provider didn't answer. Try again in a moment.",
 };
 
+/** What someone has to do at the provider before the code works. */
+const SIGN_IN_PREPARATION: Partial<Record<AiSignInProvider, string>> = {
+  'chatgpt-subscription':
+    'First switch on “Device code sign-in” in your ChatGPT security settings (Settings → Security), otherwise the provider refuses the code.',
+};
+
+/** The provider's name without the "(… sign-in)" tail. */
+const signInName = (provider: AiSignInProvider) =>
+  AI_PROVIDERS[provider].name.replace(/ sign-in\)$/, ')');
+
+/** An example model name, so people know what a provider's models are called. */
+const MODEL_EXAMPLE: Partial<Record<AiProvider, string>> = {
+  'chatgpt-subscription': 'gpt-5-codex',
+};
+
+const modelExample = (provider: AiProvider | undefined) =>
+  (provider ? MODEL_EXAMPLE[provider] : undefined) ?? 'gpt-4o-mini';
+
 /**
  * Subscription sign-in (device flow): the server gets a code, you approve it on the provider's
  * own site, and this page waits for the server to finish. Nothing is typed into this page.
@@ -695,7 +723,10 @@ function SignInFlow({
 
   return (
     <div className="mt-4 space-y-3 rounded-lg border border-line p-4">
-      <h3 className="font-medium">Sign in to {AI_PROVIDERS[provider].name}</h3>
+      <h3 className="font-medium">Sign in to {signInName(provider)}</h3>
+      {SIGN_IN_PREPARATION[provider] && (
+        <p className="text-sm text-muted">{SIGN_IN_PREPARATION[provider]}</p>
+      )}
       {start.isPending && <p className="text-sm text-muted">Getting a sign-in code…</p>}
       {start.isError && <Alert>{errorMessage(start.error)}</Alert>}
       {flow && (
@@ -877,7 +908,9 @@ function RoutingPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean }) 
                       label={`Model for ${FEATURE_LABELS[feature]}`}
                       hideLabel
                       disabled={!canWrite || !route}
-                      placeholder="gpt-4o-mini"
+                      placeholder={modelExample(
+                        list.find((c) => c.id === route?.credentialId)?.provider,
+                      )}
                       value={route?.model ?? ''}
                       onChange={(e) =>
                         route &&

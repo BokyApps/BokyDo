@@ -14,6 +14,7 @@ import { describeDate, describeDue, TONE_CLASS } from '../lib/dates.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { todayIn } from '../lib/dates.js';
 import { useTaskUI } from '../lib/task-ui.js';
+import { useTranslation } from 'react-i18next';
 import { taskMoves } from '../lib/task-moves.js';
 import { subtaskProgress } from '../lib/views.js';
 import {
@@ -43,13 +44,14 @@ const RING: Record<number, string> = {
 };
 
 export function TaskCheckbox({ task, onToggle }: { task: Task; onToggle: () => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       role="checkbox"
       aria-checked={task.isCompleted}
       // One name for both states: the checked state says whether it is done.
-      aria-label={`Complete “${task.content}”`}
+      aria-label={t('task.complete', { content: task.content })}
       onClick={(e) => {
         e.stopPropagation();
         onToggle();
@@ -103,6 +105,7 @@ export function TaskItem({
   listItem,
   children,
 }: TaskItemProps) {
+  const { t } = useTranslation();
   const uid = useId();
   const state = useSyncState();
   const prefs = usePreferences();
@@ -195,7 +198,7 @@ export function TaskItem({
             type="button"
             {...dragHandle.attributes}
             {...dragHandle.listeners}
-            aria-label="Drag to reorder"
+            aria-label={t('task.dragToReorder')}
             {...(dragHandle.pointerOnly
               ? {
                   tabIndex: -1,
@@ -214,7 +217,7 @@ export function TaskItem({
         {onToggleCollapsed ? (
           <button
             type="button"
-            aria-label={collapsed ? 'Show sub-tasks' : 'Hide sub-tasks'}
+            aria-label={collapsed ? t('task.showSubtasks') : t('task.hideSubtasks')}
             aria-expanded={!collapsed}
             // A full 24 px target (WCAG 2.5.8). Sub-tasks have it in their indent; a top-level
             // row has its drag handle there, so on wider screens the toggle moves left of the
@@ -251,17 +254,17 @@ export function TaskItem({
             id={`${uid}-details`}
             className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted"
           >
-            {selected && <span className="sr-only">Selected.</span>}
+            {selected && <span className="sr-only">{t('task.selected')}</span>}
             {due && (
               <span className={`inline-flex items-center gap-1 ${TONE_CLASS[due.tone]}`}>
                 <CalendarIcon /> {due.label}
-                {task.due?.recurrence && <span aria-label="repeats">↻</span>}
+                {task.due?.recurrence && <span aria-label={t('task.repeats')}>↻</span>}
               </span>
             )}
             {deadline && (
               <span
                 className={`inline-flex items-center gap-1 ${deadline.tone === 'overdue' ? 'text-danger' : ''}`}
-                title="Deadline"
+                title={t('task.deadline')}
               >
                 <DeadlineIcon /> {deadline.label}
               </span>
@@ -280,7 +283,10 @@ export function TaskItem({
             )}
             {task.description && !firstLine && <DescriptionIcon />}
             {commentCount > 0 && (
-              <span className="inline-flex items-center gap-1" title={`${commentCount} comments`}>
+              <span
+                className="inline-flex items-center gap-1"
+                title={t('task.commentsCount', { count: commentCount })}
+              >
                 <CommentIcon /> {commentCount}
               </span>
             )}
@@ -292,14 +298,14 @@ export function TaskItem({
             {assignee && (
               <span
                 className="inline-flex items-center gap-1"
-                title={`Assigned to ${assignee.username}`}
+                title={t('task.assignedTo', { username: assignee.username })}
               >
                 <Avatar name={assignee.username} /> {assignee.username}
               </span>
             )}
             {showProject && project && (
               <span className="ml-auto inline-flex items-center gap-1">
-                {project.isInbox ? 'Inbox' : project.name}
+                {project.isInbox ? t('task.inbox') : project.name}
                 {section && ` / ${section.name}`}
                 <ProjectDot color={project.color} />
               </span>
@@ -313,7 +319,7 @@ export function TaskItem({
           >
             <button
               type="button"
-              aria-label="Edit task"
+              aria-label={t('task.edit')}
               className="rounded p-1 text-muted hover:bg-surface-alt hover:text-fg"
               onClick={() => ui.openTask(task.id)}
             >
@@ -330,7 +336,7 @@ export function TaskItem({
               trigger={(p) => (
                 <button
                   type="button"
-                  aria-label="More actions"
+                  aria-label={t('task.moreActions')}
                   className="rounded p-1 text-muted hover:bg-surface-alt hover:text-fg"
                   {...p}
                 >
@@ -347,7 +353,7 @@ export function TaskItem({
                       close();
                     }}
                   >
-                    Duplicate
+                    {t('task.duplicate')}
                   </MenuItem>
                   <MenuItem
                     icon={<LinkIcon />}
@@ -356,17 +362,17 @@ export function TaskItem({
                       close();
                     }}
                   >
-                    Copy link
+                    {t('task.copyLink')}
                   </MenuItem>
                   {moves && (moves.up || moves.down || moves.indent || moves.outdent) && (
                     <>
                       <div className="my-1 border-t border-line" />
                       {(
                         [
-                          ['Move up', moves.up],
-                          ['Move down', moves.down],
-                          ['Make sub-task of the task above', moves.indent],
-                          ['Move out of parent task', moves.outdent],
+                          [t('task.moveUp'), moves.up],
+                          [t('task.moveDown'), moves.down],
+                          [t('task.nest'), moves.indent],
+                          [t('task.outdent'), moves.outdent],
                         ] as const
                       ).map(([label, to]) =>
                         to ? (
@@ -388,7 +394,7 @@ export function TaskItem({
                       <button
                         key={p}
                         type="button"
-                        aria-label={`Priority ${p}`}
+                        aria-label={t('task.priority', { priority: p })}
                         className={`rounded p-1 hover:bg-surface-alt ${PRIORITY_CLASS[p]}`}
                         onClick={() => {
                           actions.setPriority([task], p);
@@ -407,7 +413,7 @@ export function TaskItem({
                       void actions.remove([task]);
                     }}
                   >
-                    Delete
+                    {t('task.delete')}
                   </MenuItem>
                 </>
               )}

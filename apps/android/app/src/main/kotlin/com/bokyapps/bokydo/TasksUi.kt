@@ -24,11 +24,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.ViewWeek
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -82,13 +85,16 @@ import com.bokyapps.bokydo.core.AppState
 import com.bokyapps.bokydo.core.Dates
 import com.bokyapps.bokydo.core.QuickAdd
 import com.bokyapps.bokydo.core.Task
+import com.bokyapps.bokydo.core.TimeZones
 import com.bokyapps.bokydo.core.Views
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.time.LocalDate
 
 /** Where the user is. Kept as a small back stack: no navigation library needed for these few. */
@@ -98,18 +104,29 @@ sealed interface Route {
     data object Upcoming : Route
     data object Browse : Route
     data class Project(val id: String) : Route
+    data class Board(val id: String) : Route
     data class TaskDetail(val id: String) : Route
+    data object Ramble : Route
     data object Settings : Route
+    data object TimeZone : Route
+    data object Search : Route
+    data object Labels : Route
+    data class Label(val name: String) : Route
+    data object Filters : Route
+    data class Filter(val id: String) : Route
 }
 
 /** The signed-in app: task lists, quick add, browse and settings. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppShell() {
+fun AppShell(
+    state: AppState,
+    startWithQuickAdd: Boolean = false,
+    quickAddText: String = "",
+    quickAddDetails: String = "",
+    onQuickAddOpened: () -> Unit = {},
+) {
     val app = LocalContext.current.app
-    val version by app.store.version.collectAsState()
-    // Decoding reads SQLite and parses JSON: off the main thread, showing the last state meanwhile.
-    val state by produceState(app.lastState, version) { value = withContext(Dispatchers.Default) { app.appState() } }
     // "Today" moves at midnight even when nothing syncs.
     var clock by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
@@ -118,10 +135,20 @@ fun AppShell() {
             clock++
         }
     }
+    // Every entry point (launcher, share, tile, shortcut) opens Today.
     var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
     var adding by remember { mutableStateOf(false) }
+    // The quick-add widget, tile, shortcut or a share can ask for the add sheet on open.
+    LaunchedEffect(startWithQuickAdd) {
+        if (startWithQuickAdd) {
+            adding = true
+            onQuickAddOpened()
+        }
+    }
     val route = stack.last()
-    val today = remember(state.user?.timeZone, clock) { QuickAdd.localNow(state.user?.timeZone ?: "UTC").first }
+    // The user's own zone wins, then the account's, then the phone's.
+    val zone = state.user?.prefs?.timezone ?: state.user?.timeZone ?: TimeZones.detect() ?: "UTC"
+    val today = remember(zone, clock) { QuickAdd.localNow(zone).first }
 
     fun go(r: Route, root: Boolean = false) {
         stack = if (root) listOf(r) else stack + r
@@ -134,12 +161,26 @@ fun AppShell() {
         Route.Upcoming -> "Upcoming"
         Route.Browse -> "Browse"
         Route.Settings -> "Settings"
+        Route.TimeZone -> "Time zone"
+        Route.Ramble -> "Ramble"
         is Route.Project -> state.projects[route.id]?.name ?: "Project"
+        is Route.Board -> state.projects[route.id]?.name ?: "Board"
         is Route.TaskDetail -> state.tasks[route.id]?.content?.take(30) ?: "Task"
+        Route.Search -> "Search"
+        Route.Labels -> "Labels"
+        is Route.Label -> "@${route.name}"
+        Route.Filters -> "Filters"
+        is Route.Filter -> state.filters[route.id]?.name ?: "Filter"
     }
     val defaults = when (route) {
         is Route.Project -> route.id
+        is Route.Board -> route.id
         else -> state.user?.inboxProjectId
+    }
+    // A task added from a label view carries that label.
+    val defaultLabels = when (route) {
+        is Route.Label -> listOf(route.name)
+        else -> emptyList()
     }
 
     Scaffold(
@@ -153,6 +194,34 @@ fun AppShell() {
                         }
                     }
                 },
+                actions = {
+                    // List and board are two views of the same project.
+                    val projectId = when (route) {
+                        is Route.Project -> route.id
+                        is Route.Board -> route.id
+                        else -> null
+                    }
+                    if (projectId != null) {
+                        IconButton(onClick = {
+                            stack = stack.dropLast(1) + if (route is Route.Board) {
+                                Route.Project(projectId)
+                            } else {
+                                Route.Board(projectId)
+                            }
+                        }) {
+                            Icon(
+                                if (route is Route.Board) Icons.AutoMirrored.Filled.ViewList else Icons.Filled.ViewWeek,
+                                contentDescription = if (route is Route.Board) "List view" else "Board view",
+                            )
+                        }
+                    }
+                    if (route != Route.Search) {
+                        IconButton(onClick = { go(Route.Search) }) {
+                            Icon(Icons.Filled.Search, contentDescription = "Search")
+                        }
+                    }
+                    if (route != Route.Ramble) RambleAction { go(Route.Ramble) }
+                },
             )
         },
         bottomBar = {
@@ -165,7 +234,9 @@ fun AppShell() {
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && route !is Route.TaskDetail && defaults != null) {
+            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble &&
+                route != Route.Search && route != Route.Labels && route != Route.Filters && defaults != null
+            ) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
             }
         },
@@ -177,16 +248,52 @@ fun AppShell() {
                 Route.Upcoming -> UpcomingList(state, today) { go(Route.TaskDetail(it)) }
                 Route.Browse -> BrowseList(state) { go(it) }
                 is Route.Project -> ProjectList(state, route.id, today) { go(Route.TaskDetail(it)) }
+                is Route.Board -> BoardView(state, route.id, today) { go(Route.TaskDetail(it)) }
                 is Route.TaskDetail -> TaskDetailScreen(state, route.id, today, { go(Route.TaskDetail(it)) }, { stack = stack.dropLast(1) })
-                Route.Settings -> SettingsScreen()
+                Route.Ramble -> RambleScreen(state, today)
+                Route.Settings -> SettingsScreen(state) { go(Route.TimeZone) }
+                Route.TimeZone -> TimeZoneScreen(
+                    current = state.user?.prefs?.timezone ?: state.user?.timeZone,
+                    onPick = { zone ->
+                        app.sendAll(listOf("user_update_preferences" to buildJsonObject { put("timezone", zone) }))
+                        stack = stack.dropLast(1)
+                    },
+                    onBack = { stack = stack.dropLast(1) },
+                )
+                Route.Search -> SearchScreen(state, today, { go(Route.TaskDetail(it)) }, { go(Route.Project(it)) })
+                Route.Labels -> LabelsScreen(state) { go(Route.Label(it)) }
+                is Route.Label -> LabelScreen(state, route.name, today) { go(Route.TaskDetail(it)) }
+                Route.Filters -> FiltersScreen(state) { go(Route.Filter(it)) }
+                is Route.Filter -> FilterScreen(state, state.filters[route.id], today) { go(Route.TaskDetail(it)) }
             }
         }
     }
 
     if (adding && defaults != null) {
         ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            QuickAddSheet(state, defaults, today)
+            QuickAddSheet(state, defaults, today, defaultLabels, quickAddText, quickAddDetails)
         }
+    }
+
+    // The travel prompt: the phone's zone differs from the saved one (offered once per zone).
+    var travel by remember { mutableStateOf<com.bokyapps.bokydo.core.ZoneOption?>(null) }
+    LaunchedEffect(zone, state.user?.prefs?.timezone) {
+        val detected = TimeZones.detect() ?: return@LaunchedEffect
+        val saved = state.user?.prefs?.timezone ?: state.user?.timeZone ?: return@LaunchedEffect
+        if (detected == saved) return@LaunchedEffect
+        if (app.device.lastOfferedZone == detected) return@LaunchedEffect
+        travel = TimeZones.describe(detected)
+        app.device.lastOfferedZone = detected
+    }
+    travel?.let { zone ->
+        TravelPrompt(
+            zone = zone,
+            onSwitch = {
+                travel = null
+                app.sendAll(listOf("user_update_preferences" to buildJsonObject { put("timezone", zone.id) }))
+            },
+            onDismiss = { travel = null },
+        )
     }
 }
 
@@ -194,7 +301,7 @@ fun AppShell() {
 private fun TodayList(state: AppState, today: String, onOpen: (String) -> Unit) {
     val lists = remember(state, today) { Views.today(state, today) }
     if (lists.overdue.isEmpty() && lists.today.isEmpty()) return Empty("Nothing due today. Enjoy your day.")
-    LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = if (LocalCompact.current) 64.dp else 88.dp)) {
         group("Overdue", lists.overdue, state, today, showProject = true, onOpen = onOpen)
         group(Dates.describe(today, null, today, state.prefs()).label, lists.today, state, today, showProject = true, onOpen = onOpen)
     }
@@ -208,7 +315,7 @@ private fun UpcomingList(state: AppState, today: String, onOpen: (String) -> Uni
     }
     val overdue = remember(state, today) { Views.today(state, today).overdue }
     if (days.isEmpty() && overdue.isEmpty()) return Empty("Nothing scheduled for the next two weeks.")
-    LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = if (LocalCompact.current) 64.dp else 88.dp)) {
         group("Overdue", overdue, state, today, showProject = true, onOpen = onOpen)
         for ((day, tasks) in days) group(Dates.describe(day, null, today, state.prefs()).label, tasks, state, today, showProject = true, onOpen = onOpen)
     }
@@ -218,7 +325,7 @@ private fun UpcomingList(state: AppState, today: String, onOpen: (String) -> Uni
 private fun ProjectList(state: AppState, projectId: String, today: String, onOpen: (String) -> Unit) {
     val groups = remember(state, projectId) { Views.projectTasks(state, projectId) }
     if (groups.all { it.second.isEmpty() } && groups.size == 1) return Empty("No tasks here yet. Tap + to add one.")
-    LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = if (LocalCompact.current) 64.dp else 88.dp)) {
         for ((section, tasks) in groups) {
             if (section == null && tasks.isEmpty()) continue
             group(section?.name ?: "", tasks, state, today, showProject = false, showEmpty = section != null, onOpen = onOpen)
@@ -244,6 +351,19 @@ private fun BrowseList(state: AppState, open: (Route) -> Unit) {
         if (tree.isEmpty()) item { Text("No projects yet.", Modifier.padding(16.dp)) }
         item { HorizontalDivider() }
         item {
+            Text("Filters", Modifier.fillMaxWidth().clickable { open(Route.Filters) }.padding(16.dp))
+        }
+        item {
+            Text("Labels", Modifier.fillMaxWidth().clickable { open(Route.Labels) }.padding(16.dp))
+        }
+        item {
+            Text("Search", Modifier.fillMaxWidth().clickable { open(Route.Search) }.padding(16.dp))
+        }
+        item { HorizontalDivider() }
+        item {
+            Text("Ramble (voice → tasks)", Modifier.fillMaxWidth().clickable { open(Route.Ramble) }.padding(16.dp))
+        }
+        item {
             Text("Settings", Modifier.fillMaxWidth().clickable { open(Route.Settings) }.padding(16.dp))
         }
     }
@@ -264,7 +384,7 @@ private fun LazyListScope.group(
 }
 
 @Composable
-private fun Header(text: String) {
+fun Header(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleSmall,
@@ -274,19 +394,21 @@ private fun Header(text: String) {
 }
 
 @Composable
-private fun Empty(text: String) {
+fun Empty(text: String) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
+fun TaskRow(task: Task, state: AppState, today: String, showProject: Boolean, onOpen: (String) -> Unit) {
     val app = LocalContext.current.app
     val prefs = state.prefs()
     val subtasks = remember(state, task.id) { Views.children(state, task.id) }
+    val compact = LocalCompact.current
     Row(
-        Modifier.fillMaxWidth().clickable { onOpen(task.id) }.padding(horizontal = 4.dp, vertical = 2.dp),
+        Modifier.fillMaxWidth().clickable { onOpen(task.id) }
+            .padding(horizontal = 4.dp, vertical = if (compact) 0.dp else 2.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Checkbox(
@@ -299,7 +421,13 @@ private fun TaskRow(task: Task, state: AppState, today: String, showProject: Boo
                 contentDescription = (if (task.isCompleted) "Reopen " else "Complete ") + task.content
             },
         )
-        Column(Modifier.weight(1f).padding(top = 12.dp, end = 12.dp, bottom = 8.dp)) {
+        Column(
+            Modifier.weight(1f).padding(
+                top = if (compact) 8.dp else 12.dp,
+                end = 12.dp,
+                bottom = if (compact) 4.dp else 8.dp,
+            ),
+        ) {
             Text(
                 task.content,
                 textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null,
@@ -354,6 +482,7 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
     var description by remember(task.id, task.description) { mutableStateOf(task.description) }
     var priority by remember(task.id, task.priority) { mutableStateOf(task.priority) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var editingLabels by remember { mutableStateOf(false) }
     var savedNote by remember { mutableStateOf<String?>(null) }
     val dirty = content.trim() != task.content || description != task.description || priority != task.priority
     val contentOk = content.trim().isNotBlank() && content.trim().length <= 1000 && description.length <= 16000
@@ -370,6 +499,21 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
             app.sendAll(listOf("task_update" to args))
             savedNote = "Saved. Syncing…"
         }
+    }
+
+    /**
+     * Take a label off the task; the change shows at once and goes to the server with the rest.
+     */
+    fun setLabels(labels: List<String>) {
+        if (!writable) return
+        app.sendAll(
+            listOf(
+                "task_update" to buildJsonObject {
+                    put("id", task.id)
+                    putJsonArray("labels") { labels.forEach { add(JsonPrimitive(it)) } }
+                },
+            ),
+        )
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -423,9 +567,14 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
                 color = toneColor(Dates.describe(it.date, it.time, today, prefs).tone),
             )
         }
-        if (task.labels.isNotEmpty()) {
+        if (task.labels.isNotEmpty() || writable) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (l in task.labels) AssistChip(onClick = {}, label = { Text("@$l") })
+                for (l in task.labels) {
+                    AssistChip(onClick = { editingLabels = true }, label = { Text("@$l") })
+                }
+                if (writable) {
+                    AssistChip(onClick = { editingLabels = true }, label = { Text("+ Label") })
+                }
             }
         }
         if (!writable) {
@@ -445,6 +594,8 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
         } else if (task.parentId == null) {
             Text("No sub-tasks. Add one from quick add with this task open? (Sub-task creation lands with the board slice.)", style = MaterialTheme.typography.bodySmall)
         }
+        HorizontalDivider()
+        CommentsSection(state, task.id, writable && !(project?.isArchived ?: false))
     }
 
     if (confirmDelete) {
@@ -462,6 +613,80 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
+
+    if (editingLabels) {
+        TaskLabelsDialog(
+            state = state,
+            task = task,
+            onDismiss = { editingLabels = false },
+            onSave = { labels ->
+                setLabels(labels)
+                editingLabels = false
+            },
+        )
+    }
+}
+
+/**
+ * The labels of a task: the user's own labels to tick, and a field for a new one. The server's
+ * rules apply: no spaces, @ or #, and one label per name.
+ */
+@Composable
+private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
+    var chosen by remember(task.id) { mutableStateOf(task.labels.toList()) }
+    var fresh by remember(task.id) { mutableStateOf("") }
+    val known = remember(state, task.id) {
+        (state.labels.values.map { it.name } + task.labels).distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+    }
+    val name = fresh.trim()
+    val valid = name.isNotEmpty() && !name.any { it.isWhitespace() || it == '@' || it == '#' }
+    val already = chosen.any { it.equals(name, ignoreCase = true) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Labels") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (l in known) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = chosen.any { it.equals(l, ignoreCase = true) },
+                            onCheckedChange = { on ->
+                                chosen = if (on) {
+                                    chosen + l
+                                } else {
+                                    chosen.filterNot { it.equals(l, ignoreCase = true) }
+                                }
+                            },
+                        )
+                        Text(l)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = fresh,
+                        onValueChange = { fresh = it.take(60) },
+                        label = { Text("New label") },
+                        singleLine = true,
+                        isError = already,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        enabled = valid && !already,
+                        onClick = {
+                            chosen = chosen + name
+                            fresh = ""
+                        },
+                    ) { Icon(Icons.Filled.Add, contentDescription = "Add label") }
+                }
+                Text("No spaces, @ or #.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(chosen) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**
@@ -470,10 +695,19 @@ private fun TaskDetailScreen(state: AppState, taskId: String, today: String, onO
  * in the JavaScript sandbox; where that isn't available, the text is added as it is.
  */
 @Composable
-private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String) {
+private fun QuickAddSheet(
+    state: AppState,
+    defaultProjectId: String,
+    today: String,
+    defaultLabels: List<String> = emptyList(),
+    initialText: String = "",
+    initialDetails: String = "",
+) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(initialText.take(2000)) }
+    // The rest of a share: kept, editable, and written as the task's description.
+    var details by remember { mutableStateOf(initialDetails.take(16000)) }
     var disabled by remember { mutableStateOf(setOf<String>()) }
     var parsed by remember { mutableStateOf(QuickAdd.Parsed.plain("")) }
     var parsedFor by remember { mutableStateOf("") }
@@ -503,11 +737,14 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
                 app.quickAddParser.parse(QuickAdd.input(text, state, defaultProjectId, now, disabled))
                     ?.let { QuickAdd.parseResult(it, text) } ?: QuickAdd.Parsed.plain(text)
             }
-            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs)
+            val commands = QuickAdd.commands(
+                text, current, defaultProjectId, null, today, prefs, defaultLabels, description = details,
+            )
             if (commands.isEmpty()) return@launch
             app.sendAll(commands)
             note = "Added “${current.content.ifBlank { text.trim() }}”"
             text = ""
+            details = ""
             disabled = emptySet()
         }
     }
@@ -524,6 +761,15 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
             keyboardActions = KeyboardActions(onDone = { submit() }),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
         )
+        if (details.isNotEmpty()) {
+            OutlinedTextField(
+                value = details,
+                onValueChange = { details = it.take(16000) },
+                label = { Text("Description") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         val chips = chipsFor(parsed, state, today)
         if (chips.isNotEmpty()) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -599,44 +845,33 @@ private class TokenHighlight(private val tokens: List<QuickAdd.Highlight>, priva
     override fun hashCode() = tokens.hashCode() * 31 + color.hashCode()
 }
 
-private fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
+fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
+
+/** The theme's priority colours (the web's p1–p4). */
+@Composable
+internal fun priorityColor(p: Int): Color {
+    val t = LocalThemeTokens.current
+    return when (p) {
+        1 -> Color(t.p1)
+        2 -> Color(t.p2)
+        3 -> Color(t.p3)
+        else -> Color(t.p4)
+    }
+}
 
 @Composable
-private fun priorityColor(p: Int): Color = when (p) {
-    1 -> Color(0xFFD1453B)
-    2 -> Color(0xFFEB8909)
-    3 -> Color(0xFF246FE0)
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
+internal fun toneColor(t: Dates.Tone): Color {
+    val tokens = LocalThemeTokens.current
+    return when (t) {
+        Dates.Tone.OVERDUE -> Color(tokens.danger)
+        Dates.Tone.TODAY -> Color(tokens.success)
+        Dates.Tone.TOMORROW -> Color(tokens.warning)
+        Dates.Tone.WEEK -> Color(tokens.p3)
+        Dates.Tone.LATER -> Color(tokens.muted)
+    }
 }
 
+/** The project and label colours, tuned per theme so they stay readable. */
 @Composable
-private fun toneColor(t: Dates.Tone): Color = when (t) {
-    Dates.Tone.OVERDUE -> Color(0xFFD1453B)
-    Dates.Tone.TODAY -> Color(0xFF058527)
-    Dates.Tone.TOMORROW -> Color(0xFFAD6200)
-    Dates.Tone.WEEK -> Color(0xFF692FC2)
-    Dates.Tone.LATER -> MaterialTheme.colorScheme.onSurfaceVariant
-}
-
-/** The web's project colours (a subset; the full theme engine arrives with A2's themes). */
-private fun projectColor(name: String): Color = when (name) {
-    "berry_red" -> Color(0xFFB8256F)
-    "red" -> Color(0xFFDB4035)
-    "orange" -> Color(0xFFFF9933)
-    "yellow" -> Color(0xFFFAD000)
-    "olive_green" -> Color(0xFFAFB83B)
-    "lime_green" -> Color(0xFF7ECC49)
-    "green" -> Color(0xFF299438)
-    "mint_green" -> Color(0xFF6ACCBC)
-    "teal" -> Color(0xFF158FAD)
-    "sky_blue" -> Color(0xFF14AAF5)
-    "light_blue" -> Color(0xFF96C3EB)
-    "blue" -> Color(0xFF4073FF)
-    "grape" -> Color(0xFF884DFF)
-    "violet" -> Color(0xFFAF38EB)
-    "lavender" -> Color(0xFFEB96EB)
-    "magenta" -> Color(0xFFE05194)
-    "salmon" -> Color(0xFFFF8D85)
-    "taupe" -> Color(0xFFCCAC93)
-    else -> Color(0xFF808080)
-}
+fun projectColor(name: String): Color =
+    Color(LocalThemeTokens.current.project[name] ?: 0xFF808080L)

@@ -12,6 +12,10 @@ const TODOIST_STATUS: Record<TodoistError['reason'], number> = {
   unavailable: 502,
   too_large: 413,
   invalid_response: 502,
+  // The chosen window is longer than Todoist allows: the user can pick a shorter one.
+  window_too_long: 400,
+  // More pages of completed tasks than the cap: the account is simply very busy.
+  too_many_pages: 413,
 };
 const SESSION_STATUS: Record<ImportSessionError['code'], number> = {
   session_expired: 404,

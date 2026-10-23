@@ -3,8 +3,10 @@ import { AssigneePicker } from './Sharing.js';
 import { ActivityList, CommentThread } from './Comments.js';
 import type { Task } from '@bokydo/shared';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTaskActions } from '../lib/actions.js';
 import { makeDue, todayIn } from '../lib/dates.js';
+import { localeTag } from '../lib/locale.js';
 import { usePreferences, useSyncState, useTimeZone } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { childrenOf } from '../lib/views.js';
@@ -20,6 +22,7 @@ const DURATIONS = [0, 15, 30, 45, 60, 90, 120, 180, 240, 480];
 
 /** The task panel: edit everything about one task. Changes save as you go. */
 export function TaskDetailDialog() {
+  const { t } = useTranslation();
   const ui = useTaskUI();
   const state = useSyncState();
   const task = ui.openTaskId ? state.tasks.get(ui.openTaskId) : undefined;
@@ -31,7 +34,7 @@ export function TaskDetailDialog() {
     <Dialog
       open={Boolean(task)}
       onClose={() => ui.openTask(null)}
-      title={task?.content ?? 'Task'}
+      title={task?.content ?? t('task.untitled')}
       wide
     >
       {task && <TaskDetail key={task.id} task={task} />}
@@ -40,6 +43,7 @@ export function TaskDetailDialog() {
 }
 
 function TaskDetail({ task }: { task: Task }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const prefs = usePreferences();
   const today = todayIn(useTimeZone());
@@ -101,7 +105,7 @@ function TaskDetail({ task }: { task: Task }) {
             }
           />
           <textarea
-            aria-label="Task name"
+            aria-label={t('task.taskName')}
             readOnly={readOnly}
             className={`w-full resize-none bg-transparent text-lg font-semibold focus:outline-none ${task.isCompleted ? 'text-muted line-through' : ''}`}
             rows={Math.min(4, Math.ceil(content.length / 50) || 1)}
@@ -120,13 +124,13 @@ function TaskDetail({ task }: { task: Task }) {
         <div>
           {editingDescription ? (
             <textarea
-              aria-label="Description"
+              aria-label={t('task.description')}
               autoFocus
               className={`${inputClass} min-h-32 font-mono text-xs`}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               onBlur={saveDescription}
-              placeholder="Description (Markdown: **bold**, *italic*, [links](https://…), - lists)"
+              placeholder={t('task.descriptionPlaceholder')}
             />
           ) : task.description ? (
             // The text (with its links) is ordinary content; editing is its own button, so no
@@ -147,7 +151,7 @@ function TaskDetail({ task }: { task: Task }) {
                     setEditingDescription(true);
                   }}
                 >
-                  Edit description
+                  {t('task.editDescription')}
                 </button>
               )}
             </div>
@@ -158,13 +162,13 @@ function TaskDetail({ task }: { task: Task }) {
               className="w-full rounded-lg p-2 text-left text-sm text-muted hover:bg-surface-alt disabled:hover:bg-transparent"
               onClick={() => setEditingDescription(true)}
             >
-              Add a description
+              {t('task.addDescription')}
             </button>
           )}
         </div>
-        <section aria-label="Sub-tasks">
+        <section aria-label={t('task.subtasks')}>
           <h3 className="mb-1 text-sm font-semibold">
-            Sub-tasks{' '}
+            {t('task.subtasks')}{' '}
             {kids.length > 0 && (
               <span className="font-normal text-muted">
                 {kids.filter((k) => k.isCompleted).length}/{kids.length}
@@ -176,42 +180,42 @@ function TaskDetail({ task }: { task: Task }) {
               <TaskItem key={k.id} task={k} orderedIds={kidIds} />
             ))}
           </ul>
-          {!readOnly && <InlineAdd defaults={{ parentId: task.id }} label="Add sub-task" />}
+          {!readOnly && <InlineAdd defaults={{ parentId: task.id }} label={t('task.addSubtask')} />}
         </section>
         <TaskTalk task={task} />
       </div>
 
       <aside className="w-full shrink-0 space-y-4 rounded-xl bg-surface-alt/60 p-4 text-sm md:w-64">
-        <Prop label="Project">
+        <Prop label={t('task.project')}>
           {readOnly ? (
             project?.name
           ) : (
             <ProjectPicker
               projectId={task.projectId}
               sectionId={task.sectionId}
-              onChange={(to, p) => actions.move([task], to, p.isInbox ? 'Inbox' : p.name)}
+              onChange={(to, p) => actions.move([task], to, p.isInbox ? t('task.inbox') : p.name)}
             />
           )}
         </Prop>
-        <Prop label="Assignee">
+        <Prop label={t('task.assignee')}>
           <AssigneePicker task={task} readOnly={readOnly} />
         </Prop>
-        <Prop label="Date">
+        <Prop label={t('task.date')}>
           <DatePicker value={task.due} onChange={(d) => actions.update(task.id, { due: d })} />
         </Prop>
-        <Prop label="Reminders">
+        <Prop label={t('task.reminders')}>
           <TaskReminders task={task} />
         </Prop>
-        <Prop label="Deadline">
+        <Prop label={t('task.deadline')}>
           <DatePicker
             value={task.deadline ? makeDue(task.deadline, null, today, prefs) : null}
             onChange={(d) => actions.update(task.id, { deadline: d?.date ?? null })}
-            label="Deadline"
+            label={t('task.deadline')}
           />
         </Prop>
-        <Prop label="Duration">
+        <Prop label={t('task.duration')}>
           <select
-            aria-label="Duration"
+            aria-label={t('task.duration')}
             className={`${inputClass} py-1`}
             value={task.durationMinutes ?? 0}
             disabled={readOnly}
@@ -221,38 +225,44 @@ function TaskDetail({ task }: { task: Task }) {
           >
             {DURATIONS.map((m) => (
               <option key={m} value={m}>
-                {m === 0 ? 'None' : m < 60 ? `${m} min` : `${m / 60} h`}
+                {m === 0
+                  ? t('task.none')
+                  : m < 60
+                    ? t('task.minutes', { count: m })
+                    : t('task.hours', { count: m / 60 })}
               </option>
             ))}
           </select>
         </Prop>
-        <Prop label="Priority">
+        <Prop label={t('task.priorityLabel')}>
           <PriorityPicker
             value={task.priority}
             onChange={(p) => actions.update(task.id, { priority: p })}
           />
         </Prop>
-        <Prop label="Labels">
+        <Prop label={t('task.labels')}>
           <LabelPicker
             value={task.labels}
             onChange={(labels) => actions.update(task.id, { labels })}
           />
         </Prop>
-        <p className="text-xs text-muted">Added {new Date(task.createdAt).toLocaleString()}</p>
+        <p className="text-xs text-muted">
+          {t('task.added', { date: new Date(task.createdAt).toLocaleString(localeTag()) })}
+        </p>
         {!readOnly && (
           <div className="flex flex-wrap gap-1 border-t border-line pt-3">
             <Button variant="ghost" onClick={() => actions.duplicate(task)}>
-              <CopyIcon /> Duplicate
+              <CopyIcon /> {t('task.duplicate')}
             </Button>
             <Button variant="ghost" onClick={() => actions.copyLink(task)}>
-              <LinkIcon /> Link
+              <LinkIcon /> {t('task.link')}
             </Button>
             <Button
               variant="ghost"
               className="text-danger"
               onClick={() => void actions.remove([task]).then((ok) => ok && ui.openTask(null))}
             >
-              <TrashIcon /> Delete
+              <TrashIcon /> {t('task.delete')}
             </Button>
           </div>
         )}
@@ -272,22 +282,25 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
 
 /** Comments and activity for one task. */
 function TaskTalk({ task }: { task: Task }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const [tab, setTab] = useState<'comments' | 'activity'>('comments');
   const count = [...state.comments.values()].filter((c) => c.taskId === task.id).length;
   return (
-    <section aria-label="Comments and activity" className="border-t border-line pt-3">
+    <section aria-label={t('task.commentsAndActivity')} className="border-t border-line pt-3">
       <div role="tablist" className="mb-3 flex gap-1 text-sm">
-        {(['comments', 'activity'] as const).map((t) => (
+        {(['comments', 'activity'] as const).map((tabKey) => (
           <button
-            key={t}
+            key={tabKey}
             type="button"
             role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={`rounded-md px-3 py-1 ${tab === t ? 'bg-surface-alt font-medium' : 'text-muted hover:text-fg'}`}
+            aria-selected={tab === tabKey}
+            onClick={() => setTab(tabKey)}
+            className={`rounded-md px-3 py-1 ${tab === tabKey ? 'bg-surface-alt font-medium' : 'text-muted hover:text-fg'}`}
           >
-            {t === 'comments' ? `Comments${count ? ` (${count})` : ''}` : 'Activity'}
+            {tabKey === 'comments'
+              ? `${t('task.comments')}${count ? ` (${count})` : ''}`
+              : t('task.activity')}
           </button>
         ))}
       </div>

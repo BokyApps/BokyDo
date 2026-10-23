@@ -28,8 +28,11 @@ export const AI_FEATURES = {
 export type AiFeature = keyof typeof AI_FEATURES;
 export const AI_FEATURE_KEYS = Object.keys(AI_FEATURES) as AiFeature[];
 
-/** Wire protocol a provider speaks. Adapters are written per dialect, not per vendor. */
-export type AiDialect = 'openai' | 'anthropic' | 'gemini' | 'typesafe';
+/**
+ * Wire protocol a provider speaks. Adapters are written per dialect, not per vendor.
+ * `responses` is OpenAI's Responses API, which the ChatGPT (Codex) backend speaks.
+ */
+export type AiDialect = 'openai' | 'anthropic' | 'gemini' | 'responses' | 'typesafe';
 
 export interface AiProviderInfo {
   name: string;
@@ -96,6 +99,15 @@ export const AI_PROVIDERS = {
     dialect: 'openai',
     baseUrl: 'fixed',
     defaultBaseUrl: 'https://api.x.ai/v1',
+    apiKey: 'sign-in',
+    customHeaders: false,
+    capabilities: CHAT,
+  },
+  'chatgpt-subscription': {
+    name: 'ChatGPT (Plus/Pro sign-in)',
+    dialect: 'responses',
+    baseUrl: 'fixed',
+    defaultBaseUrl: 'https://chatgpt.com/backend-api/codex',
     apiKey: 'sign-in',
     customHeaders: false,
     capabilities: CHAT,

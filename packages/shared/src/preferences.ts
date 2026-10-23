@@ -95,11 +95,19 @@ export const aiPrefsSchema = z
   .strict();
 export type AiPrefs = z.infer<typeof aiPrefsSchema>;
 
+/** 'auto' follows the browser; otherwise a BCP 47 tag like "en" or "af" (W12c, ADR 0023). */
+const languageSchema = z.union([
+  z.literal('auto'),
+  z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/),
+]);
+
 /** Per-user preferences, synced to every client (web, Android, widgets). */
 export const preferencesSchema = z
   .object({
     /** null until the user picks one (clients offer the detected zone). */
     timezone: timeZoneSchema.nullable(),
+    /** Defaulted so a row or cached copy stored before the field existed still parses. */
+    language: languageSchema.default('auto'),
     weekStart: z.enum(['monday', 'sunday', 'saturday']),
     timeFormat: z.enum(['24h', '12h']),
     dateFormat: z.enum(['dmy', 'mdy', 'ymd']),
@@ -117,6 +125,7 @@ export type Preferences = z.infer<typeof preferencesSchema>;
 
 export const DEFAULT_PREFERENCES: Preferences = {
   timezone: null,
+  language: 'auto',
   weekStart: 'monday',
   timeFormat: '24h',
   dateFormat: 'dmy',
@@ -238,6 +247,11 @@ export const preferencesPatchSchema = preferencesSchema
     /** Partial, so changing one goal does not require sending the others back. */
     productivity: productivityPrefsFields.partial().strict().optional(),
     ai: aiPrefsSchema.partial().strict().optional(),
+    /**
+     * Without the schema's default: a patch that omits `language` must leave the stored choice
+     * alone, not reset it to 'auto' on every unrelated settings change.
+     */
+    language: languageSchema.optional(),
   })
   .strict();
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;

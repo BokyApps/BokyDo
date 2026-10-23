@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,19 +20,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -40,11 +42,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import com.bokyapps.bokydo.core.Appearance
+import com.bokyapps.bokydo.core.AppState
 import com.bokyapps.bokydo.core.ServerAddress
+import com.bokyapps.bokydo.core.TimeZones
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.text.DateFormat
@@ -55,20 +61,86 @@ import java.util.Date
  * shows the account, sync status and notifications.
  */
 class MainActivity : ComponentActivity() {
+    /**
+     * The intent that opened us (launcher, share, tile, shortcut, widget); tiles, shortcuts and
+     * widgets re-send it. A share is consumed the first time it is answered — re-opening the
+     * activity (rotation, back from recents, a process restart) must not pre-fill the sheet again
+     * and invite a duplicate task.
+     */
+    private val launch = mutableStateOf<Intent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The intent is already history when we are re-created (rotation, back from recents,
+        // process death), and a launch from the recents list was answered once already.
+        val replaying = savedInstanceState != null ||
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        launch.value = if (replaying) null else intent
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+            val app = LocalContext.current.app
+            val version by app.store.version.collectAsState()
+            // Decoding reads SQLite and parses JSON: off the main thread, showing the last state
+            // meanwhile. The theme follows the user's synced appearance.
+            val state by produceState(app.lastState, version) {
+                value = withContext(Dispatchers.Default) { app.appState() }
+            }
+            val dynamic by app.device.dynamicColor.collectAsState()
+            val appearance = state.user?.prefs?.appearance ?: Appearance.DEFAULT
+            BokyDoTheme(appearance, dynamic) {
                 Surface(Modifier.fillMaxSize()) {
                     val screen by app.screen.collectAsState()
-                    when (val s = screen) {
-                        is AppScreen.Connect -> ConnectScreen(s.message)
-                        is AppScreen.WaitingForBrowser -> WaitingScreen(s.host)
-                        AppScreen.Home -> AppShell()
+                    // A new tile/shortcut/share/widget intent restarts the shell so it opens
+                    // where asked. That also resets the back stack, which is the expected shape:
+                    // the user asked for this screen by hand.
+                    key(launch.value) {
+                        when (val s = screen) {
+                            is AppScreen.Connect -> ConnectScreen(s.message)
+                            is AppScreen.WaitingForBrowser -> WaitingScreen(s.host)
+                            AppScreen.Home -> {
+                                val parsed = parseLaunch(launch.value)
+                                AppShell(
+                                    state,
+                                    startWithQuickAdd = parsed.quickAdd,
+                                    quickAddText = parsed.text,
+                                    quickAddDetails = parsed.details,
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    /** The launch mode is singleTask, so a widget, tile, shortcut or share while open arrives here. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        launch.value = intent
+    }
+
+    companion object {
+        const val EXTRA_QUICK_ADD = "com.bokyapps.bokydo.extra.QUICK_ADD"
+    }
+}
+
+/** Where a launcher, share, tile, shortcut or widget intent wants to land. */
+private data class Launch(val route: Route, val quickAdd: Boolean, val text: String, val details: String)
+
+private fun parseLaunch(intent: Intent?): Launch {
+    if (intent == null) return Launch(Route.Today, false, "", "")
+    if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+        // Shared text is untrusted: plain text, capped, still needs the user to tap Add.
+        val shared = com.bokyapps.bokydo.core.sanitizeSharedText(intent.getCharSequenceExtra(Intent.EXTRA_TEXT))
+        if (shared != null) return Launch(Route.Today, true, shared.title, shared.details)
+        return Launch(Route.Today, false, "", "")
+    }
+    // The quick-add widget asks for the sheet with an extra rather than an action.
+    if (intent.getBooleanExtra(MainActivity.EXTRA_QUICK_ADD, false)) return Launch(Route.Today, true, "", "")
+    return when (intent.action) {
+        "com.bokyapps.bokydo.QUICK_ADD" -> Launch(Route.Today, true, "", "")
+        "com.bokyapps.bokydo.SHOW_TODAY" -> Launch(Route.Today, false, "", "")
+        else -> Launch(Route.Today, false, "", "")
     }
 }
 
@@ -146,7 +218,7 @@ private fun WaitingScreen(host: String) {
 }
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(state: AppState, onPickTimeZone: () -> Unit) {
     val context = LocalContext.current
     val app = context.app
     val scope = rememberCoroutineScope()
@@ -164,7 +236,14 @@ fun SettingsScreen() {
             syncedAt = app.store.syncedAt(),
         )
     }
+    // What the server refused, so a change that didn't work says why.
+    val refusals = remember(version) {
+        app.store.rejected().takeLast(5).map { r ->
+            (r.message ?: r.error) + " (" + r.command.type + ")"
+        }
+    }
     val host = app.sessions.load()?.origin ?: ""
+    val zone = state.user?.prefs?.timezone ?: state.user?.timeZone
     Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Signed in to $host" + (summary.username?.let { " as $it" } ?: ""))
         Text("${summary.projects} projects · ${summary.tasks} tasks")
@@ -174,11 +253,26 @@ fun SettingsScreen() {
         )
         if (summary.pending > 0) Text("${summary.pending} changes waiting to be sent")
         if (summary.rejected > 0) Text("${summary.rejected} changes were refused by the server", color = MaterialTheme.colorScheme.error)
+        for (r in refusals) Text("· $r", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         syncError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = { scope.launch { runCatching { app.sync() } } }) { Text("Sync now") }
             OutlinedButton(onClick = { scope.launch { app.signOut() } }) { Text("Sign out") }
         }
+        AppearanceSection(state)
+        HorizontalDivider()
+        Text("Time zone", style = MaterialTheme.typography.titleMedium)
+        Text(
+            zone?.let { id ->
+                runCatching { TimeZones.describe(id) }.getOrNull()?.let {
+                    "${it.city}${if (it.country.isEmpty()) "" else ", ${it.country}"} (${it.offsetLabel})"
+                }
+            } ?: "Not set — the phone's zone is used.",
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.clickable { onPickTimeZone() },
+        )
+        Text("Tap to change it. Your other devices follow.", style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
         NotificationsSection()
     }
 }

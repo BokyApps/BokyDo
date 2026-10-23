@@ -91,10 +91,15 @@ interface ProjectRow {
   isInbox: boolean;
 }
 
-interface TriageContext {
+/** Everything `suggestTriage` needs: plain data, no database (the eval harness builds one). */
+export interface TriageContext {
   rows: TaskRow[];
   projectRows: ProjectRow[];
   labelNames: string[];
+}
+
+/** A context read from the database, which auto-apply needs: who else sees each project. */
+interface LoadedTriageContext extends TriageContext {
   /** How many other people are in each project: what a task moved there would be seen by. */
   shared: Map<string, number>;
 }
@@ -134,15 +139,15 @@ export interface TriageResult {
 }
 
 /**
- * The tasks, the projects they could go to, the user's labels and who else sees each project.
- * Every task must be the caller's to see; otherwise none of them is looked at.
+ * The database half of triage: the tasks, the projects they could go to, the user's labels and
+ * who else sees each project. Null when a task isn't the caller's to see; then none is looked at.
  */
-async function loadContext(
+export async function loadTriageContext(
   db: Database,
   user: AiUser,
   taskIds: string[],
   scope: ProjectScope,
-): Promise<TriageContext | null> {
+): Promise<LoadedTriageContext | null> {
   return db.transaction(async (tx) => {
     const visible = await visibleProjects(tx, user.id, scope);
     const rows = await tx
@@ -391,7 +396,7 @@ export async function autoApplyThreshold(db: Database, userId: string): Promise<
  */
 async function applyByItself(
   deps: TriageDeps,
-  ctx: TriageContext,
+  ctx: LoadedTriageContext,
   user: AiUser,
   drafts: Draft[],
   threshold: number,
@@ -481,6 +486,44 @@ function decisionSummary(
 }
 
 /**
+ * The model half of triage, with no data access: a decision model when the user has one routed,
+ * else the chat model's JSON (the LLM fallback).
+ */
+async function triageDrafts(
+  ai: AiService,
+  user: AiUser,
+  ctx: TriageContext,
+  signal?: AbortSignal,
+): Promise<Draft[]> {
+  const decisionModel = await ai.decisionModel(user);
+  return decisionModel
+    ? decisionDrafts(ai, user, ctx, signal)
+    : chatDrafts(ai, user, ctx, await ai.decisionChatFeature(user), signal);
+}
+
+const toSuggestion = (d: Draft): TriageSuggestion => ({
+  taskId: d.task.id,
+  projectId: d.projectId,
+  labels: d.labels,
+  priority: d.priority,
+  confidence: d.confidence,
+  why: d.why,
+});
+
+/**
+ * Task Assist's chat model on its own, nothing applied: what the eval harness measures, with
+ * synthetic tasks. Keys stay opaque: only offered project/label/task keys map back to real ids.
+ */
+export async function suggestTriage(
+  ai: AiService,
+  user: AiUser,
+  ctx: TriageContext,
+  signal?: AbortSignal,
+): Promise<TriageSuggestion[]> {
+  return (await chatDrafts(ai, user, ctx, 'assist.task', signal)).map(toSuggestion);
+}
+
+/**
  * Suggest where the given tasks belong, and (when the user asked for it) apply the sure ones.
  */
 export async function triage(
@@ -489,19 +532,10 @@ export async function triage(
   taskIds: string[],
   opts: TriageOptions,
 ): Promise<TriageResult> {
-  const ctx = await loadContext(deps.db, user, taskIds, opts.scope);
+  const ctx = await loadTriageContext(deps.db, user, taskIds, opts.scope);
   if (!ctx) throw new AssistNotFoundError();
 
-  const decisionModel = await deps.ai.decisionModel(user);
-  const drafts = decisionModel
-    ? await decisionDrafts(deps.ai, user, ctx, opts.signal)
-    : await chatDrafts(
-        deps.ai,
-        user,
-        ctx,
-        await deps.ai.decisionChatFeature(user),
-        opts.signal,
-      );
+  const drafts = await triageDrafts(deps.ai, user, ctx, opts.signal);
 
   let applied: TriageApplied[] = [];
   if (opts.autoApply) {
@@ -510,13 +544,5 @@ export async function triage(
       applied = await applyByItself(deps, ctx, user, drafts, threshold, opts.scope);
   }
 
-  const suggestions: TriageSuggestion[] = drafts.map((d) => ({
-    taskId: d.task.id,
-    projectId: d.projectId,
-    labels: d.labels,
-    priority: d.priority,
-    confidence: d.confidence,
-    why: d.why,
-  }));
-  return { suggestions, applied };
+  return { suggestions: drafts.map(toSuggestion), applied };
 }

@@ -1,6 +1,7 @@
 import type { AdminInvite, AdminUser } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Checkbox, Dialog, SecretList, TextField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
@@ -31,6 +32,7 @@ function useAdminAction<V>(fn: (v: V) => Promise<unknown>, onSuccess?: (data: un
 }
 
 export function AdminUsersPage() {
+  const { t } = useTranslation();
   const { data: users } = useQuery(usersQuery);
   const { data: session } = useQuery(sessionQuery);
   const [shown, setShown] = useState<Shown | null>(null);
@@ -47,8 +49,8 @@ export function AdminUsersPage() {
       api<{ url: string }>('POST', `/api/v1/admin/users/${u.id}/password-reset-link`),
     (data) =>
       setShown({
-        title: 'Password reset link',
-        intro: 'Send this link to the user over a channel you trust. It works once, for 24 hours.',
+        title: t('admin.users.resetLinkTitle'),
+        intro: t('admin.users.resetLinkIntro'),
         items: [(data as { url: string }).url],
         filename: 'reset-link.txt',
       }),
@@ -57,7 +59,7 @@ export function AdminUsersPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">Users</h1>
+      <h1 className="text-2xl font-semibold">{t('admin.users.title')}</h1>
       <Card>
         <CreateUser onCreated={setShown} />
       </Card>
@@ -68,9 +70,9 @@ export function AdminUsersPage() {
         <table className="w-full text-left text-sm">
           <thead className="border-b border-line text-xs text-muted">
             <tr>
-              <th className="px-4 py-2 font-medium">User</th>
-              <th className="px-4 py-2 font-medium">Security</th>
-              <th className="px-4 py-2 font-medium sr-only">Actions</th>
+              <th className="px-4 py-2 font-medium">{t('admin.users.colUser')}</th>
+              <th className="px-4 py-2 font-medium">{t('admin.users.colSecurity')}</th>
+              <th className="px-4 py-2 font-medium sr-only">{t('admin.users.colActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -79,22 +81,24 @@ export function AdminUsersPage() {
                 <td className="px-4 py-3">
                   <div className="font-medium">
                     {u.username}
-                    {u.isAdmin && <Badge>admin</Badge>}
-                    {u.disabled && <Badge>disabled</Badge>}
+                    {u.isAdmin && <Badge>{t('admin.users.badgeAdmin')}</Badge>}
+                    {u.disabled && <Badge>{t('admin.users.badgeDisabled')}</Badge>}
                   </div>
                   <div className="text-xs text-muted">
-                    {u.email ? `${u.email}${u.emailVerified ? '' : ' (unconfirmed)'}` : 'no email'}
+                    {u.email
+                      ? `${u.email}${u.emailVerified ? '' : t('admin.users.emailUnconfirmed')}`
+                      : t('admin.users.noEmail')}
                   </div>
                 </td>
                 <td className="px-4 py-3 text-xs text-muted">
                   {u.totpEnabled || u.passkeys
                     ? [
-                        u.totpEnabled && 'authenticator app',
-                        u.passkeys && `${u.passkeys} passkey${u.passkeys > 1 ? 's' : ''}`,
+                        u.totpEnabled && t('admin.users.totp'),
+                        u.passkeys ? t('admin.users.passkeys', { count: u.passkeys }) : '',
                       ]
                         .filter(Boolean)
                         .join(', ')
-                    : 'password only'}
+                    : t('admin.users.passwordOnly')}
                 </td>
                 <td className="px-4 py-3">
                   {u.id !== session?.user.id && (
@@ -103,24 +107,24 @@ export function AdminUsersPage() {
                         variant="ghost"
                         onClick={() => update.mutate({ id: u.id, isAdmin: !u.isAdmin })}
                       >
-                        {u.isAdmin ? 'Remove admin' : 'Make admin'}
+                        {u.isAdmin ? t('admin.users.removeAdmin') : t('admin.users.makeAdmin')}
                       </Button>
                       <Button
                         variant="ghost"
                         onClick={() => update.mutate({ id: u.id, disabled: !u.disabled })}
                       >
-                        {u.disabled ? 'Enable' : 'Disable'}
+                        {u.disabled ? t('admin.users.enable') : t('admin.users.disable')}
                       </Button>
                       <Button variant="ghost" onClick={() => resetLink.mutate(u)}>
-                        Reset link
+                        {t('admin.users.resetLinkButton')}
                       </Button>
                       {(u.totpEnabled || u.passkeys > 0) && (
                         <Button variant="ghost" onClick={() => resetMfa.mutate(u.id)}>
-                          Reset 2FA
+                          {t('admin.users.resetMfa')}
                         </Button>
                       )}
                       <Button variant="ghost" onClick={() => setDeleting(u)}>
-                        Delete…
+                        {t('admin.users.deleteButton')}
                       </Button>
                     </div>
                   )}
@@ -140,7 +144,7 @@ export function AdminUsersPage() {
             <p className="text-sm text-muted">{shown.intro}</p>
             <SecretList items={shown.items} filename={shown.filename} />
             <div className="flex justify-end">
-              <Button onClick={() => setShown(null)}>Done</Button>
+              <Button onClick={() => setShown(null)}>{t('settings.calendar.done')}</Button>
             </div>
           </div>
         )}
@@ -151,6 +155,7 @@ export function AdminUsersPage() {
 
 /** Delete another user's account: shows what stops it, and needs their username typed. */
 function DeleteUserDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [confirm, setConfirm] = useState('');
   const blockers = useQuery({
@@ -172,24 +177,22 @@ function DeleteUserDialog({ user, onClose }: { user: AdminUser; onClose: () => v
   const b = blockers.data;
   const blocked = !!b && (b.projects.length > 0 || b.workspaces.length > 0 || b.lastAdmin);
   return (
-    <Dialog open onClose={onClose} title={`Delete ${user.username}?`}>
+    <Dialog open onClose={onClose} title={t('admin.users.deleteDialogTitle', { username: user.username })}>
       <div className="space-y-3">
-        <p className="text-sm">
-          Deletes the account and everything only they could see. Their tasks and comments in shared
-          projects stay without their name. They get an email if they have a verified address.
-        </p>
+        <p className="text-sm">{t('admin.users.deleteDescription')}</p>
         {blocked && b && (
           <Alert tone="warning">
-            First, they (or the project owners) must transfer or delete:{' '}
-            {[
-              ...b.projects.map((p) => `project “${p.name}”`),
-              ...b.workspaces.map((w) => `team “${w.name}”`),
-            ].join(', ')}
-            {b.lastAdmin ? ' (they are the last administrator)' : ''}.
+            {t('admin.users.deleteBlockers', {
+              items: [
+                ...b.projects.map((p) => t('admin.users.blockerItemProject', { name: p.name })),
+                ...b.workspaces.map((w) => t('admin.users.blockerItemTeam', { name: w.name })),
+              ].join(', '),
+              extra: b.lastAdmin ? ` ${t('admin.users.lastAdminNote')}` : '',
+            })}
           </Alert>
         )}
         <TextField
-          label={`Type ${user.username} to confirm`}
+          label={t('admin.users.confirmPrompt', { username: user.username })}
           value={confirm}
           autoComplete="off"
           onChange={(e) => setConfirm(e.target.value)}
@@ -197,7 +200,7 @@ function DeleteUserDialog({ user, onClose }: { user: AdminUser; onClose: () => v
         {remove.isError && <Alert tone="error">{errorMessage(remove.error)}</Alert>}
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             variant="danger"
@@ -205,7 +208,7 @@ function DeleteUserDialog({ user, onClose }: { user: AdminUser; onClose: () => v
             disabled={!b || blocked || confirm !== user.username}
             onClick={() => remove.mutate(undefined)}
           >
-            Delete account
+            {t('settings.data.deleteAccountButton')}
           </Button>
         </div>
       </div>
@@ -222,6 +225,7 @@ function Badge({ children }: { children: string }) {
 }
 
 function CreateUser({ onCreated }: { onCreated: (s: Shown) => void }) {
+  const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
@@ -234,9 +238,8 @@ function CreateUser({ onCreated }: { onCreated: (s: Shown) => void }) {
       }),
     (data) => {
       onCreated({
-        title: `Account created for ${username}`,
-        intro:
-          'Give them this one-time passphrase. They must choose their own password when they first sign in. It won’t be shown again.',
+        title: t('admin.users.createdTitle', { username }),
+        intro: t('admin.users.createdIntro'),
         items: [(data as { passphrase: string }).passphrase],
         filename: `${username}-passphrase.txt`,
       });
@@ -251,10 +254,10 @@ function CreateUser({ onCreated }: { onCreated: (s: Shown) => void }) {
   };
   return (
     <form onSubmit={submit} className="space-y-4">
-      <h2 className="text-base font-semibold">Add a user</h2>
+      <h2 className="text-base font-semibold">{t('admin.users.addUser')}</h2>
       <div className="grid gap-4 sm:grid-cols-2">
         <TextField
-          label="Username"
+          label={t('admin.users.username')}
           required
           autoCapitalize="none"
           spellCheck={false}
@@ -262,26 +265,27 @@ function CreateUser({ onCreated }: { onCreated: (s: Shown) => void }) {
           onChange={(e) => setUsername(e.target.value)}
         />
         <TextField
-          label="Email (optional)"
+          label={t('admin.users.emailOptional')}
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
       </div>
       <Checkbox
-        label="Administrator"
+        label={t('admin.users.administrator')}
         checked={isAdmin}
         onChange={(e) => setIsAdmin(e.target.checked)}
       />
       {create.isError && <Alert>{errorMessage(create.error)}</Alert>}
       <Button type="submit" busy={create.isPending}>
-        Create user
+        {t('admin.users.createUser')}
       </Button>
     </form>
   );
 }
 
 function Invites({ onCreated }: { onCreated: (s: Shown) => void }) {
+  const { t } = useTranslation();
   const { data: invites } = useQuery(invitesQuery);
   const [email, setEmail] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
@@ -294,10 +298,10 @@ function Invites({ onCreated }: { onCreated: (s: Shown) => void }) {
     (data) => {
       const res = data as { url: string; emailed: boolean };
       onCreated({
-        title: 'Invitation created',
+        title: t('admin.users.invitationCreated'),
         intro: res.emailed
-          ? `Sent to ${email}. You can also share this link; it works once, for 7 days.`
-          : 'Share this link; it works once, for 7 days.',
+          ? t('admin.users.inviteEmailed', { email })
+          : t('admin.users.inviteLink'),
         items: [res.url],
         filename: 'invite-link.txt',
       });
@@ -308,7 +312,7 @@ function Invites({ onCreated }: { onCreated: (s: Shown) => void }) {
   const revoke = useAdminAction((id: string) => api('DELETE', `/api/v1/admin/invites/${id}`));
   return (
     <div className="space-y-4">
-      <h2 className="text-base font-semibold">Invitations</h2>
+      <h2 className="text-base font-semibold">{t('admin.users.invitations')}</h2>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -317,20 +321,20 @@ function Invites({ onCreated }: { onCreated: (s: Shown) => void }) {
         className="space-y-3"
       >
         <TextField
-          label="Email (optional)"
+          label={t('admin.users.emailOptional')}
           type="email"
-          hint="With email set up, the invitation is sent for you."
+          hint={t('admin.users.emailHint')}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
         <Checkbox
-          label="Invite as administrator"
+          label={t('admin.users.inviteAsAdmin')}
           checked={isAdmin}
           onChange={(e) => setIsAdmin(e.target.checked)}
         />
         {create.isError && <Alert>{errorMessage(create.error)}</Alert>}
         <Button type="submit" variant="secondary" busy={create.isPending}>
-          Create invitation
+          {t('admin.users.createInvitation')}
         </Button>
       </form>
       {invites && invites.length > 0 && (
@@ -338,14 +342,16 @@ function Invites({ onCreated }: { onCreated: (s: Shown) => void }) {
           {invites.map((i) => (
             <li key={i.id} className="flex items-center justify-between px-3 py-2">
               <div>
-                {i.email ?? 'Link invitation'}
-                {i.isAdmin && <Badge>admin</Badge>}
+                {i.email ?? t('admin.users.linkInvitation')}
+                {i.isAdmin && <Badge>{t('admin.users.badgeAdmin')}</Badge>}
                 <div className="text-xs text-muted">
-                  expires {new Date(i.expiresAt).toLocaleDateString()}
+                  {t('admin.users.inviteExpires', {
+                    date: new Date(i.expiresAt).toLocaleDateString(),
+                  })}
                 </div>
               </div>
               <Button variant="ghost" onClick={() => revoke.mutate(i.id)}>
-                Revoke
+                {t('settings.tokens.revoke')}
               </Button>
             </li>
           ))}

@@ -101,3 +101,90 @@ export const rambleTranscribeQuerySchema = z
       .optional(),
   })
   .strict();
+
+/**
+ * Live Ramble (W8-live): a WebSocket relay for OpenAI Realtime / Gemini Live. The browser never
+ * sees the provider key, only a small provider-agnostic protocol: it streams raw PCM audio and
+ * control frames to the server, which holds the key, applies the same draft edit operations as
+ * `/ramble/extract`, meters the audio and caps the session. The provider's own event protocol is
+ * the server's business, so the client depends on no one vendor.
+ */
+export const RAMBLE_LIVE = {
+  /** Longest one live session may run, whatever the model does. */
+  maxSeconds: 600,
+  /** Raw PCM16 audio a client may send in one frame (before base64). */
+  maxAudioBytes: 256 * 1024,
+  /** Ceiling on a client's audio over a whole session, independent of the seconds cap. */
+  maxSessionAudioBytes: 32 * 1024 * 1024,
+  /** Largest client frame we will parse (base64 expands by ~4/3). */
+  maxMessageChars: 512 * 1024,
+  /** How often a live session's login is re-checked while it is open. */
+  revalidateMs: 25_000,
+} as const;
+
+const audioFrame = z
+  .string()
+  .min(1)
+  .max(Math.ceil(RAMBLE_LIVE.maxAudioBytes * (4 / 3)) + 4)
+  .regex(/^[A-Za-z0-9+/]*={0,2}$/, 'Base64 audio only');
+
+/** A control frame the browser (or an app) sends over the live socket. */
+export const rambleLiveClientMessageSchema = z.discriminatedUnion('type', [
+  /**
+   * The first frame: the draft the user already has, so the live model edits it instead of
+   * starting from nothing (and a session restarted after a dropped connection keeps its tasks).
+   */
+  z
+    .object({
+      type: z.literal('start'),
+      draft: z.array(rambleDraftTaskSchema).max(RAMBLE_LIMITS.maxDraft).default([]),
+    })
+    .strict(),
+  z.object({ type: z.literal('audio'), data: audioFrame }).strict(),
+  z
+    .object({
+      type: z.literal('text'),
+      text: z.string().trim().min(1).max(RAMBLE_LIMITS.maxTextChars),
+    })
+    .strict(),
+  z.object({ type: z.literal('stop') }).strict(),
+]);
+export type RambleLiveClientMessage = z.output<typeof rambleLiveClientMessageSchema>;
+
+/** Why the relay ended the session. */
+export type RambleLiveCloseReason =
+  | 'done'
+  | 'session_too_long'
+  | 'too_much_audio'
+  | 'budget_exceeded'
+  | 'unauthorized'
+  | 'not_configured'
+  | 'provider_error'
+  | 'client_closed';
+
+/** Frames the server sends back. */
+export interface RambleLiveReady {
+  type: 'ready';
+  /** Input sample rate the client must record at (Hz, mono PCM16). */
+  sampleRate: number;
+}
+export interface RambleLiveTranscript {
+  type: 'transcript';
+  text: string;
+  final: boolean;
+}
+export interface RambleLiveDraft {
+  type: 'draft';
+  draft: RambleResolvedTask[];
+  ops: RambleOpSummary[];
+}
+export interface RambleLiveError {
+  type: 'error';
+  code: string;
+}
+export interface RambleLiveClosed {
+  type: 'closed';
+  reason: RambleLiveCloseReason;
+}
+export type RambleLiveServerMessage =
+  RambleLiveReady | RambleLiveTranscript | RambleLiveDraft | RambleLiveError | RambleLiveClosed;

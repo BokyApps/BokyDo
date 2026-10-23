@@ -1,6 +1,7 @@
 import { COLORS, type Color, type Project, type ProjectVisibility } from '@bokydo/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { newId, useSend, useSyncState } from '../lib/sync.js';
 import { flattenTree, projectTree } from '../lib/views.js';
 import { ProjectDot } from './pickers.js';
@@ -24,8 +25,9 @@ export function ProjectDialog({
   workspaceId?: string | null;
   folderId?: string | null;
 }) {
+  const { t } = useTranslation();
   return (
-    <Dialog open={open} onClose={onClose} title={project ? 'Edit project' : 'Add project'}>
+    <Dialog open={open} onClose={onClose} title={project ? t('project.edit') : t('project.add')}>
       {open && (
         <ProjectForm
           onClose={onClose}
@@ -38,11 +40,6 @@ export function ProjectDialog({
   );
 }
 
-const VISIBILITY_LABEL: Record<ProjectVisibility, string> = {
-  workspace: 'Everyone in the team (guests excepted)',
-  restricted: 'Only people it is shared with',
-};
-
 function ProjectForm({
   onClose,
   project,
@@ -54,6 +51,7 @@ function ProjectForm({
   workspaceId: string | null;
   folderId: string | null;
 }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const send = useSend();
   const navigate = useNavigate();
@@ -72,6 +70,8 @@ function ProjectForm({
   const canMoveTeam =
     !project || (project.role === 'owner' && !project.parentId && !project.isInbox);
   const canManage = !project || project.role === 'owner' || project.role === 'admin';
+  const visibilityLabel = (v: ProjectVisibility) =>
+    v === 'workspace' ? t('project.visibilityWorkspace') : t('project.visibilityRestricted');
   const folders = state.folders.filter((f) => f.workspaceId === workspaceId);
   // A project can't move under itself or its descendants; parents must be your own and in
   // the same team.
@@ -130,7 +130,7 @@ function ProjectForm({
   return (
     <form onSubmit={submit} className="space-y-4">
       <TextField
-        label="Name"
+        label={t('project.name')}
         required
         maxLength={120}
         autoFocus
@@ -138,7 +138,7 @@ function ProjectForm({
         onChange={(e) => setName(e.target.value)}
       />
       <fieldset>
-        <legend className="mb-1.5 text-sm font-medium">Colour</legend>
+        <legend className="mb-1.5 text-sm font-medium">{t('project.colour')}</legend>
         <div className="grid grid-cols-10 gap-1.5">
           {COLORS.map((c) => (
             <button
@@ -157,7 +157,7 @@ function ProjectForm({
       </fieldset>
       {(teams.length > 0 || project?.workspaceId) && canMoveTeam && (
         <SelectField
-          label="Team"
+          label={t('project.team')}
           value={workspaceId}
           onChange={(e) => {
             setWorkspaceId(e.target.value);
@@ -165,11 +165,11 @@ function ProjectForm({
             setParentId('');
           }}
           options={[
-            { value: '', label: 'Personal' },
+            { value: '', label: t('project.personal') },
             ...teams.map((w) => ({ value: w.id, label: w.name })),
             // A team you can't add projects to any more (e.g. now a guest): keep it selectable.
             ...(project?.workspaceId && !teams.some((w) => w.id === project.workspaceId)
-              ? [{ value: project.workspaceId, label: 'Current team' }]
+              ? [{ value: project.workspaceId, label: t('project.currentTeam') }]
               : []),
           ]}
         />
@@ -178,32 +178,32 @@ function ProjectForm({
         <>
           {folders.length > 0 && (
             <SelectField
-              label="Folder"
+              label={t('project.folder')}
               value={folderId}
               onChange={(e) => setFolderId(e.target.value)}
               options={[
-                { value: '', label: 'No folder' },
+                { value: '', label: t('project.noFolder') },
                 ...folders.map((f) => ({ value: f.id, label: f.name })),
               ]}
             />
           )}
           <SelectField
-            label="Who can see it"
+            label={t('project.visibility')}
             value={visibility}
             onChange={(e) => setVisibility(e.target.value as ProjectVisibility)}
             options={(['workspace', 'restricted'] as const).map((v) => ({
               value: v,
-              label: VISIBILITY_LABEL[v],
+              label: visibilityLabel(v),
             }))}
           />
         </>
       )}
       <SelectField
-        label="Parent project"
+        label={t('project.parent')}
         value={parentId}
         onChange={(e) => setParentId(e.target.value)}
         options={[
-          { value: '', label: 'No parent' },
+          { value: '', label: t('project.noParent') },
           ...parents.map(({ project: p, depth }) => ({
             value: p.id,
             label: `${'— '.repeat(depth)}${p.name}`,
@@ -211,15 +211,15 @@ function ProjectForm({
         ]}
       />
       <Checkbox
-        label="Add to favourites"
+        label={t('project.favourite')}
         checked={favorite}
         onChange={(e) => setFavorite(e.target.checked)}
       />
       <div className="flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
-          Cancel
+          {t('common.cancel')}
         </Button>
-        <Button type="submit">{project ? 'Save' : 'Add'}</Button>
+        <Button type="submit">{project ? t('common.save') : t('common.add')}</Button>
       </div>
     </form>
   );
