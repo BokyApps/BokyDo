@@ -119,7 +119,13 @@ sealed interface Route {
 /** The signed-in app: task lists, quick add, browse and settings. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppShell(state: AppState, startWithQuickAdd: Boolean = false, onQuickAddOpened: () -> Unit = {}) {
+fun AppShell(
+    state: AppState,
+    startWithQuickAdd: Boolean = false,
+    quickAddText: String = "",
+    quickAddDetails: String = "",
+    onQuickAddOpened: () -> Unit = {},
+) {
     val app = LocalContext.current.app
     // "Today" moves at midnight even when nothing syncs.
     var clock by remember { mutableStateOf(0L) }
@@ -129,9 +135,10 @@ fun AppShell(state: AppState, startWithQuickAdd: Boolean = false, onQuickAddOpen
             clock++
         }
     }
+    // Every entry point (launcher, share, tile, shortcut) opens Today.
     var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
     var adding by remember { mutableStateOf(false) }
-    // The quick-add widget (or a share) can ask for the add sheet on open.
+    // The quick-add widget, tile, shortcut or a share can ask for the add sheet on open.
     LaunchedEffect(startWithQuickAdd) {
         if (startWithQuickAdd) {
             adding = true
@@ -264,7 +271,7 @@ fun AppShell(state: AppState, startWithQuickAdd: Boolean = false, onQuickAddOpen
 
     if (adding && defaults != null) {
         ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            QuickAddSheet(state, defaults, today, defaultLabels)
+            QuickAddSheet(state, defaults, today, defaultLabels, quickAddText, quickAddDetails)
         }
     }
 
@@ -688,10 +695,19 @@ private fun TaskLabelsDialog(state: AppState, task: Task, onDismiss: () -> Unit,
  * in the JavaScript sandbox; where that isn't available, the text is added as it is.
  */
 @Composable
-private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: String, defaultLabels: List<String> = emptyList()) {
+private fun QuickAddSheet(
+    state: AppState,
+    defaultProjectId: String,
+    today: String,
+    defaultLabels: List<String> = emptyList(),
+    initialText: String = "",
+    initialDetails: String = "",
+) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(initialText.take(2000)) }
+    // The rest of a share: kept, editable, and written as the task's description.
+    var details by remember { mutableStateOf(initialDetails.take(16000)) }
     var disabled by remember { mutableStateOf(setOf<String>()) }
     var parsed by remember { mutableStateOf(QuickAdd.Parsed.plain("")) }
     var parsedFor by remember { mutableStateOf("") }
@@ -721,11 +737,14 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
                 app.quickAddParser.parse(QuickAdd.input(text, state, defaultProjectId, now, disabled))
                     ?.let { QuickAdd.parseResult(it, text) } ?: QuickAdd.Parsed.plain(text)
             }
-            val commands = QuickAdd.commands(text, current, defaultProjectId, null, today, prefs, defaultLabels)
+            val commands = QuickAdd.commands(
+                text, current, defaultProjectId, null, today, prefs, defaultLabels, description = details,
+            )
             if (commands.isEmpty()) return@launch
             app.sendAll(commands)
             note = "Added “${current.content.ifBlank { text.trim() }}”"
             text = ""
+            details = ""
             disabled = emptySet()
         }
     }
@@ -742,6 +761,15 @@ private fun QuickAddSheet(state: AppState, defaultProjectId: String, today: Stri
             keyboardActions = KeyboardActions(onDone = { submit() }),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
         )
+        if (details.isNotEmpty()) {
+            OutlinedTextField(
+                value = details,
+                onValueChange = { details = it.take(16000) },
+                label = { Text("Description") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         val chips = chipsFor(parsed, state, today)
         if (chips.isNotEmpty()) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -142,6 +142,8 @@ object QuickAdd {
         today: String,
         prefs: Prefs,
         defaultLabels: List<String> = emptyList(),
+        /** Extra detail beyond the title: a share's remaining lines, prefilled for the user. */
+        description: String = "",
         newId: () -> String = { Ids.newId() },
     ): List<Pair<String, JsonObject>> {
         val taskId = newId()
@@ -156,6 +158,7 @@ object QuickAdd {
             val sectionId = if (p.projectId != null) p.sectionId else p.sectionId ?: defaultSectionId
             put("sectionId", sectionId?.let(::JsonPrimitive) ?: JsonNull)
             put("priority", p.priority ?: 4)
+            if (description.isNotBlank()) put("description", description.take(16000))
             put("due", p.due?.let { taskDue(it, today, prefs) } ?: JsonNull)
             putJsonArray("labels") { labels.forEach { add(JsonPrimitive(it)) } }
             p.deadline?.let { put("deadline", it) }
