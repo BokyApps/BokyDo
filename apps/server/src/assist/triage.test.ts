@@ -150,11 +150,11 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
 
     // High confidence task applied (not to shared project), low confidence not applied
     expect(suggestions).toHaveLength(2);
-    expect(suggestions[0].projectId).toBe(work);
-    expect(suggestions[1].projectId).toBeNull();
+    expect(suggestions[0]!.projectId).toBe(work);
+    expect(suggestions[1]!.projectId).toBeNull();
     expect(applied).toHaveLength(1);
-    expect(applied[0].taskId).toBe(high);
-    expect(applied[0].projectId).toBe(work);
+    expect(applied[0]!.taskId).toBe(high);
+    expect(applied[0]!.projectId).toBe(work);
 
     // Task should be moved (not in shared project)
     await alice.sync.run();
