@@ -94,7 +94,18 @@ async function seed(page, csrf) {
       due: due('2030-03-01'),
       description: 'See [the docs](https://example.com/docs).',
     }),
+    task('Call the nursery', {
+      due: due('2030-03-04', '09:30'),
+      durationMinutes: 30,
+      labels: ['errand'],
+    }),
+    task('Water the beds', {
+      due: due('2030-03-04', null, { rrule: 'FREQ=WEEKLY;BYDAY=MO', anchor: 'scheduled' }),
+    }),
+    task('Write the report', { priority: 2 }),
     // A task with sub-tasks, so the collapse toggle and the drag handle are on screen (F-041).
+    // It goes last: the dragging checks move the first row down one and expect it to land second,
+    // which only holds between two rows without children.
     {
       type: 'task_add',
       uuid: id(),
@@ -111,15 +122,6 @@ async function seed(page, csrf) {
         content: 'Draft the notes',
       },
     },
-    task('Call the nursery', {
-      due: due('2030-03-04', '09:30'),
-      durationMinutes: 30,
-      labels: ['errand'],
-    }),
-    task('Water the beds', {
-      due: due('2030-03-04', null, { rrule: 'FREQ=WEEKLY;BYDAY=MO', anchor: 'scheduled' }),
-    }),
-    task('Write the report', { priority: 2 }),
     { type: 'filter_add', uuid: id(), args: { id: filter, name: 'Urgent', query: 'p1' } },
   ].map((c, i) => (c.type === 'task_add' ? { ...c, args: { ...c.args, childOrder: `a${i}` } } : c));
   const res = await page.request.post(`${BASE}/api/v1/sync`, {
@@ -539,7 +541,9 @@ async function keyboardPass({ browser, project, csrfOf }) {
   if ((await down.count()) === 0) problem('dragging', 'the task menu has no "Move down"');
   else {
     await down.click();
-    await page.waitForTimeout(700);
+    // The move is a sync command: it round-trips the server and the row re-sorts from the
+    // response, which can take longer than a plain DOM update on a busy machine.
+    await page.waitForTimeout(1500);
     const after = await titles();
     after[1] === first[0]
       ? ok('"Move down" reorders without dragging')

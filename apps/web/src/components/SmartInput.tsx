@@ -133,7 +133,17 @@ export function SmartInput({
 
   const textClass = 'm-0 w-full p-0 text-sm font-medium leading-6 break-words whitespace-pre-wrap';
   return (
-    <div className="relative">
+    // ARIA 1.2's combobox pattern needs the role on an element that may hold one (a textarea may
+    // not), so the wrapper owns the popup state and the textarea is the autocompleting text field.
+    <div
+      className="relative"
+      role="combobox"
+      aria-label="Task name"
+      aria-haspopup="listbox"
+      aria-expanded={showList}
+      aria-controls={showList ? listId : undefined}
+      aria-activedescendant={showList ? `${listId}-${selected}` : undefined}
+    >
       <div
         aria-hidden
         className={`pointer-events-none absolute inset-0 text-transparent ${textClass}`}
@@ -146,11 +156,7 @@ export function SmartInput({
         rows={1}
         aria-label="Task name"
         placeholder={placeholder}
-        role="combobox"
         aria-autocomplete="list"
-        aria-expanded={showList}
-        aria-controls={showList ? listId : undefined}
-        aria-activedescendant={showList ? `${listId}-${selected}` : undefined}
         spellCheck
         className={`relative block resize-none overflow-hidden bg-transparent text-fg placeholder:text-muted focus:outline-none ${textClass}`}
         value={value}
