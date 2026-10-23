@@ -89,6 +89,22 @@ export function reconcileOverrides(
   return kept;
 }
 
+/**
+ * Keep the project picks the user made for the tasks that are still in the draft. The live model
+ * owns the draft while a live session runs, so a task it removed takes its pick with it.
+ */
+export function keepOverrides(
+  overrides: ProjectOverrides,
+  draft: RambleResolvedTask[],
+): Record<string, string> {
+  const refs = new Set(draft.map((t) => t.ref));
+  const kept: Record<string, string> = {};
+  for (const [ref, projectId] of Object.entries(overrides)) {
+    if (refs.has(ref) && projectId !== undefined) kept[ref] = projectId;
+  }
+  return kept;
+}
+
 /** Which tasks the last extraction added or changed, for highlighting. Removed ones are gone. */
 export function changeKinds(ops: RambleOpSummary[]): Map<string, 'added' | 'changed'> {
   const kinds = new Map<string, 'added' | 'changed'>();

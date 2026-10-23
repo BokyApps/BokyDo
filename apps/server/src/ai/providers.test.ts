@@ -56,9 +56,15 @@ const BASE: Record<string, string> = {
   gemini: 'https://generativelanguage.googleapis.com/v1beta',
   'openai-compatible': 'https://llm.example/v1',
   groq: 'https://api.groq.com/openai/v1',
+  'chatgpt-subscription': 'https://chatgpt.com/backend-api/codex',
 };
 
-function ctx(provider: AiProvider, fetch: OutboundFetch, model = 'm-1'): AiCallContext {
+function ctx(
+  provider: AiProvider,
+  fetch: OutboundFetch,
+  model = 'm-1',
+  accountId: string | null = null,
+): AiCallContext {
   return {
     credential: {
       id: 'c',
@@ -67,6 +73,7 @@ function ctx(provider: AiProvider, fetch: OutboundFetch, model = 'm-1'): AiCallC
       baseUrl: BASE[provider]!,
       apiKey: KEY,
       headers: {},
+      accountId,
     },
     model,
     fetch,
@@ -532,6 +539,213 @@ describe('chat: Gemini dialect', () => {
   it('reports a blocked prompt as refused', async () => {
     const f = fake({ json: { promptFeedback: { blockReason: 'SAFETY' } } });
     expect((await chat(ctx('gemini', f.fetch), ask, noSleep)).stop).toBe('refused');
+  });
+});
+
+describe('chat: Responses dialect (ChatGPT / Codex)', () => {
+  /** The backend answers as a stream: these are the events one reply is made of. */
+  const stream = (
+    parts: unknown[],
+    done: { status?: string; usage?: unknown; output?: unknown } = {},
+  ) =>
+    sse([
+      ...parts,
+      {
+        type: 'response.completed',
+        response: {
+          status: done.status ?? 'completed',
+          usage: done.usage ?? { input_tokens: 12, output_tokens: 3 },
+          ...(done.output ? { output: done.output } : {}),
+        },
+      },
+    ]);
+
+  it('sends the request to the Codex backend and reads the answer', async () => {
+    const f = fake({ chunks: stream([{ type: 'response.output_text.delta', delta: 'Hi!' }]) });
+    const r = await chat(
+      ctx('chatgpt-subscription', f.fetch, 'gpt-5-codex', 'acct-1'),
+      ask,
+      noSleep,
+    );
+    expect(r).toEqual({
+      text: 'Hi!',
+      toolCalls: [],
+      stop: 'end',
+      usage: { inputTokens: 12, outputTokens: 3, audioSeconds: 0 },
+    });
+    const s = f.seen[0]!;
+    expect(s.url).toBe('https://chatgpt.com/backend-api/codex/responses');
+    expect(s.headers.authorization).toBe(`Bearer ${KEY}`);
+    // The account the token belongs to travels in a header, never in the body.
+    expect(s.headers['chatgpt-account-id']).toBe('acct-1');
+    expect(s.headers['openai-beta']).toBe('responses=experimental');
+    // The backend only knows the Codex CLI: it wants to know who is calling.
+    expect(s.headers.originator).toBe('codex_cli_rs');
+    expect(s.headers['user-agent']).toContain('codex_cli_rs');
+    expect(s.headers.session_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(s.body).not.toContain('acct-1');
+    const body = JSON.parse(s.body);
+    // Only the fields the backend takes, and the Codex identity in the instructions.
+    expect(body).toEqual({
+      model: 'gpt-5-codex',
+      input: [{ role: 'user', content: 'Hello' }],
+      instructions: 'You are Codex, based on GPT-5.\n\nBe brief.',
+      stream: true,
+      store: false,
+    });
+    expect(body).not.toHaveProperty('max_output_tokens');
+    expect(body).not.toHaveProperty('temperature');
+  });
+
+  it('round-trips tool calls and tool results', async () => {
+    const f = fake({
+      chunks: stream([
+        {
+          type: 'response.output_item.done',
+          item: { type: 'function_call', call_id: 'call_a', name: 'find', arguments: '{"q":"x"}' },
+        },
+        {
+          type: 'response.output_item.done',
+          item: { type: 'function_call', call_id: 'call_b', name: 'find', arguments: '{oops' },
+        },
+      ]),
+    });
+    const r = await chat(
+      ctx('chatgpt-subscription', f.fetch),
+      {
+        messages: [
+          { role: 'user', content: 'go' },
+          {
+            role: 'assistant',
+            content: 'Looking',
+            toolCalls: [{ id: 'a', name: 'find', input: { q: 'y' } }],
+          },
+          { role: 'tool', toolCallId: 'a', name: 'find', content: '1' },
+        ],
+        maxOutputTokens: 64,
+        tools: [{ name: 'find', description: 'd', parameters: { type: 'object' } }],
+        toolChoice: { name: 'find' },
+      },
+      noSleep,
+    );
+    expect(r.toolCalls).toEqual([
+      { id: 'call_a', name: 'find', input: { q: 'x' } },
+      { id: 'call_b', name: 'find', input: undefined },
+    ]);
+    expect(r.stop).toBe('tool_use');
+    const body = JSON.parse(f.seen[0]!.body);
+    expect(body.input).toEqual([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'Looking' },
+      { type: 'function_call', call_id: 'a', name: 'find', arguments: '{"q":"y"}' },
+      { type: 'function_call_output', call_id: 'a', output: '1' },
+    ]);
+    expect(body.tool_choice).toEqual({ type: 'function', name: 'find' });
+    expect(body.tools).toEqual([
+      { type: 'function', name: 'find', description: 'd', parameters: { type: 'object' } },
+    ]);
+  });
+
+  it('reads a tool call whose arguments arrive in pieces', async () => {
+    const f = fake({
+      chunks: stream([
+        {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: { type: 'function_call', call_id: 'call_1', name: 'find', arguments: '' },
+        },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"q":' },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: '"z"}' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call' } },
+      ]),
+    });
+    const r = await chat(ctx('chatgpt-subscription', f.fetch), ask, noSleep);
+    expect(r.toolCalls).toEqual([{ id: 'call_1', name: 'find', input: { q: 'z' } }]);
+  });
+
+  it('asks for a JSON reply with a schema, as a tool the model must call', async () => {
+    const f = fake({
+      chunks: stream([
+        {
+          type: 'response.output_item.done',
+          item: { type: 'function_call', call_id: 'call_1', name: 'answer', arguments: '{"a":1}' },
+        },
+      ]),
+    });
+    const r = await chat(
+      ctx('chatgpt-subscription', f.fetch),
+      { ...ask, json: { name: 'answer', schema: { type: 'object' } } },
+      noSleep,
+    );
+    // The answer is the tool call, not the text around it.
+    expect(r.text).toBe('{"a":1}');
+    expect(r.toolCalls).toEqual([]);
+    expect(r.stop).toBe('end');
+    const body = JSON.parse(f.seen[0]!.body);
+    expect(body.tool_choice).toEqual({ type: 'function', name: 'answer' });
+    expect(body.tools).toEqual([
+      {
+        type: 'function',
+        name: 'answer',
+        description: 'Give your answer by calling this tool.',
+        parameters: { type: 'object' },
+      },
+    ]);
+    expect(body).not.toHaveProperty('text');
+  });
+
+  it('streams the answer and the tool calls', async () => {
+    const pieces: string[] = [];
+    const f = fake({
+      chunks: stream(
+        [
+          { type: 'response.output_text.delta', delta: 'A' },
+          { type: 'response.output_text.delta', delta: 'B' },
+          {
+            type: 'response.output_item.done',
+            item: {
+              type: 'function_call',
+              call_id: 'call_1',
+              name: 'find',
+              arguments: '{"q":"z"}',
+            },
+          },
+        ],
+        { usage: { input_tokens: 3, output_tokens: 4 } },
+      ),
+    });
+    const r = await chat(ctx('chatgpt-subscription', f.fetch), ask, {
+      ...noSleep,
+      onText: (d) => pieces.push(d),
+    });
+    expect(pieces).toEqual(['A', 'B']);
+    expect(r).toEqual({
+      text: 'AB',
+      toolCalls: [{ id: 'call_1', name: 'find', input: { q: 'z' } }],
+      stop: 'tool_use',
+      usage: { inputTokens: 3, outputTokens: 4, audioSeconds: 0 },
+    });
+    expect(f.seen[0]!.headers.accept).toBe('text/event-stream');
+    expect(JSON.parse(f.seen[0]!.body).stream).toBe(true);
+  });
+
+  it('reports an incomplete answer as cut short and a refusal as refused', async () => {
+    const cut = fake({
+      chunks: stream([{ type: 'response.output_text.delta', delta: 'pa' }], {
+        status: 'incomplete',
+      }),
+    });
+    expect((await chat(ctx('chatgpt-subscription', cut.fetch), ask, noSleep)).stop).toBe('length');
+    const refused = fake({
+      chunks: stream([], {
+        output: [{ type: 'message', role: 'assistant', content: [{ type: 'refusal' }] }],
+      }),
+    });
+    expect((await chat(ctx('chatgpt-subscription', refused.fetch), ask, noSleep)).stop).toBe(
+      'refused',
+    );
   });
 });
 

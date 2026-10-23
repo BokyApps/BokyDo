@@ -1,0 +1,1 @@
+Self-hostable task manager with offline-first Android app.

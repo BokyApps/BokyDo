@@ -1,6 +1,7 @@
 import type { PublicSettings, SettingsPatch } from '@bokydo/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { Alert, Button, SelectField, TextField } from './ui.js';
@@ -13,6 +14,7 @@ export function EmailSettingsForm({
   settings: PublicSettings;
   onSaved?: () => void;
 }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [host, setHost] = useState(settings['email.smtpHost'] ?? '');
   const [port, setPort] = useState(String(settings['email.smtpPort']));
@@ -55,13 +57,13 @@ export function EmailSettingsForm({
       <form onSubmit={submit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-[1fr_7rem]">
           <TextField
-            label="SMTP server"
+            label={t('admin.email.smtpServer')}
             placeholder="smtp.example.com"
             value={host}
             onChange={(e) => setHost(e.target.value)}
           />
           <TextField
-            label="Port"
+            label={t('admin.email.port')}
             type="number"
             min={1}
             max={65535}
@@ -70,55 +72,51 @@ export function EmailSettingsForm({
           />
         </div>
         <SelectField
-          label="Encryption"
+          label={t('admin.email.encryption')}
           value={security}
           onChange={(e) => setSecurity(e.target.value)}
           options={[
-            { value: 'starttls', label: 'STARTTLS (usually port 587)' },
-            { value: 'tls', label: 'TLS (usually port 465)' },
-            { value: 'none', label: 'None (not recommended)' },
+            { value: 'starttls', label: t('admin.email.starttls') },
+            { value: 'tls', label: t('admin.email.tls') },
+            { value: 'none', label: t('admin.email.none') },
           ]}
         />
-        {security === 'none' && (
-          <Alert tone="warning">
-            Without encryption, your SMTP password and emails cross the network in plain text.
-          </Alert>
-        )}
+        {security === 'none' && <Alert tone="warning">{t('admin.email.noneWarning')}</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
           <TextField
-            label="Username"
+            label={t('admin.email.username')}
             autoComplete="off"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
           <TextField
-            label="Password"
+            label={t('admin.email.password')}
             type="password"
             autoComplete="new-password"
-            placeholder={passwordIsSet ? '•••••••• (unchanged)' : ''}
+            placeholder={passwordIsSet ? t('admin.email.passwordUnchanged') : ''}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <TextField
-            label="From address"
+            label={t('admin.email.fromAddress')}
             type="email"
             placeholder="tasks@example.com"
             value={fromAddress}
             onChange={(e) => setFromAddress(e.target.value)}
           />
           <TextField
-            label="From name"
+            label={t('admin.email.fromName')}
             value={fromName}
             onChange={(e) => setFromName(e.target.value)}
           />
         </div>
         {save.isError && <Alert>{errorMessage(save.error)}</Alert>}
-        {save.isSuccess && <Alert tone="success">Email settings saved.</Alert>}
+        {save.isSuccess && <Alert tone="success">{t('admin.email.saved')}</Alert>}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" busy={save.isPending}>
-            Save email settings
+            {t('admin.email.save')}
           </Button>
           {passwordIsSet && (
             <Button
@@ -126,7 +124,7 @@ export function EmailSettingsForm({
               variant="ghost"
               onClick={() => save.mutate({ 'email.smtpPassword': null })}
             >
-              Remove stored password
+              {t('admin.email.removePassword')}
             </Button>
           )}
         </div>
@@ -140,16 +138,16 @@ export function EmailSettingsForm({
         className="space-y-3 border-t border-line pt-4"
       >
         <TextField
-          label="Send a test email to"
+          label={t('admin.email.testTo')}
           type="email"
           required
           value={testTo}
           onChange={(e) => setTestTo(e.target.value)}
         />
         {test.isError && <Alert>{errorMessage(test.error)}</Alert>}
-        {test.isSuccess && <Alert tone="success">Sent. Check the inbox (and spam folder).</Alert>}
+        {test.isSuccess && <Alert tone="success">{t('admin.email.testSent')}</Alert>}
         <Button type="submit" variant="secondary" busy={test.isPending}>
-          Send test email
+          {t('admin.email.sendTest')}
         </Button>
       </form>
     </div>

@@ -9,6 +9,7 @@ import { newId } from '../db/ids.js';
 import { users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
 import type { OutboundFetch, Resolver } from '../net/outbound.js';
+import type { LiveConnector } from '../net/outbound-ws.js';
 import { hashPassword } from '../security/password.js';
 import { freshDb } from './db.js';
 
@@ -29,6 +30,9 @@ export async function testApp(
     resolver?: Resolver;
     aiUserFetch?: OutboundFetch;
     importFetch?: OutboundFetch;
+    /** Injected clock for the Todoist importer's completed-task windows (tests only). */
+    importNow?: () => Date;
+    liveConnect?: LiveConnector;
     logger?: Parameters<typeof buildApp>[0]['logger'];
   } = {},
 ): Promise<TestApp> {
@@ -44,6 +48,8 @@ export async function testApp(
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
     ...(opts.aiUserFetch ? { aiUserFetch: opts.aiUserFetch } : {}),
     ...(opts.importFetch ? { importFetch: opts.importFetch } : {}),
+    ...(opts.importNow ? { importNow: opts.importNow } : {}),
+    ...(opts.liveConnect ? { liveConnect: opts.liveConnect } : {}),
     secretsDir: dataDir,
     onRestored: () => undefined,
     ...(opts.logger ? { logger: opts.logger } : {}),

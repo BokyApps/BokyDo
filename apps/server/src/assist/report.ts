@@ -1,5 +1,5 @@
 import { addDays, localNow } from '@bokydo/nlp';
-import { resolvePreferences, type ReportKind, type ReportResponse } from '@bokydo/shared';
+import { resolvePreferences, type Due, type ReportKind, type ReportResponse } from '@bokydo/shared';
 import { and, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import type { AiService, AiUser } from '../ai/service.js';
 import type { Database } from '../db/client.js';
@@ -39,6 +39,43 @@ export async function report(
   /** The moment it is for (a scheduled report's time); default: now. */
   at: Date = new Date(),
 ): Promise<ReportResponse> {
+  const ctx = await loadReportContext(db, user, kind, projectId, scope, defaultTimeZone, at);
+  if (!ctx) throw new AssistNotFoundError();
+  return writeReport(ai, user, kind, projectId, ctx, signal);
+}
+
+/** Everything `writeReport` needs: plain data, no database. */
+export interface ReportContext {
+  timeZone: string;
+  now: { date: string; time: string };
+  soon: string;
+  since: Date;
+  at: Date;
+  data: {
+    names: Map<string, string>;
+    open: {
+      content: string;
+      projectId: string;
+      dueDate: string | null;
+      due: Due | null;
+      priority: number;
+      assigneeId: string | null;
+    }[];
+    done: { content: string; projectId: string; completedById: string | null }[];
+    people: Map<string, string>;
+  };
+}
+
+/** The database half of a report: what the caller may see. Null when the project isn't theirs. */
+export async function loadReportContext(
+  db: Database,
+  user: AiUser,
+  kind: ReportKind,
+  projectId: string | undefined,
+  scope: ProjectScope,
+  defaultTimeZone: string,
+  at: Date,
+): Promise<ReportContext | null> {
   const [userRow] = await db
     .select({ preferences: users.preferences })
     .from(users)
@@ -126,7 +163,24 @@ export async function report(
       people,
     };
   });
-  if (!data) throw new AssistNotFoundError();
+  if (!data) return null;
+  return { timeZone, now, soon, since, at, data };
+}
+
+/**
+ * The model half of a report, with no data access (the eval harness calls it with synthetic
+ * tasks). The model only writes prose from the data handed to it.
+ */
+export async function writeReport(
+  ai: AiService,
+  user: AiUser,
+  kind: ReportKind,
+  projectId: string | undefined,
+  ctx: ReportContext,
+  signal?: AbortSignal,
+): Promise<ReportResponse> {
+  const { timeZone, now, soon, data } = ctx;
+  const { at } = ctx;
 
   const overdue = data.open.filter((t) => t.dueDate && t.dueDate < now.date);
   const today = data.open.filter((t) => t.dueDate === now.date);

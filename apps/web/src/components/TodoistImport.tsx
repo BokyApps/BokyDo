@@ -1,4 +1,5 @@
 import {
+  type TodoistCompletedWindow,
   type TodoistImportChoices,
   type TodoistImportPlanSummary,
   type TodoistImportRun,
@@ -10,6 +11,7 @@ import {
 import type { SyncState } from '@bokydo/sync-client';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { useStore, useSyncState } from '../lib/sync.js';
@@ -42,7 +44,6 @@ const LATEST_KEY = ['todoist-import-latest'];
 const RUN_POLL_MS = 1500;
 
 const isCode = (err: unknown, code: string) => err instanceof ApiError && err.code === code;
-const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const withMember = (set: Set<string>, id: string, on: boolean) => {
   const next = new Set(set);
   if (on) next.add(id);
@@ -55,24 +56,22 @@ const withMember = (set: Set<string>, id: string, on: boolean) => {
  * what comes over, check it with a dry run, then import in the background and watch the progress.
  */
 export function TodoistImport() {
+  const { t } = useTranslation();
   return (
     <Card>
-      <h2 className="mb-1 font-semibold">Import from Todoist</h2>
-      <p className="mb-4 text-sm text-muted">
-        Bring projects, tasks, labels, filters and comments over from Todoist. You choose what comes
-        and can check what would happen before anything is written. Running it again only adds what
-        was skipped before.
-      </p>
+      <h2 className="mb-1 font-semibold">{t('import.title')}</h2>
+      <p className="mb-4 text-sm text-muted">{t('import.description')}</p>
       <TodoistImportFlow />
     </Card>
   );
 }
 
 function TodoistImportFlow() {
+  const { t } = useTranslation();
   const store = useStore();
   const state = useSyncState();
   const queryClient = useQueryClient();
-  const targets = useMemo(() => mergeTargets(state), [state]);
+  const targets = useMemo(() => mergeTargets(state, t), [state, t]);
   const checkHintId = useId();
   const [token, setToken] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -194,27 +193,24 @@ function TodoistImportFlow() {
 
   return (
     <div className="space-y-6">
-      {expired && (
-        <Alert tone="warning">
-          A Todoist connection lasts 30 minutes. Connect again to continue.
-        </Alert>
-      )}
+      {expired && <Alert tone="warning">{t('import.expired')}</Alert>}
       {runId !== null && <RunPanel run={run.data} error={run.isError ? run.error : null} />}
 
       {preview && draft ? (
         <>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <p className="text-sm">
-              Connected as <strong>{preview.account.name}</strong> ({preview.account.email}). The
-              connection lasts until{' '}
-              {new Date(preview.expiresAt).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
+              {t('import.connectedAs', {
+                name: preview.account.name,
+                email: preview.account.email,
+                until: new Date(preview.expiresAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }),
               })}
-              .
             </p>
             <Button variant="ghost" disabled={runActive} onClick={() => void startOver()}>
-              Start over
+              {t('import.startOver')}
             </Button>
           </div>
           <ChooseSections
@@ -226,7 +222,7 @@ function TodoistImportFlow() {
           />
           <div className="space-y-3 border-t border-line pt-4">
             <p aria-live="polite" className="text-sm font-medium">
-              {checked ? 'Check finished. Nothing has been imported yet.' : ''}
+              {checked ? t('import.checkFinished') : ''}
             </p>
             {plan.isError && <Alert tone="error">{errorMessage(plan.error)}</Alert>}
             {start.isError && <Alert tone="error">{errorMessage(start.error)}</Alert>}
@@ -238,7 +234,7 @@ function TodoistImportFlow() {
                 aria-describedby={checkHintId}
                 onClick={() => body && plan.mutate(body)}
               >
-                Check
+                {t('import.check')}
               </Button>
               <Button
                 busy={start.isPending}
@@ -246,15 +242,15 @@ function TodoistImportFlow() {
                 aria-describedby={checkHintId}
                 onClick={() => body && start.mutate(body)}
               >
-                Import
+                {t('import.import')}
               </Button>
             </div>
             <p id={checkHintId} className="text-xs text-muted">
               {runActive
-                ? 'An import is running. Its progress is shown above.'
+                ? t('import.hintRunning')
                 : checked
-                  ? 'Import starts the import with these choices.'
-                  : 'Check first to see what the import would do. Import is available once you have checked the current choices.'}
+                  ? t('import.hintReady')
+                  : t('import.hintCheckFirst')}
             </p>
           </div>
         </>
@@ -284,14 +280,12 @@ function ConnectForm({
   busy: boolean;
   error: unknown;
 }) {
+  const { t } = useTranslation();
   return (
     <form onSubmit={onSubmit} className="space-y-3">
-      <p className="text-sm text-muted">
-        In Todoist, open Settings → Integrations → Developer and copy your API token. BokyDo uses it
-        once to read your account and does not store it.
-      </p>
+      <p className="text-sm text-muted">{t('import.connectIntro')}</p>
       <TextField
-        label="Todoist API token"
+        label={t('import.token')}
         type="password"
         autoComplete="off"
         spellCheck={false}
@@ -301,7 +295,7 @@ function ConnectForm({
       />
       {error !== null && <Alert tone="error">{errorMessage(error)}</Alert>}
       <Button type="submit" busy={busy} disabled={!token.trim()}>
-        Connect to Todoist
+        {t('import.connect')}
       </Button>
     </form>
   );
@@ -371,31 +365,40 @@ function ProjectsSection({
   targets: MergeTarget[];
   edit: (change: (d: ImportDraft) => ImportDraft) => void;
 }) {
+  const { t } = useTranslation();
   const rows = useMemo(() => projectRows(preview.projects), [preview.projects]);
   const teams = teamOptions(state);
   const actionOptions = [
-    { value: 'new', label: 'Import as new' },
-    ...targets.map((t) => ({ value: `merge:${t.id}`, label: `Add to ${t.label}` })),
-    { value: 'skip', label: 'Skip' },
+    { value: 'new', label: t('import.actionNew') },
+    ...targets.map((target) => ({
+      value: `merge:${target.id}`,
+      label: t('import.actionMerge', { name: target.label }),
+    })),
+    { value: 'skip', label: t('import.actionSkip') },
   ];
   const teamOptionsList = [
-    { value: '', label: 'Personal (only you)' },
-    ...teams.map((t) => ({ value: t.id, label: t.name })),
+    { value: '', label: t('import.personalTeam') },
+    ...teams.map((team) => ({ value: team.id, label: team.name })),
   ];
-  const nameOf = (id: string) => state.projects.get(id)?.name ?? 'a BokyDo project';
+  const nameOf = (id: string) => state.projects.get(id)?.name ?? t('import.bokyDoProject');
   const setChoice = (id: string, choice: ProjectChoice) =>
     edit((d) => ({ ...d, projects: new Map(d.projects).set(id, choice) }));
   const { totals } = preview;
 
   return (
     <Section
-      title="Projects"
-      hint={`Found ${count(totals.projects, 'project')}, ${count(totals.tasks, 'task')}, ${count(totals.sections, 'section')} and ${count(totals.comments, 'comment')}. Projects set to Skip are not imported.`}
+      title={t('import.projectsTitle')}
+      hint={t('import.projectsHint', {
+        projects: t('import.countProject', { count: totals.projects }),
+        tasks: t('import.countTask', { count: totals.tasks }),
+        sections: t('import.countSection', { count: totals.sections }),
+        comments: t('import.countComment', { count: totals.comments }),
+      })}
     >
       <ul className="divide-y divide-line">
         {rows.map(({ project: p, depth }) => {
           const choice = draft.projects.get(p.id) ?? { action: 'skip' as const };
-          const title = p.isInbox ? 'Todoist Inbox' : p.name;
+          const title = p.isInbox ? t('import.todoistInbox') : p.name;
           return (
             <li key={p.id} className="py-3" style={{ paddingLeft: `${depth * 1.25}rem` }}>
               <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -405,7 +408,7 @@ function ProjectsSection({
                 </div>
                 <div className="w-full space-y-2 sm:w-64">
                   <SelectField
-                    label={`What to do with ${title}`}
+                    label={t('import.actionFor', { title })}
                     hideLabel
                     value={choiceValue(choice)}
                     options={actionOptions}
@@ -413,7 +416,7 @@ function ProjectsSection({
                   />
                   {choice.action === 'new' && !p.parentId && teams.length > 0 && (
                     <SelectField
-                      label={`Team for ${title}`}
+                      label={t('import.teamFor', { title })}
                       hideLabel
                       value={choice.workspaceId ?? ''}
                       options={teamOptionsList}
@@ -439,19 +442,20 @@ function ProjectNotes({
   project: TodoistPreviewProject;
   nameOf: (id: string) => string;
 }) {
+  const { t } = useTranslation();
   return (
     <>
       <p className="text-xs text-muted">
-        {count(p.tasks, 'task')} · {count(p.sections, 'section')} · {count(p.comments, 'comment')}
+        {t('import.notesCounts', {
+          tasks: t('import.countTask', { count: p.tasks }),
+          sections: t('import.countSection', { count: p.sections }),
+          comments: t('import.countComment', { count: p.comments }),
+        })}
       </p>
-      {p.isArchived && (
-        <p className="text-xs text-muted">Archived in Todoist, so skipped by default.</p>
-      )}
-      {p.isShared && <p className="text-xs text-muted">Shared in Todoist.</p>}
+      {p.isArchived && <p className="text-xs text-muted">{t('import.notesArchived')}</p>}
+      {p.isShared && <p className="text-xs text-muted">{t('import.notesShared')}</p>}
       {p.importedAs && (
-        <p className="text-xs text-muted">
-          Imported before into {nameOf(p.importedAs)}. Only tasks not brought over yet are added.
-        </p>
+        <p className="text-xs text-muted">{t('import.notesImportedAs', { name: nameOf(p.importedAs) })}</p>
       )}
     </>
   );
@@ -466,17 +470,20 @@ function LabelsSection({
   draft: ImportDraft;
   edit: (change: (d: ImportDraft) => ImportDraft) => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <Section title="Labels">
-      {preview.labels.length === 0 && <p className="text-sm text-muted">No labels.</p>}
+    <Section title={t('import.labelsTitle')}>
+      {preview.labels.length === 0 && <p className="text-sm text-muted">{t('import.noLabels')}</p>}
       {preview.labels.map((l) => (
         <Checkbox
           key={l.id}
           label={l.name}
           hint={
             l.invalid
-              ? "Can't import: has spaces, @ or #"
-              : `${count(l.tasks, 'task')}${l.exists ? '. You already have this label, so it merges with yours.' : ''}`
+              ? t('import.labelInvalid')
+              : `${t('import.countTask', { count: l.tasks })}${
+                  l.exists ? t('import.labelMerges') : ''
+                }`
           }
           disabled={l.invalid}
           checked={!l.invalid && draft.labels.has(l.id)}
@@ -498,9 +505,10 @@ function FiltersSection({
   draft: ImportDraft;
   edit: (change: (d: ImportDraft) => ImportDraft) => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <Section title="Filters">
-      {preview.filters.length === 0 && <p className="text-sm text-muted">No filters.</p>}
+    <Section title={t('import.filtersTitle')}>
+      {preview.filters.length === 0 && <p className="text-sm text-muted">{t('import.noFilters')}</p>}
       {preview.filters.map((f: TodoistPreviewFilter) => (
         <Checkbox
           key={f.id}
@@ -508,7 +516,7 @@ function FiltersSection({
           hint={
             <span className="block space-y-1">
               <code className="block font-mono break-all">{f.query}</code>
-              {filterNotes(f, preview, draft).map((note) => (
+              {filterNotes(t, f, preview, draft).map((note) => (
                 <span key={note} className="block">
                   {note}
                 </span>
@@ -535,15 +543,50 @@ function CommentsSection({
   draft: ImportDraft;
   edit: (change: (d: ImportDraft) => ImportDraft) => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <Section title="Comments">
-      <Checkbox
-        label="Import comments"
-        hint={`${count(preview.totals.comments, 'comment')} on tasks and projects. Attached files are not copied; a comment keeps a link to the file on Todoist.`}
-        checked={draft.comments}
-        onChange={(e) => edit((d) => ({ ...d, comments: e.target.checked }))}
-      />
-    </Section>
+    <>
+      <Section title={t('import.commentsTitle')}>
+        <Checkbox
+          label={t('import.commentsLabel')}
+          hint={t('import.commentsHint', {
+            comments: t('import.countComment', { count: preview.totals.comments }),
+          })}
+          checked={draft.comments}
+          onChange={(e) => edit((d) => ({ ...d, comments: e.target.checked }))}
+        />
+      </Section>
+      <Section title={t('import.completedTitle')}>
+        <Checkbox
+          label={t('import.completedLabel')}
+          hint={
+            preview.totals.completed > 0
+              ? t('import.completedHint', {
+                  completed: t('import.countCompleted', { count: preview.totals.completed }),
+                })
+              : t('import.completedNone')
+          }
+          checked={draft.completed}
+          onChange={(e) => edit((d) => ({ ...d, completed: e.target.checked }))}
+        />
+        {draft.completed && (
+          <div className="mt-4">
+            <SelectField
+              label={t('import.completedWindow')}
+              value={draft.completedWindow}
+              onChange={(e) =>
+                edit((d) => ({ ...d, completedWindow: e.target.value as TodoistCompletedWindow }))
+              }
+              options={[
+                { value: '1m', label: t('import.completedWindow1m') },
+                { value: '3m', label: t('import.completedWindow3m') },
+              ]}
+              hint={t('import.completedWindowHint')}
+            />
+          </div>
+        )}
+      </Section>
+    </>
   );
 }
 
@@ -558,20 +601,19 @@ function PeopleSection({
   state: SyncState;
   edit: (change: (d: ImportDraft) => ImportDraft) => void;
 }) {
+  const { t } = useTranslation();
   const others = preview.people.filter((p) => !p.isYou);
   const userOptions = [
-    { value: '', label: 'Leave unassigned' },
+    { value: '', label: t('import.leaveUnassigned') },
     ...collaboratorOptions(state).map((c) => ({ value: c.id, label: c.username })),
   ];
   return (
     <Section
-      title="People"
-      hint="Tasks assigned to someone on Todoist go to the BokyDo user you pick, or stay unassigned. Nobody is invited: their tasks are kept only where that user is already a member of the project."
+      title={t('import.peopleTitle')}
+      hint={t('import.peopleHint')}
     >
       {others.length === 0 && (
-        <p className="text-sm text-muted">
-          No one else is on this Todoist account&apos;s projects.
-        </p>
+        <p className="text-sm text-muted">{t('import.noOthers')}</p>
       )}
       {others.map((p) => (
         <div key={p.id} className="flex flex-wrap items-center justify-between gap-2">
@@ -581,7 +623,7 @@ function PeopleSection({
           </div>
           <div className="w-full sm:w-64">
             <SelectField
-              label={`BokyDo user for ${p.name}`}
+              label={t('import.userFor', { name: p.name })}
               hideLabel
               value={draft.people.get(p.id) ?? ''}
               options={userOptions}
@@ -600,10 +642,11 @@ function PeopleSection({
 }
 
 function PlanResult({ summary }: { summary: TodoistImportPlanSummary }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3 rounded-lg bg-surface-alt p-3">
-      <p className="text-sm font-medium">What an import with these choices would do:</p>
-      <CountList rows={countRows(summary.counts)} />
+      <p className="text-sm font-medium">{t('import.planHeading')}</p>
+      <CountList rows={countRows(t, summary.counts)} />
       <WarningGroups warnings={summary.warnings} more={summary.moreWarnings} />
     </div>
   );
@@ -623,11 +666,13 @@ function CountList({ rows }: { rows: { label: string; value: number }[] }) {
 }
 
 function WarningGroups({ warnings, more }: { warnings: TodoistImportWarning[]; more: number }) {
-  const groups = groupWarnings(warnings);
-  if (groups.length === 0 && more === 0) return <p className="text-sm text-muted">No warnings.</p>;
+  const { t } = useTranslation();
+  const groups = groupWarnings(t, warnings);
+  if (groups.length === 0 && more === 0)
+    return <p className="text-sm text-muted">{t('import.noWarnings')}</p>;
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium">Things to check</p>
+      <p className="text-sm font-medium">{t('import.thingsToCheck')}</p>
       {groups.map((g) => (
         <details
           key={g.kind}
@@ -635,7 +680,7 @@ function WarningGroups({ warnings, more }: { warnings: TodoistImportWarning[]; m
           className="rounded-lg border border-line bg-surface px-3 py-2 text-sm"
         >
           <summary className="cursor-pointer font-medium">
-            {g.label} ({g.messages.length})
+            {t('import.warningGroup', { label: g.label, count: g.messages.length })}
           </summary>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
             {g.messages.map((m, i) => (
@@ -644,26 +689,27 @@ function WarningGroups({ warnings, more }: { warnings: TodoistImportWarning[]; m
           </ul>
         </details>
       ))}
-      {more > 0 && <p className="text-sm text-muted">and {more} more</p>}
+      {more > 0 && <p className="text-sm text-muted">{t('import.andMoreWarning', { count: more })}</p>}
     </div>
   );
 }
 
 function RunPanel({ run, error }: { run: TodoistImportRun | undefined; error: unknown }) {
+  const { t } = useTranslation();
   const headingId = useId();
   const progressId = useId();
   if (error !== null) return <Alert tone="error">{errorMessage(error)}</Alert>;
-  if (!run) return <p className="text-sm text-muted">Starting the import…</p>;
+  if (!run) return <p className="text-sm text-muted">{t('import.startingRun')}</p>;
   const status =
     run.status === 'running'
-      ? 'Import running.'
+      ? t('import.statusRunning')
       : run.status === 'done'
-        ? 'Import finished.'
-        : 'Import failed.';
+        ? t('import.statusDone')
+        : t('import.statusFailed');
   return (
     <section aria-labelledby={headingId} className="space-y-3 rounded-lg border border-line p-4">
       <h3 id={headingId} className="text-sm font-semibold">
-        Import from Todoist
+        {t('import.title')}
       </h3>
       <p aria-live="polite" className="text-sm font-medium">
         {status}
@@ -671,7 +717,7 @@ function RunPanel({ run, error }: { run: TodoistImportRun | undefined; error: un
       {run.status === 'running' && (
         <div className="space-y-1">
           <p id={progressId} className="text-sm">
-            Changes applied: {run.done} of {run.total}
+            {t('import.progress', { done: run.done, total: run.total })}
           </p>
           <progress
             aria-labelledby={progressId}
@@ -683,11 +729,11 @@ function RunPanel({ run, error }: { run: TodoistImportRun | undefined; error: un
       )}
       {run.status === 'done' && run.counts && (
         <>
-          <CountList rows={countRows(run.counts)} />
+          <CountList rows={countRows(t, run.counts)} />
           <WarningGroups warnings={run.warnings} more={0} />
         </>
       )}
-      {run.status === 'failed' && <Alert tone="error">{runErrorMessage(run.error)}</Alert>}
+      {run.status === 'failed' && <Alert tone="error">{runErrorMessage(t, run.error)}</Alert>}
     </section>
   );
 }

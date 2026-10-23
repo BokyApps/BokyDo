@@ -62,6 +62,8 @@ class BokyDoApp : Application() {
     lateinit var client: BokyDoClient
     lateinit var engine: SyncEngine
     lateinit var quickAddParser: QuickAddParser
+    lateinit var device: DeviceSettings
+    lateinit var filterEngine: FilterEngine
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _screen = MutableStateFlow<AppScreen>(AppScreen.Connect())
@@ -77,7 +79,11 @@ class BokyDoApp : Application() {
         store = SqliteStore(this)
         client = BokyDoClient(sessions)
         engine = SyncEngine(client, store)
-        quickAddParser = QuickAddParser(this)
+        // One sandbox for the web's own parsers (quick add and saved filters).
+        val js = JsRuntime(this)
+        quickAddParser = QuickAddParser(js)
+        filterEngine = FilterEngine(js)
+        device = DeviceSettings(this)
         Notifier.createChannels(this)
         UnifiedPush.load(this)
         if (sessions.load() != null) {
@@ -144,6 +150,7 @@ class BokyDoApp : Application() {
                 _screen.value = AppScreen.Home
                 schedulePeriodicSync()
                 syncNow()
+                WidgetRefresh.updateAll(this@BokyDoApp)
                 liveSync.restart()
             } catch (_: Exception) {
                 _screen.value = AppScreen.Connect("Signing in didn't finish. Try again.")
@@ -162,6 +169,7 @@ class BokyDoApp : Application() {
         client.signOut()
         store.clear()
         ReminderAlarms.clear(this)
+        WidgetRefresh.updateAll(this)
         WorkManager.getInstance(this).cancelUniqueWork(PERIODIC)
         _screen.value = AppScreen.Connect(message)
     }
@@ -186,6 +194,8 @@ class BokyDoApp : Application() {
     fun sendAll(commands: List<Pair<String, JsonObject>>) {
         for ((type, args) in commands) engine.enqueue(type, args)
         syncNow()
+        // Show the queued change on the home screen at once, like the app's optimistic state.
+        scope.launch { WidgetRefresh.updateAll(this@BokyDoApp) }
     }
 
     // ---- sync ----
@@ -196,6 +206,7 @@ class BokyDoApp : Application() {
             syncError.value = null
             // Due dates and reminders may have changed: re-arm the next alarm.
             ReminderAlarms.reschedule(this)
+            WidgetRefresh.updateAll(this)
         } catch (_: SignedOutException) {
             signOut("You were signed out. Sign in again to keep syncing.")
         } catch (e: ServerException) {

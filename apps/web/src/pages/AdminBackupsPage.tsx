@@ -1,6 +1,7 @@
 import type { PublicSettings, SettingsPatch } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Dialog, SelectField, TextField } from '../components/ui.js';
 import { api, ApiError, uploadFile } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
@@ -29,16 +30,16 @@ const size = (n: number) =>
       ? `${(n / (1 << 20)).toFixed(1)} MB`
       : `${Math.ceil(n / 1024)} KB`;
 
-const RESTORE_MESSAGES: Record<string, string> = {
-  backup_passphrase_or_damaged: 'The passphrase is wrong, or the file is damaged.',
-  backup_incompatible:
-    'This backup comes from a newer or different BokyDo; restore it on a matching version.',
-  backup_invalid: "That file isn't a usable BokyDo backup.",
-  backup_busy: 'A restore is already running.',
-};
+const RESTORE_ERROR_CODES = [
+  'backup_passphrase_or_damaged',
+  'backup_incompatible',
+  'backup_invalid',
+  'backup_busy',
+] as const;
 
 /** Admin → Backups: schedule, passphrase, the stored backups, upload and restore. */
 export function AdminBackupsPage() {
+  const { t } = useTranslation();
   const { data: settings } = useQuery(adminSettingsQuery);
   const backups = useQuery(backupsQuery);
   const queryClient = useQueryClient();
@@ -81,16 +82,16 @@ export function AdminBackupsPage() {
   const errors = [now, remove, download, upload].filter((m) => m.isError);
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">Backups</h1>
+      <h1 className="text-2xl font-semibold">{t('admin.backups.title')}</h1>
       <Card>
         <ScheduleForm settings={settings} />
       </Card>
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-semibold">Stored backups</h2>
+          <h2 className="text-base font-semibold">{t('admin.backups.storedTitle')}</h2>
           <div className="flex flex-wrap gap-2">
             <label className="inline-flex cursor-pointer items-center rounded-lg border border-line px-3 py-1.5 text-sm hover:bg-surface-alt focus-within:outline focus-within:outline-2">
-              Upload a backup…
+              {t('admin.backups.upload')}
               <input
                 type="file"
                 accept=".bkdo"
@@ -107,54 +108,55 @@ export function AdminBackupsPage() {
               disabled={!backups.data?.passphraseSet}
               onClick={() => now.mutate()}
             >
-              Back up now
+              {t('admin.backups.now')}
             </Button>
           </div>
         </div>
-        <p className="mb-3 text-sm text-muted">
-          Backups hold everything (database, attachments and this server's keys), encrypted with
-          your passphrase, in the server's data folder. Download copies and keep them somewhere else
-          too: a backup on the same disk doesn't survive losing that disk.
-        </p>
+        <p className="mb-3 text-sm text-muted">{t('admin.backups.description')}</p>
         {errors.map((m, i) => (
           <Alert key={i}>{errorMessage(m.error)}</Alert>
         ))}
-        {list.length === 0 && <p className="text-sm text-muted">No backups yet.</p>}
+        {list.length === 0 && <p className="text-sm text-muted">{t('admin.backups.none')}</p>}
         <ul className="divide-y divide-line">
           {list.map((b) => (
             <li key={b.name} className="flex flex-wrap items-center justify-between gap-2 py-3">
               <div className="min-w-0">
                 <p className="font-medium break-all">{b.name}</p>
                 <p className="text-xs text-muted">
-                  {b.kind === 'pre-restore'
-                    ? 'Automatic, before a restore · '
-                    : b.kind === 'uploaded'
-                      ? 'Uploaded · '
-                      : ''}
-                  {b.createdAt ? new Date(b.createdAt).toLocaleString() : 'unreadable'} ·{' '}
-                  {size(b.size)}
-                  {b.app ? ` · BokyDo ${b.app}` : ''}
+                  {t('admin.backups.meta', {
+                    kind:
+                      b.kind === 'pre-restore'
+                        ? t('admin.backups.kindPreRestore')
+                        : b.kind === 'uploaded'
+                          ? t('admin.backups.kindUploaded')
+                          : '',
+                    created: b.createdAt
+                      ? new Date(b.createdAt).toLocaleString()
+                      : t('admin.backups.unreadable'),
+                    size: size(b.size),
+                    app: b.app ? ` · ${t('admin.backups.app', { version: b.app })}` : '',
+                  })}
                 </p>
               </div>
               <div className="flex flex-wrap gap-1">
                 <Button variant="ghost" onClick={() => download.mutate(b.name)}>
-                  Download
+                  {t('admin.backups.download')}
                 </Button>
                 <Button variant="ghost" onClick={() => setRestoring(b)}>
-                  Restore…
+                  {t('admin.backups.restoreButton')}
                 </Button>
                 <Button
                   variant="ghost"
                   onClick={() =>
                     void confirm({
-                      title: 'Delete this backup?',
+                      title: t('admin.backups.deleteTitle'),
                       message: b.name,
-                      confirmLabel: 'Delete',
+                      confirmLabel: t('common.delete'),
                       danger: true,
                     }).then((ok) => ok && remove.mutate(b.name))
                   }
                 >
-                  Delete
+                  {t('common.delete')}
                 </Button>
               </div>
             </li>
@@ -167,6 +169,7 @@ export function AdminBackupsPage() {
 }
 
 function ScheduleForm({ settings }: { settings: PublicSettings }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [schedule, setSchedule] = useState(settings['backups.schedule']);
   const [hour, setHour] = useState(String(settings['backups.hour']));
@@ -191,31 +194,33 @@ function ScheduleForm({ settings }: { settings: PublicSettings }) {
   const hasPassphrase = settings['backups.passphrase'].isSet;
   return (
     <form onSubmit={submit} className="space-y-3">
-      <h2 className="text-base font-semibold">Schedule</h2>
+      <h2 className="text-base font-semibold">{t('admin.backups.scheduleTitle')}</h2>
       <TextField
         label={
-          hasPassphrase ? 'New backup passphrase (leave empty to keep it)' : 'Backup passphrase'
+          hasPassphrase
+            ? t('admin.backups.newPassphrase')
+            : t('admin.backups.passphrase')
         }
         type="password"
         autoComplete="new-password"
         minLength={12}
         value={passphrase}
-        hint="At least 12 characters. Keep it safe and away from the server: without it no backup can be restored, and changing it doesn't re-encrypt older backups."
+        hint={t('admin.backups.passphraseHint')}
         onChange={(e) => setPassphrase(e.target.value)}
       />
       <SelectField
-        label="Automatic backups"
+        label={t('admin.backups.automatic')}
         value={schedule}
         onChange={(e) => setSchedule(e.target.value as typeof schedule)}
         options={[
-          { value: 'off', label: 'Off' },
-          { value: 'daily', label: 'Daily' },
-          { value: 'weekly', label: 'Weekly' },
+          { value: 'off', label: t('settings.notifications.off') },
+          { value: 'daily', label: t('admin.backups.daily') },
+          { value: 'weekly', label: t('admin.backups.weekly') },
         ]}
       />
       <div className="grid gap-3 sm:grid-cols-2">
         <SelectField
-          label="After (server time zone)"
+          label={t('admin.backups.after')}
           value={hour}
           onChange={(e) => setHour(e.target.value)}
           options={Array.from({ length: 24 }, (_, h) => ({
@@ -224,7 +229,7 @@ function ScheduleForm({ settings }: { settings: PublicSettings }) {
           }))}
         />
         <TextField
-          label="Keep this many"
+          label={t('admin.backups.retention')}
           type="number"
           min={1}
           max={90}
@@ -233,18 +238,19 @@ function ScheduleForm({ settings }: { settings: PublicSettings }) {
         />
       </div>
       {schedule !== 'off' && !hasPassphrase && !passphrase && (
-        <Alert tone="warning">Set a passphrase: automatic backups don't run without one.</Alert>
+        <Alert tone="warning">{t('admin.backups.passphraseWarning')}</Alert>
       )}
       {save.isError && <Alert>{errorMessage(save.error)}</Alert>}
-      {save.isSuccess && <Alert tone="success">Saved.</Alert>}
+      {save.isSuccess && <Alert tone="success">{t('admin.saved')}</Alert>}
       <Button type="submit" busy={save.isPending}>
-        Save
+        {t('common.save')}
       </Button>
     </form>
   );
 }
 
 function RestoreDialog({ backup, onClose }: { backup: BackupInfo; onClose: () => void }) {
+  const { t } = useTranslation();
   const sensitive = useSensitive();
   const [passphrase, setPassphrase] = useState('');
   const [typed, setTyped] = useState('');
@@ -263,14 +269,14 @@ function RestoreDialog({ backup, onClose }: { backup: BackupInfo; onClose: () =>
   });
   const failure =
     restore.error instanceof ApiError
-      ? (RESTORE_MESSAGES[restore.error.code] ?? errorMessage(restore.error))
+      ? RESTORE_ERROR_CODES.includes(restore.error.code as (typeof RESTORE_ERROR_CODES)[number])
+        ? t(`admin.backups.restoreError.${restore.error.code}`)
+        : errorMessage(restore.error)
       : null;
   return (
-    <Dialog open onClose={onClose} title="Restore this backup?">
+    <Dialog open onClose={onClose} title={t('admin.backups.restoreTitle')}>
       {restore.isSuccess ? (
-        <Alert tone="success">
-          Restored. The server is restarting; you'll be taken to sign in.
-        </Alert>
+        <Alert tone="success">{t('admin.backups.restoreSuccess')}</Alert>
       ) : (
         <form
           className="space-y-3"
@@ -280,21 +286,22 @@ function RestoreDialog({ backup, onClose }: { backup: BackupInfo; onClose: () =>
           }}
         >
           <p className="text-sm">
-            Everything on this server is replaced by{' '}
-            <strong className="break-all">{backup.name}</strong>
-            {backup.createdAt ? ` (${new Date(backup.createdAt).toLocaleString()})` : ''}. Changes
-            made since then are lost; a backup of the current state is made first. Everyone is
-            signed out, and API tokens and connected apps have to be set up again.
+            {t('admin.backups.restoreDescription', {
+              name: backup.name,
+              created: backup.createdAt
+                ? ` (${new Date(backup.createdAt).toLocaleString()})`
+                : '',
+            })}
           </p>
           <TextField
-            label="Passphrase of this backup"
+            label={t('admin.backups.restorePassphrase')}
             type="password"
             autoComplete="off"
             value={passphrase}
             onChange={(e) => setPassphrase(e.target.value)}
           />
           <TextField
-            label="Type RESTORE to confirm"
+            label={t('admin.backups.restoreConfirm')}
             autoComplete="off"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
@@ -302,7 +309,7 @@ function RestoreDialog({ backup, onClose }: { backup: BackupInfo; onClose: () =>
           {failure && <Alert>{failure}</Alert>}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               type="submit"
@@ -310,7 +317,7 @@ function RestoreDialog({ backup, onClose }: { backup: BackupInfo; onClose: () =>
               busy={restore.isPending}
               disabled={!passphrase || typed !== 'RESTORE'}
             >
-              Restore
+              {t('admin.backups.restoreSubmit')}
             </Button>
           </div>
         </form>

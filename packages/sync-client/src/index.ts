@@ -1,3 +1,10 @@
 export { applyCommand } from './reducers.js';
-export { applyServerResponse, emptyState, type SyncState } from './state.js';
-export { SyncStore, type SyncStoreOptions, type Transport } from './store.js';
+export {
+  applyServerResponse,
+  deserializeState,
+  emptyState,
+  serializeState,
+  type SerializedState,
+  type SyncState,
+} from './state.js';
+export { SyncStore, type SyncSnapshot, type SyncStoreOptions, type Transport } from './store.js';

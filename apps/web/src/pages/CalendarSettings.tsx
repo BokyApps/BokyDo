@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Checkbox, SelectField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { calendarFeedsQuery, feedHref, type CalendarFeed } from '../lib/calendar-feeds.js';
@@ -17,6 +18,7 @@ interface Revealed {
 }
 
 export function CalendarSettings() {
+  const { t } = useTranslation();
   const state = useSyncState();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -33,10 +35,11 @@ export function CalendarSettings() {
   const savedFilters = [...state.filters.values()].sort((a, b) => a.name.localeCompare(b.name));
   const targets =
     kind === 'project'
-      ? projects.map((p) => ({ value: p.id, label: p.isInbox ? 'Inbox' : p.name }))
+      ? projects.map((p) => ({ value: p.id, label: p.isInbox ? t('nav.inbox') : p.name }))
       : savedFilters.map((f) => ({ value: f.id, label: f.name }));
   const chosen = targets.some((t) => t.value === targetId) ? targetId : (targets[0]?.value ?? '');
-  const nameOf = (id: string) => targets.find((t) => t.value === id)?.label ?? 'Calendar';
+  const nameOf = (id: string) =>
+    targets.find((t) => t.value === id)?.label ?? t('settings.calendar.defaultName');
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: calendarFeedsQuery.queryKey });
   const reveal = (feedId: string, name: string, url: string) => {
@@ -60,7 +63,7 @@ export function CalendarSettings() {
     mutationFn: (feed: CalendarFeed) =>
       api<{ id: string; url: string }>('POST', `/api/v1/calendar-feeds/${feed.id}/rotate`, {}),
     onSuccess: (res, feed) => {
-      reveal(res.id, feed.targetName ?? 'Calendar', res.url);
+      reveal(res.id, feed.targetName ?? t('settings.calendar.defaultName'), res.url);
       void refresh();
     },
   });
@@ -74,18 +77,17 @@ export function CalendarSettings() {
 
   const resetLink = async (feed: CalendarFeed) => {
     const ok = await confirm({
-      title: 'Reset this link?',
-      message:
-        'You get a new link and the old one stops working at once, so any calendar subscribed to it must be updated.',
-      confirmLabel: 'Reset link',
+      title: t('settings.calendar.resetTitle'),
+      message: t('settings.calendar.resetMessage'),
+      confirmLabel: t('settings.calendar.resetLink'),
     });
     if (ok) rotate.mutate(feed);
   };
   const deleteFeed = async (feed: CalendarFeed) => {
     const ok = await confirm({
-      title: 'Delete this feed?',
-      message: 'The link stops working at once. Calendars subscribed to it will go empty.',
-      confirmLabel: 'Delete',
+      title: t('settings.calendar.deleteTitle'),
+      message: t('settings.calendar.deleteMessage'),
+      confirmLabel: t('common.delete'),
       danger: true,
     });
     if (ok) remove.mutate(feed);
@@ -97,21 +99,17 @@ export function CalendarSettings() {
   return (
     <>
       <Card className="mb-6">
-        <h2 className="mb-2 font-semibold">Calendar feeds</h2>
-        <p className="mb-4 text-sm text-muted">
-          Subscribe to a project or saved filter from Google Calendar, Apple Calendar, Thunderbird
-          or any app that can subscribe to a calendar link. Tasks with a due date appear as events
-          and the calendar refreshes by itself.{' '}
-          <strong>Anyone with a link can see those tasks' titles and dates</strong> without signing
-          in, so treat it like a password. You can reset or delete a link at any time.
-        </p>
+        <h2 className="mb-2 font-semibold">{t('settings.calendar.feedsTitle')}</h2>
+        <p className="mb-4 text-sm text-muted">{t('settings.calendar.feedsDescription')}</p>
 
         {revealed && (
           <div className="mb-4 space-y-2 rounded-lg border border-line bg-surface-alt p-3">
-            <p className="text-sm font-medium">Link for “{revealed.name}”</p>
+            <p className="text-sm font-medium">
+              {t('settings.calendar.linkFor', { name: revealed.name })}
+            </p>
             <input
               readOnly
-              aria-label={`Calendar link for ${revealed.name}`}
+              aria-label={t('settings.calendar.linkForAria', { name: revealed.name })}
               value={revealed.href}
               onFocus={(e) => e.currentTarget.select()}
               className="w-full rounded-lg border border-line bg-bg px-3 py-2 font-mono text-xs"
@@ -123,19 +121,16 @@ export function CalendarSettings() {
                   void navigator.clipboard.writeText(revealed.href).then(() => setCopied(true))
                 }
               >
-                {copied ? 'Copied' : 'Copy link'}
+                {copied ? t('settings.calendar.copied') : t('settings.calendar.copyLink')}
               </Button>
               <a className="text-sm underline" href={revealed.href.replace(/^https?:/, 'webcal:')}>
-                Open in calendar app
+                {t('settings.calendar.openInApp')}
               </a>
               <Button variant="ghost" onClick={() => setRevealed(null)}>
-                Done
+                {t('settings.calendar.done')}
               </Button>
             </div>
-            <p className="text-xs text-muted">
-              This is the only time the link is shown. If you lose it, reset the link to get a new
-              one.
-            </p>
+            <p className="text-xs text-muted">{t('settings.calendar.onlyShownOnce')}</p>
           </div>
         )}
 
@@ -147,28 +142,35 @@ export function CalendarSettings() {
 
         {feeds.isPending ? (
           <p role="status" className="text-sm text-muted">
-            Loading…
+            {t('common.loading')}
           </p>
         ) : list.length === 0 ? (
-          <p className="mb-2 text-sm text-muted">You have no calendar feeds yet.</p>
+          <p className="mb-2 text-sm text-muted">{t('settings.calendar.none')}</p>
         ) : (
-          <ul className="mb-2 divide-y divide-line" aria-label="Your calendar feeds">
+          <ul className="mb-2 divide-y divide-line" aria-label={t('settings.calendar.yourFeeds')}>
             {list.map((feed) => (
               <li key={feed.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">
-                    {feed.targetName ?? 'No longer available'}{' '}
+                    {feed.targetName ?? t('settings.calendar.targetGone')}{' '}
                     <span className="font-normal text-muted">
-                      · {feed.kind === 'project' ? 'Project' : 'Saved filter'}
-                      {feed.showDescriptions ? ' · with descriptions' : ''}
+                      ·{' '}
+                      {feed.kind === 'project'
+                        ? t('settings.calendar.project')
+                        : t('settings.calendar.filter')}
+                      {feed.showDescriptions ? ` · ${t('settings.calendar.withDescriptions')}` : ''}
                     </span>
                   </p>
                   <p className="text-xs text-muted">
                     {feed.targetName === null
-                      ? 'The project or filter was deleted or is no longer shared with you, so this link shows nothing. '
+                      ? `${t('settings.calendar.targetGoneNote')} `
                       : ''}
-                    Created {when(feed.createdAt)} ·{' '}
-                    {feed.lastUsedAt ? `last used ${when(feed.lastUsedAt)}` : 'not used yet'}
+                    {t('settings.calendar.created', {
+                      date: when(feed.createdAt),
+                      last: feed.lastUsedAt
+                        ? t('settings.calendar.lastUsed', { date: when(feed.lastUsedAt) })
+                        : t('settings.calendar.notUsedYet'),
+                    })}
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -176,17 +178,21 @@ export function CalendarSettings() {
                     variant="secondary"
                     busy={rotate.isPending && rotate.variables?.id === feed.id}
                     onClick={() => void resetLink(feed)}
-                    aria-label={`Reset link for ${feed.targetName ?? 'this feed'}`}
+                    aria-label={t('settings.calendar.resetFor', {
+                      name: feed.targetName ?? t('settings.calendar.thisFeed'),
+                    })}
                   >
-                    Reset link
+                    {t('settings.calendar.resetLink')}
                   </Button>
                   <Button
                     variant="danger"
                     busy={remove.isPending && remove.variables?.id === feed.id}
                     onClick={() => void deleteFeed(feed)}
-                    aria-label={`Delete feed for ${feed.targetName ?? 'this feed'}`}
+                    aria-label={t('settings.calendar.deleteFor', {
+                      name: feed.targetName ?? t('settings.calendar.thisFeed'),
+                    })}
                   >
-                    Delete
+                    {t('common.delete')}
                   </Button>
                 </div>
               </li>
@@ -196,7 +202,7 @@ export function CalendarSettings() {
       </Card>
 
       <Card className="mb-6">
-        <h2 className="mb-4 font-semibold">New calendar feed</h2>
+        <h2 className="mb-4 font-semibold">{t('settings.calendar.newFeedTitle')}</h2>
         <form
           className="space-y-4"
           onSubmit={(e) => {
@@ -206,38 +212,38 @@ export function CalendarSettings() {
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <SelectField
-              label="Show"
+              label={t('settings.calendar.show')}
               value={kind}
               onChange={(e) => {
                 setKind(e.target.value as 'project' | 'filter');
                 setTargetId('');
               }}
               options={[
-                { value: 'project', label: 'A project' },
-                { value: 'filter', label: 'A saved filter' },
+                { value: 'project', label: t('settings.calendar.showProject') },
+                { value: 'filter', label: t('settings.calendar.showFilter') },
               ]}
             />
             <SelectField
-              label={kind === 'project' ? 'Project' : 'Saved filter'}
+              label={kind === 'project' ? t('settings.calendar.project') : t('settings.calendar.filter')}
               value={chosen}
               onChange={(e) => setTargetId(e.target.value)}
-              options={targets.length ? targets : [{ value: '', label: 'None yet' }]}
+              options={targets.length ? targets : [{ value: '', label: t('settings.calendar.noneYet') }]}
               disabled={targets.length === 0}
               hint={
                 kind === 'filter' && targets.length === 0
-                  ? 'Create a saved filter first (Filters & Labels).'
+                  ? t('settings.calendar.noneYetHint')
                   : undefined
               }
             />
           </div>
           <Checkbox
-            label="Include task descriptions"
-            hint="Off by default: descriptions are shared with the calendar app and its servers."
+            label={t('settings.calendar.includeDescriptions')}
+            hint={t('settings.calendar.includeHint')}
             checked={showDescriptions}
             onChange={(e) => setShowDescriptions(e.target.checked)}
           />
           <Button type="submit" busy={create.isPending} disabled={!chosen}>
-            Create link
+            {t('settings.calendar.createLink')}
           </Button>
         </form>
       </Card>

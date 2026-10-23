@@ -7,6 +7,7 @@ import {
 } from '@bokydo/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ActivityIcon,
   ArchiveIcon,
@@ -49,6 +50,7 @@ export function InboxPage() {
 }
 
 export function ProjectView({ projectId }: { projectId: string }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const project = state.projects.get(projectId);
   const ui = useTaskUI();
@@ -66,9 +68,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   if (!project)
     return (
       <Page>
-        <EmptyState title="Project not found">
-          It may have been deleted, or it's no longer shared with you.
-        </EmptyState>
+        <EmptyState title={t('project.notFoundTitle')}>{t('project.notFoundMessage')}</EmptyState>
       </Page>
     );
 
@@ -87,7 +87,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   return (
     <Page wide={layout !== 'list'}>
       <ViewHeader
-        title={project.isInbox ? 'Inbox' : project.name}
+        title={project.isInbox ? t('project.inbox') : project.name}
         options={options}
         setOptions={setOptions}
         allow={{ completed: layout === 'list' }}
@@ -100,7 +100,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
                 onClick={() => setSharing(true)}
                 className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt"
                 aria-label={
-                  members.length > 1 ? `Shared with ${members.length - 1} others` : 'Share'
+                  members.length > 1
+                    ? t('project.sharedWith', { count: members.length - 1 })
+                    : t('project.share')
                 }
               >
                 {members.length > 1 ? (
@@ -110,7 +112,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
                     ))}
                   </span>
                 ) : (
-                  'Share'
+                  t('project.share')
                 )}
               </button>
               <ProjectMenu project={project} onEdit={() => setEditing(true)} onTalk={setTalk} />
@@ -124,13 +126,13 @@ export function ProjectView({ projectId }: { projectId: string }) {
         <ReportPanel
           key={projectId}
           target={{ kind: 'project', projectId }}
-          label="Status report"
+          label={t('project.statusReport')}
           className="mb-4"
         />
       )}
       {project.isArchived && (
         <div className="mb-4">
-          <Alert tone="info">This project is archived and read-only.</Alert>
+          <Alert tone="info">{t('project.archived')}</Alert>
         </div>
       )}
       {layout === 'board' && (
@@ -140,7 +142,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
               ? [
                   {
                     id: 'none',
-                    title: '(No section)',
+                    title: t('project.noSection'),
                     tasks: groups.get(null) ?? [],
                     addDefaults: { projectId, sectionId: null },
                   },
@@ -195,10 +197,12 @@ export function ProjectView({ projectId }: { projectId: string }) {
         </TaskDnd>
       )}
       {layout === 'list' && canEdit && <AddSection projectId={projectId} />}
-      {empty && !canEdit && <EmptyState title="Nothing here yet" />}
+      {empty && !canEdit && <EmptyState title={t('project.emptyTitle')} />}
       {layout === 'list' && options.showCompleted && (
-        <section className="mt-8" aria-label="Completed tasks">
-          <h2 className="mb-1 border-b border-line pb-1 font-semibold text-muted">Completed</h2>
+        <section className="mt-8" aria-label={t('project.completedTasks')}>
+          <h2 className="mb-1 border-b border-line pb-1 font-semibold text-muted">
+            {t('project.completed')}
+          </h2>
           <CompletedList projectId={projectId} />
         </section>
       )}
@@ -208,7 +212,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
         open={talk !== null}
         onClose={() => setTalk(null)}
         title={
-          talk === 'activity' ? `Activity in “${project.name}”` : `Comments on “${project.name}”`
+          talk === 'activity'
+            ? t('project.activityIn', { name: project.name })
+            : t('project.commentsOn', { name: project.name })
         }
       >
         {talk === 'activity' ? (
@@ -230,6 +236,7 @@ function ProjectMenu({
   onEdit: () => void;
   onTalk: (tab: 'comments' | 'activity') => void;
 }) {
+  const { t } = useTranslation();
   const send = useSend();
   const confirm = useConfirm();
   const navigate = useNavigate();
@@ -241,7 +248,7 @@ function ProjectMenu({
     downloadText(safeFilename(project.name), serializeTemplateCsv(template));
     const { tasks } = countTemplate(template);
     toast({
-      message: `Exported ${tasks} ${tasks === 1 ? 'task' : 'tasks'}. Completed tasks aren't included.`,
+      message: t('project.exported', { count: tasks }),
     });
   };
   return (
@@ -250,7 +257,7 @@ function ProjectMenu({
       trigger={(p) => (
         <button
           type="button"
-          aria-label="Project actions"
+          aria-label={t('project.actions')}
           className="rounded-md p-1 text-muted hover:bg-surface-alt"
           {...p}
         >
@@ -268,7 +275,7 @@ function ProjectMenu({
                 onEdit();
               }}
             >
-              Edit project
+              {t('project.editProject')}
             </MenuItem>
           )}
           <MenuItem
@@ -278,7 +285,7 @@ function ProjectMenu({
               onTalk('comments');
             }}
           >
-            Comments
+            {t('project.comments')}
           </MenuItem>
           <MenuItem
             icon={<ActivityIcon />}
@@ -287,7 +294,7 @@ function ProjectMenu({
               onTalk('activity');
             }}
           >
-            Activity
+            {t('project.activity')}
           </MenuItem>
           <MenuItem
             icon={<StarIcon filled={project.isFavorite} />}
@@ -296,7 +303,7 @@ function ProjectMenu({
               send('project_update', { id: project.id, isFavorite: !project.isFavorite });
             }}
           >
-            {project.isFavorite ? 'Remove from favourites' : 'Add to favourites'}
+            {project.isFavorite ? t('project.removeFavourite') : t('project.addFavourite')}
           </MenuItem>
           <MenuItem
             icon={<DownloadIcon />}
@@ -305,7 +312,7 @@ function ProjectMenu({
               exportCsv();
             }}
           >
-            Export as CSV
+            {t('project.exportCsv')}
           </MenuItem>
           {canManage && (
             <MenuItem
@@ -317,7 +324,7 @@ function ProjectMenu({
                 });
               }}
             >
-              {project.isArchived ? 'Unarchive' : 'Archive'}
+              {project.isArchived ? t('project.unarchive') : t('project.archive')}
             </MenuItem>
           )}
           {project.role === 'owner' && (
@@ -327,9 +334,9 @@ function ProjectMenu({
               onClick={() => {
                 close();
                 void confirm({
-                  title: 'Delete project?',
-                  message: `“${project.name}”, its sub-projects and all their tasks will be permanently deleted.`,
-                  confirmLabel: 'Delete',
+                  title: t('project.deleteTitle'),
+                  message: t('project.deleteMessage', { name: project.name }),
+                  confirmLabel: t('common.delete'),
                   danger: true,
                 }).then((ok) => {
                   if (ok) {
@@ -339,7 +346,7 @@ function ProjectMenu({
                 });
               }}
             >
-              Delete project
+              {t('project.deleteProject')}
             </MenuItem>
           )}
         </>
@@ -359,13 +366,14 @@ function SectionBlock({
   orderedIds: string[];
   canEdit: boolean;
 }) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
   return (
     <section className="mt-6" aria-label={section.name}>
       <div className="flex items-center gap-1 border-b border-line pb-1">
         <button
           type="button"
-          aria-label={collapsed ? 'Expand section' : 'Collapse section'}
+          aria-label={collapsed ? t('project.expandSection') : t('project.collapseSection')}
           className="text-muted"
           onClick={() => setCollapsed(!collapsed)}
         >
@@ -403,6 +411,7 @@ function SectionHeading({
   canEdit: boolean;
   compact?: boolean;
 }) {
+  const { t } = useTranslation();
   const send = useSend();
   const confirm = useConfirm();
   const [renaming, setRenaming] = useState(false);
@@ -421,7 +430,7 @@ function SectionHeading({
           <input
             autoFocus
             className={`${inputClass} py-1`}
-            aria-label="Section name"
+            aria-label={t('project.sectionName')}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onBlur={() => setRenaming(false)}
@@ -439,7 +448,7 @@ function SectionHeading({
           trigger={(p) => (
             <button
               type="button"
-              aria-label="Section actions"
+              aria-label={t('project.sectionActions')}
               className="rounded p-1 text-muted opacity-0 group-hover:opacity-100 hover:bg-surface-alt focus:opacity-100"
               {...p}
             >
@@ -457,7 +466,7 @@ function SectionHeading({
                   setRenaming(true);
                 }}
               >
-                Rename
+                {t('project.rename')}
               </MenuItem>
               <MenuItem
                 icon={<ArchiveIcon />}
@@ -466,7 +475,7 @@ function SectionHeading({
                   send('section_archive', { id: section.id });
                 }}
               >
-                Archive
+                {t('project.archive')}
               </MenuItem>
               <MenuItem
                 icon={<TrashIcon />}
@@ -474,14 +483,17 @@ function SectionHeading({
                 onClick={() => {
                   close();
                   void confirm({
-                    title: 'Delete section?',
-                    message: `“${section.name}” and its ${count} task(s) will be deleted.`,
-                    confirmLabel: 'Delete',
+                    title: t('project.deleteSectionTitle'),
+                    message: t('project.deleteSectionMessage', {
+                      name: section.name,
+                      count,
+                    }),
+                    confirmLabel: t('common.delete'),
                     danger: true,
                   }).then((ok) => ok && send('section_delete', { id: section.id }));
                 }}
               >
-                Delete
+                {t('common.delete')}
               </MenuItem>
             </>
           )}
@@ -492,6 +504,7 @@ function SectionHeading({
 }
 
 function AddSection({ projectId, column = false }: { projectId: string; column?: boolean }) {
+  const { t } = useTranslation();
   const send = useSend();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -508,7 +521,7 @@ function AddSection({ projectId, column = false }: { projectId: string; column?:
         onClick={() => setOpen(true)}
         className="flex w-full items-center gap-2 rounded-xl border border-dashed border-line px-3 py-2 text-sm text-muted hover:text-accent"
       >
-        <PlusIcon /> Add section
+        <PlusIcon /> {t('project.addSection')}
       </button>
     );
   if (!open)
@@ -519,7 +532,7 @@ function AddSection({ projectId, column = false }: { projectId: string; column?:
         className="mt-6 flex w-full items-center gap-2 text-sm text-muted hover:text-accent"
       >
         <span className="h-px flex-1 bg-line" />
-        <PlusIcon /> Add section
+        <PlusIcon /> {t('project.addSection')}
         <span className="h-px flex-1 bg-line" />
       </button>
     );
@@ -528,15 +541,15 @@ function AddSection({ projectId, column = false }: { projectId: string; column?:
       <input
         autoFocus
         className={inputClass}
-        placeholder="Name this section"
-        aria-label="Section name"
+        placeholder={t('project.nameThisSection')}
+        aria-label={t('project.sectionName')}
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
       />
-      <Button type="submit">Add</Button>
+      <Button type="submit">{t('common.add')}</Button>
       <Button variant="secondary" onClick={() => setOpen(false)}>
-        Cancel
+        {t('common.cancel')}
       </Button>
     </form>
   );

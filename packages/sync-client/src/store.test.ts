@@ -7,7 +7,8 @@ import {
   type Task,
 } from '@bokydo/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { SyncStore } from './store.js';
+import { applyServerResponse, emptyState } from './state.js';
+import { SyncStore, type SyncSnapshot } from './store.js';
 
 const USER = {
   id: 'u1',
@@ -265,11 +266,53 @@ describe('SyncStore', () => {
   });
 
   it('notifies subscribers', async () => {
-    const { store } = await ready();
+    const { store, calls } = await ready();
     const listener = vi.fn();
     store.subscribe(listener);
     store.enqueue(addTask('t1', 'x'));
     expect(listener).toHaveBeenCalled();
+    calls.at(-1)!.resolve(response());
+    await store.whenIdle();
+  });
+
+  it('hydrates a stored snapshot and retries its queue with the same cursor', async () => {
+    const t = manualTransport();
+    const store = new SyncStore(t.transport, { setTimer: () => undefined });
+    const restored = applyServerResponse(
+      emptyState(),
+      response({ fullSync: true, projects: [INBOX], tasks: [serverTask('t9', 'restored')] }),
+    );
+    const queued = addTask('t1', 'queued');
+    store.hydrate({ state: restored, queue: [queued], cursor: '7' });
+    expect(store.state.tasks.get('t9')).toMatchObject({ content: 'restored' });
+    expect(store.state.tasks.get('t1')).toMatchObject({ content: 'queued' });
+    expect(store.pendingCount).toBe(1);
+    void store.pull();
+    expect(t.calls[0]!.request.cursor).toBe('7');
+    expect(t.calls[0]!.request.commands).toEqual([queued]);
+  });
+
+  it('reports a snapshot after each enqueue and each confirmed sync', async () => {
+    const t = manualTransport();
+    const snapshots: SyncSnapshot[] = [];
+    const store = new SyncStore(t.transport, {
+      onPersist: (snapshot) => snapshots.push(snapshot),
+      setTimer: () => undefined,
+    });
+    const first = store.pull();
+    t.calls[0]!.resolve(response({ fullSync: true, projects: [INBOX] }));
+    await first;
+    const queued = addTask('t1', 'x');
+    store.enqueue(queued);
+    expect(snapshots.at(-1)!.queue).toEqual([queued]);
+    t.calls
+      .at(-1)!
+      .resolve(
+        response({ tasks: [serverTask('t1', 'x')], results: { [queued.uuid]: { ok: true } } }),
+      );
+    await store.whenIdle();
+    expect(snapshots.at(-1)!.queue).toEqual([]);
+    expect(snapshots.at(-1)!.state.tasks.has('t1')).toBe(true);
   });
 });
 
