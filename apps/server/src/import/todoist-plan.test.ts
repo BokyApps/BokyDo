@@ -20,6 +20,7 @@ function input(overrides: Partial<PlanInput> = {}, choices: Partial<PlanInput['c
       labels: ['l1', 'l2'],
       filters: ['f1', 'f2', 'f3'],
       comments: true,
+      attachments: false,
       people: [{ id: 'u2', userId: BEN }],
       ...choices,
     },
@@ -186,5 +187,41 @@ describe('planning an import', () => {
       projects: ['Work', 'My Project'],
       labels: ['deep-work', 'later'],
     });
+  });
+});
+
+describe('comment attachments', () => {
+  const attachmentOf = (plan: ReturnType<typeof planImport>) =>
+    plan.steps.find((s) => s.type === 'comment_add' && s.attachment)?.attachment;
+
+  it('marks an https file in a comment for download and counts it, under the comment project', () => {
+    const plan = planImport(input({}, { attachments: true }));
+    const work = argsOf(plan, 'task_add').find((t) => t.content === 'Write report');
+    expect(attachmentOf(plan)).toEqual({
+      name: 'q3.pdf',
+      url: 'https://files.todoist.com/x/q3.pdf',
+      projectId: work?.projectId,
+    });
+    expect(plan.counts.attachments).toBe(1);
+  });
+
+  it('leaves files as plain links when the choice is off', () => {
+    const plan = planImport(input());
+    expect(plan.steps.some((s) => s.attachment)).toBe(false);
+    expect(plan.counts.attachments).toBe(0);
+    // The comment still carries the link so nothing is lost.
+    expect(
+      argsOf(plan, 'comment_add').some((a) => String(a.content).includes('files.todoist.com')),
+    ).toBe(true);
+  });
+
+  it('never marks a non-https file for fetching', () => {
+    const raw = todoistFixture();
+    const note = raw.notes.find((n) => n.id === 'n2') as {
+      file_attachment: { file_url: string };
+    };
+    note.file_attachment.file_url = 'http://files.todoist.com/x/q3.pdf';
+    const plan = planImport(input({ snapshot: normalise(raw) }, { attachments: true }));
+    expect(plan.steps.some((s) => s.attachment)).toBe(false);
   });
 });

@@ -102,7 +102,8 @@ function PersonalTokens() {
     ...(inbox ? [{ project: inbox, depth: 0 }] : []),
     ...flattenTree(projectTree(state)),
   ];
-  const projectName = (id: string) => state.projects.get(id)?.name ?? t('settings.tokens.deletedProject');
+  const projectName = (id: string) =>
+    state.projects.get(id)?.name ?? t('settings.tokens.deletedProject');
   // Full access is the whole account (settings, labels, notifications): it can't be limited.
   const limitable = !scopes.has('sync');
   const limited = limitable ? limitTo : null;

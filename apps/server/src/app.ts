@@ -253,10 +253,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     fetch: createOutbound(PUBLIC_ONLY, deps.resolver),
   });
   // Todoist is on the public internet; the token goes nowhere else.
+  const attachmentStore = new AttachmentStore(deps.dataDir);
   const importer = new TodoistImporter({
     db,
     sync,
     fetch: deps.importFetch ?? createOutbound(PUBLIC_ONLY, deps.resolver),
+    store: attachmentStore,
+    settings,
     defaultTimeZone: () => settings.get('instance.defaultTimezone'),
     log: app.log,
     ...(deps.importNow ? { now: deps.importNow } : {}),
@@ -382,7 +385,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   registerProductivityRoutes(app, { db, settings });
   registerImportRoutes(app, importer);
-  const attachmentStore = new AttachmentStore(deps.dataDir);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,
     settings,

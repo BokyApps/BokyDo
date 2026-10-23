@@ -15,9 +15,11 @@ import {
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import {
+  attachments,
   comments,
   filters,
   importMappings,
@@ -29,7 +31,9 @@ import {
   tasks,
   users,
 } from '../db/schema.js';
-import type { OutboundFetch } from '../net/outbound.js';
+import { cleanFilename, sniff, type AttachmentStore } from '../attachments/store.js';
+import { OutboundError, type OutboundFetch } from '../net/outbound.js';
+import type { SettingsService } from '../settings/settings-service.js';
 import { allOf, nextOrderKey } from '../sync/handlers/common.js';
 import { dueColumns } from '../sync/handlers/tasks.js';
 import type { ChangeRecorder, Tx } from '../sync/context.js';
@@ -96,6 +100,9 @@ export class TodoistImporter {
       db: Database;
       sync: SyncService;
       fetch: OutboundFetch;
+      /** Comment files are downloaded and stored like a normal upload. */
+      store: AttachmentStore;
+      settings: SettingsService;
       defaultTimeZone: () => string;
       log: FastifyBaseLogger;
       /** Injected so the completed-task windows are testable rather than wall-clock bound. */
@@ -283,6 +290,7 @@ export class TodoistImporter {
         labels: choices.labels,
         filters: choices.filters,
         comments: choices.comments,
+        attachments: choices.attachments,
         people: choices.people,
       },
       userId,
@@ -444,14 +452,21 @@ export class TodoistImporter {
     const failures: TodoistImportWarning[] = [];
     const applied = new Map<CommandType, number>();
     let done = 0;
+    let attachmentsDownloaded = 0;
+    /** Files fetched for this run, keyed by the comment step that will claim them. */
+    const prepared = new Map<PlannedStep, PreparedAttachment>();
     const apply = async (steps: PlannedStep[]): Promise<void> => {
       let rest = steps;
       while (rest.length) {
         const chunk = rest.slice(0, CHUNK);
+        attachmentsDownloaded += await this.fetchAttachments(userId, chunk, failures, prepared);
         const commands = chunk.flatMap((s) => (s.type ? [{ type: s.type, args: s.args }] : []));
-        const result = await this.deps.sync.applyAll(userId, commands, null, (tx) =>
-          recordMappings(tx, userId, chunk),
-        );
+        const result = await this.deps.sync.applyAll(userId, commands, null, async (tx) => {
+          await recordMappings(tx, userId, chunk);
+          // Files are written before the transaction; their rows go in with the comment, once
+          // the project exists (a new project and its comment can share one chunk).
+          await insertAttachments(tx, chunk, prepared);
+        });
         if (result.ok) {
           for (const s of chunk) if (s.type) applied.set(s.type, (applied.get(s.type) ?? 0) + 1);
           rest = rest.slice(chunk.length);
@@ -522,6 +537,7 @@ export class TodoistImporter {
         sections: applied.get('section_add') ?? 0,
         tasks: applied.get('task_add') ?? 0,
         comments: applied.get('comment_add') ?? 0,
+        attachments: attachmentsDownloaded,
         labels: applied.get('label_add') ?? 0,
         filters: applied.get('filter_add') ?? 0,
         completedTasks: writtenCompleted,
@@ -549,6 +565,153 @@ export class TodoistImporter {
   private async progress(id: string, done: number): Promise<void> {
     await this.deps.db.update(imports).set({ done }).where(eq(imports.id, id));
   }
+
+  /**
+   * Fetch the comment files a chunk will claim (writing them to disk now) and remember what row
+   * to insert for each. A file that cannot be fetched (hostile or insecure URL, redirect,
+   * oversized, unreachable) is left out: the comment keeps the link it already has and the run
+   * reports it. Returns how many were downloaded.
+   */
+  private async fetchAttachments(
+    userId: string,
+    chunk: PlannedStep[],
+    failures: TodoistImportWarning[],
+    prepared: Map<PlannedStep, PreparedAttachment>,
+  ): Promise<number> {
+    let downloaded = 0;
+    for (const step of chunk) {
+      if (!step.attachment || prepared.has(step)) continue;
+      const file = await this.downloadAttachment(userId, step.attachment, failures);
+      if (file) {
+        prepared.set(step, file);
+        downloaded++;
+      }
+    }
+    return downloaded;
+  }
+
+  private async downloadAttachment(
+    userId: string,
+    file: NonNullable<PlannedStep['attachment']>,
+    failures: TodoistImportWarning[],
+  ): Promise<PreparedAttachment | null> {
+    const name = cleanFilename(file.name).slice(0, 80);
+    const maxMb = this.deps.settings.get('attachments.maxSizeMb');
+    if (maxMb === 0) {
+      failures.push({
+        kind: 'attachment',
+        message: `“${name}” was not copied (file uploads are turned off on this instance).`,
+      });
+      return null;
+    }
+    const maxBytes = maxMb * 1024 * 1024;
+    let res;
+    try {
+      res = await this.deps.fetch(file.url, {
+        method: 'GET',
+        timeoutMs: 30_000,
+        maxResponseBytes: maxBytes,
+      });
+    } catch (err) {
+      failures.push({ kind: 'attachment', message: attachmentError(name, err) });
+      return null;
+    }
+    if (res.status !== 200) {
+      res.cancel();
+      failures.push({
+        kind: 'attachment',
+        message: `“${name}” was not copied (its link answered ${res.status}).`,
+      });
+      return null;
+    }
+    const id = newId();
+    let written;
+    try {
+      written = await this.deps.store.write(id, Readable.from(res.body), maxBytes);
+    } catch (err) {
+      await this.deps.store.remove(id).catch(() => undefined);
+      failures.push({ kind: 'attachment', message: attachmentError(name, err) });
+      return null;
+    }
+    if (!written) {
+      await this.deps.store.remove(id).catch(() => undefined);
+      failures.push({
+        kind: 'attachment',
+        message: `“${name}” is larger than ${maxMb} MB and was not copied.`,
+      });
+      return null;
+    }
+    if (written.size === 0) {
+      await this.deps.store.remove(id).catch(() => undefined);
+      failures.push({ kind: 'attachment', message: `“${name}” was empty and was not copied.` });
+      return null;
+    }
+    return {
+      id,
+      projectId: file.projectId,
+      uploaderId: userId,
+      filename: cleanFilename(file.name),
+      contentType: sniff(written.head).type,
+      size: written.size,
+      sha256: written.sha256,
+    };
+  }
+}
+
+/** A file fetched for a run, on disk and ready to be attached to its comment. */
+interface PreparedAttachment {
+  id: string;
+  projectId: string;
+  uploaderId: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+}
+
+/**
+ * Insert the rows for the files a chunk downloaded, attached to their comment. Runs inside the
+ * import's transaction, so a newly created project exists by the time its comment's file is
+ * stored; a file whose comment command failed is left on disk for the hourly purge.
+ */
+async function insertAttachments(
+  tx: Tx,
+  chunk: PlannedStep[],
+  prepared: Map<PlannedStep, PreparedAttachment>,
+): Promise<void> {
+  const rows = chunk.flatMap((step) => {
+    const file = prepared.get(step);
+    const commentId = step.type === 'comment_add' ? step.args.id : undefined;
+    if (!file || typeof commentId !== 'string') return [];
+    return [
+      {
+        id: file.id,
+        projectId: file.projectId,
+        commentId,
+        uploaderId: file.uploaderId,
+        filename: file.filename,
+        contentType: file.contentType,
+        size: file.size,
+        sha256: file.sha256,
+      },
+    ];
+  });
+  if (rows.length) await tx.insert(attachments).values(rows).onConflictDoNothing();
+}
+
+/** A human sentence for a failed attachment download, without echoing the URL. */
+function attachmentError(name: string, err: unknown): string {
+  if (err instanceof OutboundError) {
+    if (err.reason === 'too_large')
+      return `“${name}” is too large and was not copied (the instance's file limit applies).`;
+    if (
+      err.reason === 'blocked_address' ||
+      err.reason === 'insecure_url' ||
+      err.reason === 'redirect'
+    )
+      return `“${name}” points at an address BokyDo will not fetch and was not copied.`;
+  }
+  return `“${name}” could not be downloaded and was not copied.`;
 }
 
 /**

@@ -2,6 +2,7 @@ import { TODOIST_IMPORT_LIMITS, type TodoistImportRun, type TodoistPreview } fro
 import { eq, isNull, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  attachments,
   comments,
   filters,
   importMappings,
@@ -27,8 +28,9 @@ async function setup(
   answer: () => unknown = todoistFixture,
   status = 200,
   completed: (projectId: string | null) => unknown = () => completedPage(),
+  files: Record<string, Buffer | { status: number; body: Buffer }> = {},
 ) {
-  const todoist = fakeTodoist(answer, status, completed);
+  const todoist = fakeTodoist(answer, status, completed, files);
   logs = [];
   t = await testApp({
     importFetch: todoist.fetch,
@@ -71,6 +73,7 @@ const everything = (preview: TodoistPreview, overrides: Record<string, unknown> 
   comments: true,
   completed: false,
   completedWindow: '3m',
+  attachments: false,
   people: [],
   ...overrides,
 });
@@ -555,5 +558,34 @@ describe.skipIf(!TEST_DATABASE_URL)('Todoist import', { timeout: 30_000 }, () =>
     await t.app.services.importer.idle(alice.id);
     const latest = await alice.http.get('/api/v1/import/todoist/runs/latest');
     expect(latest.json().run).toMatchObject({ id: first.json().id, status: 'done' });
+  });
+
+  it('downloads comment files into BokyDo attachments when asked', async () => {
+    const bytes = Buffer.from('not really a pdf, just bytes');
+    const url = 'https://files.todoist.com/x/q3.pdf';
+    const { alice, todoist } = await setup(todoistFixture, 200, () => completedPage(), {
+      [url]: bytes,
+    });
+    const preview = await connect(alice);
+    const status = await run(alice, everything(preview, { attachments: true }));
+    // The file was fetched by its URL (separate from the sync call).
+    expect(todoist.calls.some((c) => c.url === url)).toBe(true);
+    expect(status.counts?.attachments).toBe(1);
+    const rows = await t.db.db.select().from(attachments).where(eq(attachments.filename, 'q3.pdf'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.size).toBe(bytes.length);
+  });
+
+  it('leaves a comment link and warns when a file cannot be fetched', async () => {
+    const { alice, todoist } = await setup(todoistFixture, 200, () => completedPage(), {
+      'https://files.todoist.com/x/q3.pdf': { status: 502, body: Buffer.from('nope') },
+    });
+    const preview = await connect(alice);
+    const status = await run(alice, everything(preview, { attachments: true }));
+    // The fetch happened, but did not succeed, so no file was stored.
+    expect(todoist.calls.some((c) => c.url === 'https://files.todoist.com/x/q3.pdf')).toBe(true);
+    expect(status.counts?.attachments).toBe(0);
+    expect(status.warnings.some((w) => w.kind === 'attachment')).toBe(true);
+    expect(await t.db.db.select().from(attachments)).toHaveLength(0);
   });
 });

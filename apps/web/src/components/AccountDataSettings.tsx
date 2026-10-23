@@ -100,11 +100,13 @@ function DeleteCard() {
       <Button variant="danger" disabled={!b || blocked} onClick={() => setOpen(true)}>
         {t('settings.data.deleteButton')}
       </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={t('settings.data.deleteConfirmTitle')}>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={t('settings.data.deleteConfirmTitle')}
+      >
         <div className="space-y-3">
-          <p className="text-sm">
-            {t('settings.data.confirmPrompt', { username })}{' '}
-          </p>
+          <p className="text-sm">{t('settings.data.confirmPrompt', { username })} </p>
           <TextField
             label={t('settings.data.username')}
             value={confirm}
