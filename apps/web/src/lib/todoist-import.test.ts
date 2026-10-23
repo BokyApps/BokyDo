@@ -202,6 +202,7 @@ describe('defaultDraft', () => {
     expect([...draft.labels]).toEqual(['l1']);
     expect([...draft.filters]).toEqual(['f1']);
     expect(draft.comments).toBe(true);
+    expect(draft.attachments).toBe(true);
     expect([...draft.people]).toEqual([['bob', null]]);
   });
 });
@@ -275,8 +276,17 @@ describe('buildChoicesBody', () => {
     expect(body.labels).toEqual(['l1']);
     expect(body.filters).toEqual(['f1']);
     expect(body.comments).toBe(false);
+    expect(body.attachments).toBe(false);
     expect(body.people).toEqual([{ id: 'bob', userId: U(2) }]);
     expect(body.sessionId).toBe(p.sessionId);
+  });
+
+  it('sends attachments only when comments are on, and changing it changes the key', () => {
+    const on = draftFor(p, { comments: true, attachments: true });
+    const off = draftFor(p, { comments: true, attachments: false });
+    expect(buildChoicesBody(p, on).attachments).toBe(true);
+    expect(buildChoicesBody(p, off).attachments).toBe(false);
+    expect(choicesKey(buildChoicesBody(p, off))).not.toBe(choicesKey(buildChoicesBody(p, on)));
   });
 
   it('changes its key when any choice changes', () => {
@@ -383,10 +393,12 @@ describe('filterNotes', () => {
       ]),
       labels: new Set(),
     });
-    expect(filterNotes(t, f({ projects: ['Work', 'Home'], labels: ['urgent'] }), p, draft)).toEqual([
-      "Mentions Home, which you aren't importing.",
-      "Mentions label urgent, which isn't selected.",
-    ]);
+    expect(filterNotes(t, f({ projects: ['Work', 'Home'], labels: ['urgent'] }), p, draft)).toEqual(
+      [
+        "Mentions Home, which you aren't importing.",
+        "Mentions label urgent, which isn't selected.",
+      ],
+    );
   });
 });
 
@@ -411,13 +423,14 @@ describe('countRows and runErrorMessage', () => {
       sections: 3,
       tasks: 4,
       comments: 5,
-      labels: 6,
-      filters: 7,
+      attachments: 6,
+      labels: 7,
+      filters: 8,
       completedTasks: 0,
       completedAlreadyImported: 0,
-      alreadyImported: 8,
+      alreadyImported: 9,
     });
-    expect(rows.map((r) => r.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(rows.map((r) => r.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(new Set(rows.map((r) => r.label)).size).toBe(rows.length);
   });
 

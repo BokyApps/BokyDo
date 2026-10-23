@@ -32,6 +32,8 @@ export interface ImportDraft {
   /** Todoist filter ids to import. */
   filters: Set<string>;
   comments: boolean;
+  /** Download the files attached to comments and store them in BokyDo. */
+  attachments: boolean;
   /** Bring the account's completed tasks over, with their real completion dates. */
   completed: boolean;
   /** How far back to look for them: 1 or 3 months (Todoist allows no more). */
@@ -114,6 +116,7 @@ export function defaultDraft(preview: TodoistPreview, targets: MergeTarget[]): I
     labels: new Set(preview.labels.filter((l) => !l.invalid).map((l) => l.id)),
     filters: new Set(preview.filters.filter((f) => f.supported).map((f) => f.id)),
     comments: true,
+    attachments: true,
     completed: false,
     completedWindow: '3m',
     people: new Map(preview.people.filter((p) => !p.isYou).map((p) => [p.id, null])),
@@ -157,6 +160,7 @@ export function buildChoicesBody(
     labels: preview.labels.filter((l) => !l.invalid && draft.labels.has(l.id)).map((l) => l.id),
     filters: preview.filters.filter((f) => f.supported && draft.filters.has(f.id)).map((f) => f.id),
     comments: draft.comments,
+    attachments: draft.comments && draft.attachments,
     completed: draft.completed,
     completedWindow: draft.completedWindow,
     people: preview.people
@@ -248,6 +252,7 @@ export function groupWarnings(
     'assignee',
     'label',
     'filter',
+    'attachment',
     'truncated',
     'duration',
     'nesting',
@@ -264,13 +269,17 @@ export function groupWarnings(
 }
 
 /** The counts of a dry run or a finished import, as labelled rows. */
-export function countRows(t: TFunction, c: TodoistImportCounts): { label: string; value: number }[] {
+export function countRows(
+  t: TFunction,
+  c: TodoistImportCounts,
+): { label: string; value: number }[] {
   return [
     { label: t('import.rowNewProjects'), value: c.projects },
     { label: t('import.rowMerged'), value: c.merged },
     { label: t('import.rowSections'), value: c.sections },
     { label: t('import.rowTasks'), value: c.tasks },
     { label: t('import.rowComments'), value: c.comments },
+    { label: t('import.rowFiles'), value: c.attachments },
     { label: t('import.rowLabels'), value: c.labels },
     { label: t('import.rowFilters'), value: c.filters },
     { label: t('import.rowAlreadyImported'), value: c.alreadyImported },

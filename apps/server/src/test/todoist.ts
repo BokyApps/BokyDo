@@ -205,33 +205,46 @@ function forProject(page: unknown, projectId: string | null): unknown {
   };
 }
 
-/** An outbound fetch that answers like Todoist and remembers what it was asked. */
+/**
+ * An outbound fetch that answers like Todoist and remembers what it was asked. `files` maps a
+ * URL to the bytes it should answer with (a comment's file attachment); any other URL gets the
+ * sync (or completed-items) answer. Tests only.
+ */
 export function fakeTodoist(
   body: () => unknown,
   status = 200,
   completed: (projectId: string | null) => unknown = () => completedPage(),
+  files: Record<string, Buffer | { status: number; body: Buffer }> = {},
 ) {
   const calls: { url: string; headers: Record<string, string>; body: string }[] = [];
   const fetch: OutboundFetch = async (url, init = {}) => {
     calls.push({ url, headers: init.headers ?? {}, body: String(init.body ?? '') });
     const requestUrl = String(url);
+    const file = files[requestUrl];
+    if (file !== undefined) {
+      const f = Buffer.isBuffer(file) ? { status: 200, body: file } : file;
+      return respond(f.status, f.body, 'application/octet-stream');
+    }
     let payload: unknown = body();
     if (requestUrl.includes('/tasks/completed/by_completion_date')) {
       const projectId = new URL(requestUrl).searchParams.get('project_id');
       payload = forProject(completed(projectId), projectId);
     }
-    const text = JSON.stringify(payload);
-    const res: OutboundResponse = {
-      status,
-      headers: { 'content-type': 'application/json' },
-      body: (async function* () {
-        yield Buffer.from(text);
-      })(),
-      text: async () => text,
-      json: async () => JSON.parse(text) as unknown,
-      cancel: () => undefined,
-    };
-    return res;
+    return respond(status, Buffer.from(JSON.stringify(payload)), 'application/json');
   };
   return { fetch, calls };
+}
+
+function respond(status: number, buf: Buffer, type: string): OutboundResponse {
+  const text = buf.toString('utf8');
+  return {
+    status,
+    headers: { 'content-type': type },
+    body: (async function* () {
+      yield buf;
+    })(),
+    text: async () => text,
+    json: async () => JSON.parse(text) as unknown,
+    cancel: () => undefined,
+  };
 }

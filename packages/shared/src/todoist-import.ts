@@ -25,6 +25,12 @@ export const TODOIST_IMPORT_LIMITS = {
   completedPages: 100,
   /** How many projects' completed history one connect reads (one request series each). */
   completedProjects: 100,
+  /**
+   * Files in comments to download and re-store (a flood cap; the per-file cap is the setting).
+   * A comment file is only copied when the user opts in, and one per comment; this bounds the
+   * number of outbound fetches a single import may make.
+   */
+  attachments: 1000,
   /** How long a connected preview stays usable before the user must connect again. */
   sessionMinutes: 30,
 } as const;
@@ -128,6 +134,8 @@ export const todoistImportChoicesSchema = z
     labels: z.array(z.string().min(1).max(64)).max(TODOIST_IMPORT_LIMITS.labels),
     filters: z.array(z.string().min(1).max(64)).max(TODOIST_IMPORT_LIMITS.filters),
     comments: z.boolean(),
+    /** Download the files attached to comments through the outbound client and store them. */
+    attachments: z.boolean(),
     /** Bring the account's completed tasks over, with their real completion dates. */
     completed: z.boolean(),
     /** How far back to look for them (ignored when `completed` is false). */
@@ -151,6 +159,7 @@ export interface TodoistImportWarning {
     | 'assignee'
     | 'label'
     | 'filter'
+    | 'attachment'
     | 'truncated'
     | 'duration'
     | 'nesting'
@@ -168,6 +177,8 @@ export interface TodoistImportCounts {
   completedTasks: number;
   completedAlreadyImported: number;
   comments: number;
+  /** Files in comments downloaded and stored (those that could not be fetched stay as links). */
+  attachments: number;
   labels: number;
   filters: number;
   /** Items left out because an earlier import already brought them over. */

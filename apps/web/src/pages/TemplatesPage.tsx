@@ -24,18 +24,13 @@ export function TemplatesPage() {
       const { template, warnings } = await readTemplateFile(file);
       setChoice({ template, warnings, defaultName: template.name });
     } catch (err) {
-      setError(
-        err instanceof TemplateFileError ? err.message : t('import.readFailed'),
-      );
+      setError(err instanceof TemplateFileError ? err.message : t('import.readFailed'));
     }
   };
 
   return (
     <Page>
-      <ViewHeader
-        title={t('import.templatesTitle')}
-        subtitle={t('import.templatesSubtitle')}
-      />
+      <ViewHeader title={t('import.templatesTitle')} subtitle={t('import.templatesSubtitle')} />
 
       <Card className="mb-6">
         <h2 className="mb-2 font-semibold">{t('import.csvTitle')}</h2>
