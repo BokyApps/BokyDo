@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BokyDo</string>
+    <string name="widget_tasks">BokyDo tasks</string>
+    <string name="widget_tasks_description">Your tasks at a glance: tap a checkbox to complete one.</string>
+    <string name="widget_quick_add">BokyDo quick add</string>
+    <string name="widget_quick_add_description">Add a task in one tap.</string>
 </resources>

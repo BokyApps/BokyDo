@@ -60,8 +60,12 @@ import java.util.Date
  * shows the account, sync status and notifications.
  */
 class MainActivity : ComponentActivity() {
+    /** Set when a widget (or a deep link) asks for the add sheet as soon as the app is shown. */
+    private val quickAdd = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        quickAdd.value = intent?.getBooleanExtra(EXTRA_QUICK_ADD, false) == true
         setContent {
             val app = LocalContext.current.app
             val version by app.store.version.collectAsState()
@@ -78,11 +82,22 @@ class MainActivity : ComponentActivity() {
                     when (val s = screen) {
                         is AppScreen.Connect -> ConnectScreen(s.message)
                         is AppScreen.WaitingForBrowser -> WaitingScreen(s.host)
-                        AppScreen.Home -> AppShell(state)
+                        AppScreen.Home -> AppShell(state, quickAdd.value) { quickAdd.value = false }
                     }
                 }
             }
         }
+    }
+
+    /** The launch mode is singleTask, so a widget tap while the app is open arrives here. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_QUICK_ADD, false)) quickAdd.value = true
+    }
+
+    companion object {
+        const val EXTRA_QUICK_ADD = "com.bokyapps.bokydo.extra.QUICK_ADD"
     }
 }
 
