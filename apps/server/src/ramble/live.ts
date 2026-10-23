@@ -1,6 +1,7 @@
 import {
   rambleLiveClientMessageSchema,
   RAMBLE_LIVE,
+  type RambleDraftTask,
   type RambleLiveClientMessage,
   type RambleLiveCloseReason,
   type RambleLiveServerMessage,
@@ -56,6 +57,11 @@ export async function relayLive(
   let closed = false;
   const timers: { revalidate?: NodeJS.Timeout; cap?: NodeJS.Timeout } = {};
   const pending: RambleLiveClientMessage[] = [];
+  // The client's first frame carries the draft it already has. The relay waits briefly for it so
+  // a live session edits that draft instead of starting from nothing.
+  let startDraft: RambleDraftTask[] = [];
+  let sawStart = false;
+  let onStart: (() => void) | null = null;
 
   const send = (message: RambleLiveServerMessage) => {
     if (client.readyState === 1) client.send(JSON.stringify(message));
@@ -65,6 +71,7 @@ export async function relayLive(
   const finish = async (reason: RambleLiveCloseReason, status: 'done' | 'failed') => {
     if (closed) return;
     closed = true;
+    onStart = null;
     aborter.abort();
     if (timers.revalidate) clearInterval(timers.revalidate);
     if (timers.cap) clearTimeout(timers.cap);
@@ -145,6 +152,14 @@ export async function relayLive(
       send({ type: 'error', code: 'invalid_message' });
       return;
     }
+    if (ok.data.type === 'start') {
+      if (!sawStart) {
+        sawStart = true;
+        startDraft = ok.data.draft;
+        onStart?.();
+      }
+      return;
+    }
     if (session) handle(ok.data);
     else if (pending.length < 64) pending.push(ok.data);
   });
@@ -205,6 +220,20 @@ export async function relayLive(
     deps.settings.get('instance.defaultTimezone'),
     caller.scope,
   );
+  if (!sawStart) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        onStart = null;
+        resolve();
+      }, 500);
+      onStart = () => {
+        clearTimeout(timer);
+        onStart = null;
+        resolve();
+      };
+    });
+  }
+  if (closed) return;
   try {
     providerSocket = await connect(provider.url(credential, route.model), {
       headers: provider.headers(credential),
@@ -221,12 +250,18 @@ export async function relayLive(
   }
   providerSocket.on('error', () => void finish('provider_error', 'failed'));
   providerSocket.on('close', () => void finish('provider_error', 'failed'));
-  session = provider.open(providerSocket, route.model, ctx, {
-    onReady: (sampleRate) => send({ type: 'ready', sampleRate }),
-    onTranscript: (text, final) => send({ type: 'transcript', text, final }),
-    onDraft: (update) => send({ type: 'draft', ...update }),
-    onError: (code) => send({ type: 'error', code }),
-  });
+  session = provider.open(
+    providerSocket,
+    route.model,
+    ctx,
+    {
+      onReady: (sampleRate) => send({ type: 'ready', sampleRate }),
+      onTranscript: (text, final) => send({ type: 'transcript', text, final }),
+      onDraft: (update) => send({ type: 'draft', ...update }),
+      onError: (code) => send({ type: 'error', code }),
+    },
+    startDraft,
+  );
   started = Date.now();
   for (const message of pending.splice(0)) handle(message);
   // The cap is on the session, not on the client's messages: an idle session ends too.

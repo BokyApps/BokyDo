@@ -125,6 +125,7 @@ function RambleBody({
       <RambleLive
         available={live}
         canRecord={canRecordAudio()}
+        draft={session.draft}
         onDraft={session.applyLiveDraft}
         onError={session.setError}
         onRunningChange={setLiveRunning}

@@ -130,6 +130,16 @@ const audioFrame = z
 
 /** A control frame the browser (or an app) sends over the live socket. */
 export const rambleLiveClientMessageSchema = z.discriminatedUnion('type', [
+  /**
+   * The first frame: the draft the user already has, so the live model edits it instead of
+   * starting from nothing (and a session restarted after a dropped connection keeps its tasks).
+   */
+  z
+    .object({
+      type: z.literal('start'),
+      draft: z.array(rambleDraftTaskSchema).max(RAMBLE_LIMITS.maxDraft).default([]),
+    })
+    .strict(),
   z.object({ type: z.literal('audio'), data: audioFrame }).strict(),
   z
     .object({

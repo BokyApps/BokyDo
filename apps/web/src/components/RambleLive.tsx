@@ -1,5 +1,6 @@
 import { RAMBLE_LIVE, type RambleOpSummary, type RambleResolvedTask } from '@bokydo/shared';
 import { useEffect, useState } from 'react';
+import { draftForExtract } from '../lib/ramble.js';
 import { liveCloseText, useLiveRamble } from '../lib/ramble-live.js';
 import { Alert, Button } from './ui.js';
 
@@ -12,6 +13,7 @@ import { Alert, Button } from './ui.js';
 export function RambleLive({
   available,
   canRecord,
+  draft,
   onDraft,
   onError,
   onRunningChange,
@@ -20,6 +22,8 @@ export function RambleLive({
   available: boolean;
   /** The browser can record audio. */
   canRecord: boolean;
+  /** The draft on screen, so the live model edits it in place. */
+  draft: RambleResolvedTask[];
   onDraft: (draft: RambleResolvedTask[], ops: RambleOpSummary[]) => void;
   onError: (message: string) => void;
   /** Told when a live session starts or ends, so the other controls can step aside. */
@@ -27,6 +31,7 @@ export function RambleLive({
 }) {
   const [open, setOpen] = useState(false);
   const live = useLiveRamble({
+    startDraft: () => draftForExtract(draft),
     onDraft,
     onError,
     onEnd: (reason) => {

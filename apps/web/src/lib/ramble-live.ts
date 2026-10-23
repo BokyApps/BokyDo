@@ -1,4 +1,5 @@
 import type {
+  RambleDraftTask,
   RambleLiveCloseReason,
   RambleLiveServerMessage,
   RambleOpSummary,
@@ -193,6 +194,8 @@ export interface LiveRambleOptions {
   onError: (message: string) => void;
   /** The session ended (whether the user stopped it or the server did). */
   onEnd: (reason: RambleLiveCloseReason) => void;
+  /** The draft the user already has: sent first, so live edits it instead of starting over. */
+  startDraft?: () => RambleDraftTask[];
 }
 
 export interface LiveRamble {
@@ -244,7 +247,10 @@ export function useLiveRamble(options: LiveRambleOptions): LiveRamble {
     setPhase('connecting');
     const ws = new WebSocket(liveSocketUrl()) as unknown as LiveSocket;
     socket.current = ws;
-    ws.onopen = () => undefined;
+    ws.onopen = () => {
+      const draft = handlers.current.startDraft?.() ?? [];
+      ws.send(JSON.stringify({ type: 'start', draft }));
+    };
     ws.onerror = () => {
       if (socket.current !== ws) return;
       setError(liveErrorText('connection_failed'));

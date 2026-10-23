@@ -44,7 +44,13 @@ export interface LiveProvider {
   headers(credential: UsableCredential): Record<string, string>;
   /** PCM16 input sample rate the browser must use (OpenAI 24 kHz, Gemini 16 kHz). */
   sampleRate: number;
-  open(ws: WebSocket, model: string, ctx: RambleContext, handlers: LiveHandlers): LiveSession;
+  open(
+    ws: WebSocket,
+    model: string,
+    ctx: RambleContext,
+    handlers: LiveHandlers,
+    draft: RambleDraftTask[],
+  ): LiveSession;
 }
 
 const TOOL_NAME = 'edit_draft';
@@ -56,7 +62,7 @@ const TOOL_DESCRIPTION =
  * model keeps the draft itself (through the tool), so there is no `<draft>` block and no
  * transcript: it hears the speech.
  */
-function liveInstructions(ctx: RambleContext): string {
+function liveInstructions(ctx: RambleContext, draft: RambleDraftTask[]): string {
   return [
     SYSTEM_PROMPT,
     '',
@@ -65,6 +71,9 @@ function liveInstructions(ctx: RambleContext): string {
     'operations for every change the speaker makes.',
     '',
     contextBlock(ctx),
+    '<draft>',
+    JSON.stringify(draft).replace(/</g, '\\u003c'),
+    '</draft>',
   ].join('\n');
 }
 
@@ -109,8 +118,8 @@ const withWss = (baseUrl: string): URL => {
 };
 
 /** Applies a model's edit operations to the live draft and resolves them, exactly as extract does. */
-function makeApplier(ctx: RambleContext, handlers: LiveHandlers) {
-  let draft: RambleDraftTask[] = [];
+function makeApplier(ctx: RambleContext, handlers: LiveHandlers, initial: RambleDraftTask[]) {
+  let draft: RambleDraftTask[] = initial;
   return (args: unknown) => {
     const parsed = extractionSchema.safeParse(args);
     if (!parsed.success) return;
@@ -167,9 +176,9 @@ const openaiLive: LiveProvider = {
     return url.toString();
   },
   headers: (credential) => ({ ...authHeaders(credential), 'openai-beta': 'realtime=v1' }),
-  open(ws, _model, ctx, handlers) {
+  open(ws, _model, ctx, handlers, draft) {
     const send = (value: unknown) => ws.send(JSON.stringify(value));
-    const apply = makeApplier(ctx, handlers);
+    const apply = makeApplier(ctx, handlers, draft);
     ws.on('message', (data) => {
       const text = textOf(data);
       if (text === null) return;
@@ -224,7 +233,7 @@ const openaiLive: LiveProvider = {
       type: 'session.update',
       session: {
         modalities: ['text'],
-        instructions: liveInstructions(ctx),
+        instructions: liveInstructions(ctx, draft),
         input_audio_format: 'pcm16',
         input_audio_transcription: { model: 'whisper-1' },
         turn_detection: { type: 'server_vad' },
@@ -288,13 +297,13 @@ const geminiLive: LiveProvider = {
     return base.toString();
   },
   headers: (credential) => authHeaders(credential),
-  open(ws, model, ctx, handlers) {
+  open(ws, model, ctx, handlers, draft) {
     const send = (value: unknown) => ws.send(JSON.stringify(value));
-    const apply = makeApplier(ctx, handlers);
+    const apply = makeApplier(ctx, handlers, draft);
     send({
       setup: {
         model: `models/${model.replace(/^models\//, '')}`,
-        systemInstruction: { parts: [{ text: liveInstructions(ctx) }] },
+        systemInstruction: { parts: [{ text: liveInstructions(ctx, draft) }] },
         generationConfig: { responseModalities: ['TEXT'] },
         inputAudioTranscription: {},
         tools: [

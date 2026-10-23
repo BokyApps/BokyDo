@@ -57,6 +57,7 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
   let origin: string;
   let providerAuth: string | undefined;
   let providerSaw: string[];
+  let providerInstructions = '';
   let onSessionUpdate: (socket: WebSocket) => void;
 
   const settings = (patch: Parameters<TestApp['app']['services']['settings']['update']>[0]) =>
@@ -69,6 +70,7 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
   beforeEach(async () => {
     providerSaw = [];
     providerAuth = undefined;
+    providerInstructions = '';
     onSessionUpdate = () => undefined;
     fake = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>((r) => fake.on('listening', () => r()));
@@ -78,7 +80,11 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
       socket.on('message', (data) => {
         const message = JSON.parse(data.toString()) as Record<string, unknown>;
         providerSaw.push(String(message.type ?? Object.keys(message)[0]));
-        if (message.type === 'session.update') onSessionUpdate(socket);
+        if (message.type === 'session.update') {
+          const session = message.session as { instructions?: string } | undefined;
+          providerInstructions = session?.instructions ?? '';
+          onSessionUpdate(socket);
+        }
       });
     });
     t = await testApp({
@@ -144,7 +150,15 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
     };
     const h = authed();
     await new Promise<void>((r) => h.socket.once('open', r));
+    // The browser sends the draft it already has first, so the model edits it in place.
+    h.socket.send(
+      JSON.stringify({
+        type: 'start',
+        draft: [{ ref: 'd1', content: 'Existing task' }],
+      }),
+    );
     expect(await h.waitFor('ready')).toMatchObject({ type: 'ready', sampleRate: 24000 });
+    expect(providerInstructions).toContain('Existing task');
     const transcript = await h.waitFor('transcript');
     expect(transcript).toMatchObject({ text: 'buy milk tomorrow', final: true });
     const draftMessage = await h.waitFor('draft');
@@ -153,9 +167,12 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
       content: string;
       resolved: { due: unknown };
     }[];
-    expect(tasks[0]).toMatchObject({ ref: 'd1', content: 'Buy milk' });
-    expect(tasks[0]!.resolved.due).not.toBeNull();
-    expect(draftMessage.ops).toEqual([{ op: 'add', ref: 'd1' }]);
+    expect(tasks.map((t) => [t.ref, t.content])).toEqual([
+      ['d1', 'Existing task'],
+      ['d2', 'Buy milk'],
+    ]);
+    expect(tasks[1]!.resolved.due).not.toBeNull();
+    expect(draftMessage.ops).toEqual([{ op: 'add', ref: 'd2' }]);
 
     // Audio is forwarded to the provider; the key is only in the server's handshake.
     h.socket.send(
@@ -180,11 +197,11 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
   });
 
   it('refuses before opening a provider socket when the audio budget is spent', async () => {
-    await settings({ 'ai.monthlyAudioMinutes': 1 });
+    await settings({ 'ai.monthlyAudioMinutes': 0 });
     const h = authed();
     await new Promise<void>((r) => h.socket.once('open', r));
     expect(await h.waitFor('error')).toMatchObject({ code: 'ai_budget_exceeded' });
-    expect(await h.waitFor('closed')).toMatchObject({ reason: 'provider_error' });
+    expect(await h.waitFor('closed')).toMatchObject({ reason: 'budget_exceeded' });
     expect(providerAuth).toBeUndefined();
   });
 
