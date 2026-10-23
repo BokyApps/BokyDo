@@ -128,6 +128,68 @@ export function applyServerResponse(state: SyncState, res: SyncResponse): SyncSt
   return d;
 }
 
+/** `SyncState` with its maps flattened to entry arrays, so it can be stored as JSON or cloned. */
+export interface SerializedState {
+  user: SyncUser | null;
+  collaborators: [string, Collaborator][];
+  members: readonly ProjectMember[];
+  invitations: readonly PendingInvite[];
+  notifications: readonly AppNotification[];
+  unreadNotifications: number;
+  workspaces: readonly Workspace[];
+  workspaceMembers: readonly WorkspaceMember[];
+  folders: readonly Folder[];
+  projects: [string, Project][];
+  sections: [string, Section][];
+  tasks: [string, Task][];
+  labels: [string, Label][];
+  filters: [string, Filter][];
+  comments: [string, Comment][];
+  reminders: [string, Reminder][];
+}
+
+export function serializeState(state: SyncState): SerializedState {
+  return {
+    user: state.user,
+    collaborators: [...state.collaborators],
+    members: state.members,
+    invitations: state.invitations,
+    notifications: state.notifications,
+    unreadNotifications: state.unreadNotifications,
+    workspaces: state.workspaces,
+    workspaceMembers: state.workspaceMembers,
+    folders: state.folders,
+    projects: [...state.projects],
+    sections: [...state.sections],
+    tasks: [...state.tasks],
+    labels: [...state.labels],
+    filters: [...state.filters],
+    comments: [...state.comments],
+    reminders: [...state.reminders],
+  };
+}
+
+export function deserializeState(data: SerializedState): SyncState {
+  return {
+    user: data.user,
+    collaborators: new Map(data.collaborators),
+    members: data.members,
+    invitations: data.invitations,
+    notifications: data.notifications,
+    unreadNotifications: data.unreadNotifications,
+    workspaces: data.workspaces,
+    workspaceMembers: data.workspaceMembers,
+    folders: data.folders,
+    projects: new Map(data.projects),
+    sections: new Map(data.sections),
+    tasks: new Map(data.tasks),
+    labels: new Map(data.labels),
+    filters: new Map(data.filters),
+    comments: new Map(data.comments),
+    reminders: new Map(data.reminders),
+  };
+}
+
 /** A project that disappeared takes its sections and tasks with it (the server sends only the project). */
 export function dropOrphans(d: Draft): void {
   for (const [id, s] of d.sections) if (!d.projects.has(s.projectId)) d.sections.delete(id);

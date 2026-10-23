@@ -477,6 +477,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 - Installable PWA, offline read cache + queued writes (reuses sync-client), responsive/mobile web layout.
 - WCAG 2.2 AA pass (keyboard-only, screen readers on list/board/drag-drop).
 - i18n plumbing + English; translation workflow (Weblate) for community.
+- *W12a done 2026-10-09 (see ADR 0022): installable PWA (`manifest.webmanifest`, 192/512/maskable icons), one hand-written service worker with a versioned shell-only cache that never intercepts `/api/`, `/mcp`, `/oauth`, `/.well-known/`, `/healthz`, `/readyz`, non-GET or cross-origin requests, and an "A new version is ready" prompt that sends `SKIP_WAITING` only on request; opt-in "Keep a copy on this device" (IndexedDB `bokydo-offline`, one record per user) hydrates before the first sync, survives reloads and drops on sign-out, which also clears every `bokydo-*` cache and the push subscription (the server's logout sends `Clear-Site-Data` as a backstop); route-level code splitting (F-023) brings the first-load JS from 293 KB to 127 KB gzip. Tests: worker routing in a sandboxed `vm`, offline round-trip/prune/wipe with `fake-indexeddb`, sync-client hydrate/persist, the logout header, and a smoke check that the built `sw.js` keeps its push handlers. Not done: a real screen-reader pass and the `docker/a11y-audit.mjs` re-run for the update prompt.*
 
 #### W13 — Hardening & v1.0 release · M
 - Full ASVS L2 review, release pentest (§7.5), load test (10k tasks/user, 50 concurrent users on a 2-vCPU box), backup/restore drill, upgrade-path test from every pre-release, docs site, demo instance with nightly reset.
@@ -553,7 +554,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 
 *Updated 2026-10-07, after A1.* Everything needed to pick up where work stopped.
 
-**Done:** F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W11e, W12b, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T124, T140–T146 (W10b holds T125+)); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0013`.
+**Done:** F1–F4, W1–W6, W7a, W10a, W10c, W11b, W11d, W11e, W12a, W12b, A1 (each has a *Done* note in §8 with deviations). Repo: `BokyApps/BokyDo`, branch `main`, all pushed. Every deliverable's security gate is logged in `docs/security/findings.md` (gate log) and `docs/threat-model.md` (T1–T88, T95–T124, T140–T146 (W10b holds T125+)); design decisions are in `docs/adr/0001`–`0006` and `0008`–`0013`.
 
 **Next, in order:** W7b–W7d (adapters, settings UI, subscription sign-in) → W8 → W9 → W10 → W11 (now incl. granular Todoist import) → W12 → W13, then Android A1–A7 (§9).
 
@@ -589,7 +590,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | W11d ✅ | iCal feed per project/filter (secret, revocable URL) | Sonnet | **Done 2026-10-06** (ADR 0011, T108–T114): secret hashed-at-rest links per project or saved filter (shown once, reset, revoke), access re-checked per fetch, settings → Calendar | Everything |
 | W11e ✅ | Export everything, scheduled encrypted backups + restore, account deletion | Opus | **Done 2026-10-07** (ADR 0013, migration 0015) | W7b–c, W11b–d, W12 |
 | W11f | Email-to-project (stretch) | Sonnet | Inbound mail decision (owner) | Everything |
-| W12a | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | Design decided 2026-10-09 (ADR 0022: one hand-written worker, shell-only cache, opt-in IndexedDB copy, wipe on sign-out); ready | W10, W11 |
+| W12a ✅ | PWA: installable, offline read cache + queued writes, code splitting (F-023) | Sonnet | **Done 2026-10-09** (ADR 0022): service worker + manifest + icons, opt-in IndexedDB copy, sign-out wipe, route-level code splitting (first-load JS 293 → 127 KB gzip) | W10, W11 |
 | W12b ✅ | WCAG 2.2 AA pass (keyboard, screen readers, drag-drop) | Sonnet | **Done 2026-10-07** ([docs/accessibility.md](accessibility.md)): axe and keyboard audit passes (`docker/a11y-audit.mjs`, repeat after big UI changes); real screen-reader testing still open for W13 | Everything |
 | W12c | i18n plumbing + English string extraction; Weblate setup | DeepSeek for extraction (Sonnet review), Sonnet for plumbing | Design decided 2026-10-09 (ADR 0023: i18next, JSON v4, Weblate); plumbing ready, extraction per area | Server work |
 | W13 | Hardening and v1.0: full ASVS L2 review, release pentest, load test, backup/restore drill, upgrade-path tests, docs site, demo instance, signed images | Opus (review/pentest) + Sonnet (load test, docs, release plumbing) | All of W7–W12 | — |

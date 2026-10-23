@@ -17,10 +17,19 @@ export interface SyncStoreOptions {
   onRejected?: (command: Command, result: Extract<CommandResult, { ok: false }>) => void;
   /** Called when the server can't be reached; commands stay queued and are retried. */
   onOffline?: (error: unknown) => void;
+  /** Called with the confirmed state and queue after each sync and each enqueue (for the offline copy). */
+  onPersist?: (snapshot: SyncSnapshot) => void;
   now?: () => string;
   setTimer?: (fn: () => void, ms: number) => unknown;
   /** Delay before retrying after a network failure (doubles up to 60 s). */
   retryBaseMs?: number;
+}
+
+/** What the opt-in offline copy stores: the confirmed state, the pending queue and the cursor. */
+export interface SyncSnapshot {
+  state: SyncState;
+  queue: Command[];
+  cursor: string | null;
 }
 
 type Listener = (state: SyncState) => void;
@@ -66,6 +75,23 @@ export class SyncStore {
     return this.view;
   }
 
+  /** The confirmed state, pending queue and cursor — what the offline copy persists. */
+  getSnapshot(): SyncSnapshot {
+    return { state: this.confirmed, queue: [...this.inflight, ...this.queue], cursor: this.cursor };
+  }
+
+  /**
+   * Restore a snapshot read from the offline copy. Call before the first `pull()`: the queued
+   * commands replay on top of the stored state and are then retried with their original UUIDs.
+   */
+  hydrate(snapshot: SyncSnapshot): void {
+    this.confirmed = snapshot.state;
+    this.cursor = snapshot.cursor;
+    this.queue = [...snapshot.queue];
+    this.inflight = [];
+    this.recompute();
+  }
+
   /** Commands not yet confirmed by the server (for "saving…" / offline indicators). */
   get pendingCount(): number {
     return this.queue.length + this.inflight.length;
@@ -80,6 +106,7 @@ export class SyncStore {
   enqueue(command: Command): void {
     this.queue.push(command);
     this.recompute();
+    this.opts.onPersist?.(this.getSnapshot());
     void this.flush();
   }
 
@@ -135,6 +162,7 @@ export class SyncStore {
     }
     this.inflight = [];
     this.recompute();
+    this.opts.onPersist?.(this.getSnapshot());
   }
 
   private scheduleRetry(): void {

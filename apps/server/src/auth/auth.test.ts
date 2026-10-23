@@ -82,10 +82,13 @@ describe.skipIf(!TEST_DATABASE_URL)('sessions', () => {
     expect(res.json()).toEqual({ error: 'csrf_failed' });
   });
 
-  it('logout kills the session server-side', async () => {
+  it('logout kills the session server-side and asks the browser to wipe the device', async () => {
     await client.login('alice', PASSWORD);
     const stolen = new Map(client.cookies);
-    expect((await client.post('/api/v1/auth/logout')).statusCode).toBe(204);
+    const res = await client.post('/api/v1/auth/logout');
+    expect(res.statusCode).toBe(204);
+    // Backstop for the client-side wipe (W12a): drops the cache and this origin's storage.
+    expect(res.headers['clear-site-data']).toBe('"cache", "storage"');
     client.cookies = stolen;
     expect((await client.get('/api/v1/auth/session')).statusCode).toBe(401);
   });

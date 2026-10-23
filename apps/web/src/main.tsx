@@ -7,8 +7,9 @@ import { applyAppearance, cachedAppearance } from './lib/appearance.js';
 import { queryClient } from './lib/queries.js';
 import { ReauthProvider } from './lib/reauth.js';
 import { router } from './router.js';
+import { UpdatePrompt } from './components/UpdatePrompt.js';
 import './index.css';
-import { stashJoinToken } from './pages/SharingPages.js';
+import { stashJoinToken } from './lib/join.js';
 
 // Before sign-in, use this device's last appearance (or the default) so screens don't flash.
 applyAppearance(cachedAppearance() ?? DEFAULT_PREFERENCES.appearance);
@@ -23,6 +24,7 @@ createRoot(root).render(
     <QueryClientProvider client={queryClient}>
       <ReauthProvider>
         <RouterProvider router={router} />
+        <UpdatePrompt />
       </ReauthProvider>
     </QueryClientProvider>
   </StrictMode>,
