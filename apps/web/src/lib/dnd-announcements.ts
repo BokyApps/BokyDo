@@ -1,4 +1,5 @@
 import type { Announcements, UniqueIdentifier } from '@dnd-kit/core';
+import { localeTag } from './locale.js';
 
 const MAX_NAME = 60;
 const quoted = (text: string) =>
@@ -6,7 +7,7 @@ const quoted = (text: string) =>
 
 /** A day as a person would say it: "Wednesday 7 October". */
 export function dayName(day: string): string {
-  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(localeTag(), {
     weekday: 'long',
     day: 'numeric',
     month: 'long',

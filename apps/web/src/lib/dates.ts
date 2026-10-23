@@ -1,4 +1,5 @@
 import type { Due, Preferences } from '@bokydo/shared';
+import { localeTag } from './locale.js';
 
 /** Calendar dates are plain `YYYY-MM-DD` strings; arithmetic happens in UTC to dodge DST. */
 const parse = (ymd: string) => new Date(`${ymd}T00:00:00Z`);
@@ -55,7 +56,7 @@ export function weekdayNames(
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(base);
     d.setUTCDate(base.getUTCDate() + ((i + WEEK_START[weekStart]) % 7));
-    return d.toLocaleDateString(undefined, { weekday: style, timeZone: 'UTC' });
+    return d.toLocaleDateString(localeTag(), { weekday: style, timeZone: 'UTC' });
   });
 }
 
@@ -72,7 +73,7 @@ export function formatDate(
 ): string {
   const d = parse(ymd);
   const day = d.getUTCDate();
-  const month = d.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' });
+  const month = d.toLocaleDateString(localeTag(), { month: 'short', timeZone: 'UTC' });
   const year = withYear ? ` ${d.getUTCFullYear()}` : '';
   if (prefs.dateFormat === 'mdy') return `${month} ${day}${year}`;
   if (prefs.dateFormat === 'ymd')
@@ -98,7 +99,7 @@ export function describeDate(
   else if (delta === -1) label = 'Yesterday';
   else if (delta > 1 && delta < 7)
     [label, tone] = [
-      parse(ymd).toLocaleDateString(undefined, { weekday: 'long', timeZone: 'UTC' }),
+      parse(ymd).toLocaleDateString(localeTag(), { weekday: 'long', timeZone: 'UTC' }),
       'week',
     ];
   else label = formatDate(ymd, prefs, ymd.slice(0, 4) !== today.slice(0, 4));

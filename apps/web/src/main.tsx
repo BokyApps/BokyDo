@@ -9,12 +9,16 @@ import { ReauthProvider } from './lib/reauth.js';
 import { router } from './router.js';
 import { UpdatePrompt } from './components/UpdatePrompt.js';
 import './index.css';
+import { initI18n, rememberedLanguage, setLanguage } from './i18n.js';
 import { stashJoinToken } from './lib/join.js';
 
 // Before sign-in, use this device's last appearance (or the default) so screens don't flash.
 applyAppearance(cachedAppearance() ?? DEFAULT_PREFERENCES.appearance);
 // A /join#token link opened while signed out survives the trip through sign-in.
 stashJoinToken();
+// Same for language: this device's remembered choice (or the browser's) for the first paint.
+void initI18n();
+void setLanguage(rememberedLanguage());
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');

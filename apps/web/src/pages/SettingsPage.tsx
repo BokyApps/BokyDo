@@ -9,9 +9,14 @@ import { WebhookSettings } from '../components/WebhookSettings.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
+import { AUTO_LANGUAGE, LANGUAGES, rememberLanguage } from '../i18n.js';
 import { usePreferences, useSend } from '../lib/sync.js';
+import { useTranslation } from 'react-i18next';
 import { CalendarSettings } from './CalendarSettings.js';
 import { NotificationSettings } from './NotificationSettings.js';
+
+/** How each catalogue calls itself, in its own language. */
+const LANGUAGE_NAMES: Record<(typeof LANGUAGES)[number], string> = { en: 'English' };
 
 type Tab =
   | 'appearance'
@@ -245,6 +250,7 @@ function GeneralSettings({
   prefs: Preferences;
   update: (p: PreferencesPatch) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <>
       <Section title="Date & time">
@@ -285,6 +291,19 @@ function GeneralSettings({
       </Section>
       <Section title="General">
         <div className="space-y-5">
+          <SelectField
+            label={t('settings.language')}
+            value={prefs.language}
+            onChange={(e) => {
+              rememberLanguage(e.target.value);
+              update({ language: e.target.value });
+            }}
+            options={[
+              { value: AUTO_LANGUAGE, label: t('settings.languageAuto') },
+              ...LANGUAGES.map((code) => ({ value: code, label: LANGUAGE_NAMES[code] })),
+            ]}
+            hint={t('settings.languageHint')}
+          />
           <SelectField
             label="Home view"
             value={prefs.startPage}

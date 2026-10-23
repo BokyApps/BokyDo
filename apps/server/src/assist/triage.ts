@@ -60,7 +60,33 @@ export async function triage(
   scope: ProjectScope,
   signal?: AbortSignal,
 ): Promise<TriageSuggestion[]> {
-  const ctx = await db.transaction(async (tx) => {
+  const ctx = await loadTriageContext(db, user, taskIds, scope);
+  if (!ctx) throw new AssistNotFoundError();
+  return suggestTriage(ai, user, ctx, signal);
+}
+
+/** Everything `suggestTriage` needs: plain data, no database. */
+export interface TriageContext {
+  rows: {
+    id: string;
+    content: string;
+    description: string;
+    projectId: string;
+    labels: string[];
+    priority: number;
+  }[];
+  projectRows: { id: string; name: string; isInbox: boolean }[];
+  labelNames: string[];
+}
+
+/** The database half of triage: what the caller may see. Null when a task isn't theirs. */
+export async function loadTriageContext(
+  db: Database,
+  user: AiUser,
+  taskIds: string[],
+  scope: ProjectScope,
+): Promise<TriageContext | null> {
+  return db.transaction(async (tx) => {
     const visible = await visibleProjects(tx, user.id, scope);
     const rows = await tx
       .select({
@@ -96,8 +122,18 @@ export async function triage(
       .limit(MAX_LABELS);
     return { rows, projectRows, labelNames: labelRows.map((l) => l.name) };
   });
-  if (!ctx) throw new AssistNotFoundError();
+}
 
+/**
+ * The model half of triage, with no data access (the eval harness calls it with synthetic
+ * tasks). Keys stay opaque: only offered project/label/task keys map back to real ids.
+ */
+export async function suggestTriage(
+  ai: AiService,
+  user: AiUser,
+  ctx: TriageContext,
+  signal?: AbortSignal,
+): Promise<TriageSuggestion[]> {
   // Opaque keys: the model chooses among them, and only they map back to real ids.
   const projectKey = new Map(ctx.projectRows.map((p, i) => [`p${i + 1}`, p]));
   const labelKey = new Map(ctx.labelNames.map((name, i) => [`l${i + 1}`, name]));
