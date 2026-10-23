@@ -130,6 +130,68 @@ describe('i18n plumbing', () => {
     expect(i18n.t('task.complete', { content: 'Milk' })).toBe('Complete “Milk”');
   });
 
+  it('keeps reminders keys at the top level (not under settings)', async () => {
+    const { default: en } = await import('./locales/en.json');
+    expect(en.translation).toHaveProperty('reminders.add', '+ Add reminder');
+    expect(en.translation).toHaveProperty('reminders.delete', 'Delete reminder {{label}}');
+    expect(en.translation).not.toHaveProperty('settings.reminders');
+  });
+
+  it('splits plural keys that carry a count into _one/_other', async () => {
+    await setLanguage('en');
+    const { default: i18n } = await import('./i18n.js');
+    const { default: en } = await import('./locales/en.json');
+    // import.andMore
+    expect(en.translation.import).toHaveProperty('andMore_one', '…and {{count}} more.');
+    expect(en.translation.import).toHaveProperty('andMore_other', '…and {{count}} more.');
+    expect(i18n.t('import.andMore', { count: 1 })).toBe('…and 1 more.');
+    expect(i18n.t('import.andMore', { count: 3 })).toBe('…and 3 more.');
+    // import.warningGroup
+    expect(en.translation.import).toHaveProperty('warningGroup_one', '{{label}} ({{count}})');
+    expect(en.translation.import).toHaveProperty('warningGroup_other', '{{label}} ({{count}})');
+    expect(i18n.t('import.warningGroup', { label: 'Labels', count: 1 })).toBe('Labels (1)');
+    // notifications.unread
+    expect(en.translation.notifications).toHaveProperty(
+      'unread_one',
+      'Notifications, {{count}} unread',
+    );
+    expect(en.translation.notifications).toHaveProperty(
+      'unread_other',
+      'Notifications, {{count}} unread',
+    );
+    expect(i18n.t('notifications.unread', { count: 1 })).toBe('Notifications, 1 unread');
+    expect(i18n.t('notifications.unread', { count: 5 })).toBe('Notifications, 5 unread');
+  });
+
+  it('preserves dynamic keys that are built at runtime', async () => {
+    const { default: en } = await import('./locales/en.json');
+    // admin.backups.restoreError.* — built as t(`admin.backups.restoreError.\${code}`)
+    expect(en.translation.admin.backups.restoreError).toHaveProperty(
+      'backup_passphrase_or_damaged',
+      'The passphrase is wrong, or the file is damaged.',
+    );
+    expect(en.translation.admin.backups.restoreError).toHaveProperty(
+      'backup_invalid',
+      "That file isn't a usable BokyDo backup.",
+    );
+    // import.warningKind.* — built as t(`import.warningKind.\${kind}`)
+    expect(en.translation.import.warningKind).toHaveProperty('recurrence', 'Repeating dates');
+    expect(en.translation.import.warningKind).toHaveProperty('failed', 'Not imported');
+    // settings.tabs.* — built as t(`settings.tabs.\${key}`)
+    expect(en.translation.settings.tabs).toHaveProperty('appearance', 'Appearance');
+    expect(en.translation.settings.tabs).toHaveProperty('device', 'This device');
+    // settings.webhooks.events/status.* — built dynamically
+    expect(en.translation.settings.webhooks.events).toHaveProperty('task_added', 'Task added');
+    expect(en.translation.settings.webhooks.status).toHaveProperty('pending', 'waiting to be sent');
+  });
+
+  it('has English values (not key-name placeholders) for newly extracted keys', async () => {
+    const { default: en } = await import('./locales/en.json');
+    expect(en.translation.settings.data).toHaveProperty('username', 'Username');
+    expect(en.translation.settings.notifications).toHaveProperty('reminders', 'Reminders');
+    expect(en.translation.settings.notifications).toHaveProperty('whatToSend', 'What to send');
+  });
+
   it('remembers a pinned language and forgets it on "auto"', async () => {
     // No storage in this environment: both paths are no-ops that must not throw.
     expect(() => rememberedLanguage()).not.toThrow();
