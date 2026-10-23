@@ -1,4 +1,5 @@
 import {
+  type TodoistCompletedWindow,
   type TodoistImportChoices,
   type TodoistImportPlanSummary,
   type TodoistImportRun,
@@ -544,16 +545,48 @@ function CommentsSection({
 }) {
   const { t } = useTranslation();
   return (
-    <Section title={t('import.commentsTitle')}>
-      <Checkbox
-        label={t('import.commentsLabel')}
-        hint={t('import.commentsHint', {
-          comments: t('import.countComment', { count: preview.totals.comments }),
-        })}
-        checked={draft.comments}
-        onChange={(e) => edit((d) => ({ ...d, comments: e.target.checked }))}
-      />
-    </Section>
+    <>
+      <Section title={t('import.commentsTitle')}>
+        <Checkbox
+          label={t('import.commentsLabel')}
+          hint={t('import.commentsHint', {
+            comments: t('import.countComment', { count: preview.totals.comments }),
+          })}
+          checked={draft.comments}
+          onChange={(e) => edit((d) => ({ ...d, comments: e.target.checked }))}
+        />
+      </Section>
+      <Section title={t('import.completedTitle')}>
+        <Checkbox
+          label={t('import.completedLabel')}
+          hint={
+            preview.totals.completed > 0
+              ? t('import.completedHint', {
+                  completed: t('import.countCompleted', { count: preview.totals.completed }),
+                })
+              : t('import.completedNone')
+          }
+          checked={draft.completed}
+          onChange={(e) => edit((d) => ({ ...d, completed: e.target.checked }))}
+        />
+        {draft.completed && (
+          <div className="mt-4">
+            <SelectField
+              label={t('import.completedWindow')}
+              value={draft.completedWindow}
+              onChange={(e) =>
+                edit((d) => ({ ...d, completedWindow: e.target.value as TodoistCompletedWindow }))
+              }
+              options={[
+                { value: '1m', label: t('import.completedWindow1m') },
+                { value: '3m', label: t('import.completedWindow3m') },
+              ]}
+              hint={t('import.completedWindowHint')}
+            />
+          </div>
+        )}
+      </Section>
+    </>
   );
 }
 
