@@ -48,6 +48,11 @@ jobs:
       # The Android app runs this parser (ADR 0016): the committed bundle must be the current one.
       - run: pnpm --filter @bokydo/nlp build:android
       - run: git diff --exit-code -- apps/android/app/src/main/assets/nlp.js
+      # The phone's themes, fonts and time-zone data come from the web's packages: the
+      # committed copies must be the current ones.
+      - run: pnpm --filter @bokydo/themes build:android
+      - run: pnpm --filter @bokydo/shared build:android
+      - run: git diff --exit-code -- apps/android/core/src/main/kotlin apps/android/app/src/main/res/font
 
   android:
     name: Android (core tests, lint, build)

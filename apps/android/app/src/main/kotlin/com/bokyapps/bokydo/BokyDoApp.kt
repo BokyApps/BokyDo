@@ -62,6 +62,7 @@ class BokyDoApp : Application() {
     lateinit var client: BokyDoClient
     lateinit var engine: SyncEngine
     lateinit var quickAddParser: QuickAddParser
+    lateinit var device: DeviceSettings
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _screen = MutableStateFlow<AppScreen>(AppScreen.Connect())
@@ -78,6 +79,7 @@ class BokyDoApp : Application() {
         client = BokyDoClient(sessions)
         engine = SyncEngine(client, store)
         quickAddParser = QuickAddParser(this)
+        device = DeviceSettings(this)
         Notifier.createChannels(this)
         UnifiedPush.load(this)
         if (sessions.load() != null) {

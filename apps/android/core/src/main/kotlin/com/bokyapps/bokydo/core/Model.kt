@@ -55,7 +55,15 @@ data class Section(val id: String, val projectId: String, val name: String, val 
 
 data class Label(val id: String, val name: String, val color: String, val itemOrder: String)
 
-data class Prefs(val weekStart: String, val timeFormat: String, val dateFormat: String, val smartDates: Boolean)
+data class Prefs(
+    val weekStart: String,
+    val timeFormat: String,
+    val dateFormat: String,
+    val smartDates: Boolean,
+    /** The user's chosen zone (null until they pick one; the device's zone is offered). */
+    val timezone: String? = null,
+    val appearance: Appearance = Appearance.DEFAULT,
+)
 
 data class User(val id: String, val username: String, val inboxProjectId: String, val timeZone: String, val prefs: Prefs)
 
@@ -169,6 +177,8 @@ fun decodeUser(o: JsonObject): User {
             timeFormat = p.str("timeFormat") ?: "24h",
             dateFormat = p.str("dateFormat") ?: "dmy",
             smartDates = (p["smartDateRecognition"] as? JsonPrimitive)?.booleanOrNull ?: true,
+            timezone = p.str("timezone"),
+            appearance = Appearance.from(p["appearance"] as? JsonObject),
         ),
     )
 }
