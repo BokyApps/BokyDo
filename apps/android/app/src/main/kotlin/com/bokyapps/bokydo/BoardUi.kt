@@ -3,7 +3,6 @@ package com.bokyapps.bokydo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -45,9 +44,6 @@ import com.bokyapps.bokydo.core.Views
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** One column of the board: a section of the project, or the tasks without one. */
-private data class BoardColumn(val id: String, val title: String, val sectionId: String?, val tasks: List<Task>)
-
 /**
  * The project board (PLAN §9 A2d): one column per section, like the web's Kanban view. Cards
  * can be completed, opened and moved to another column.
@@ -56,38 +52,15 @@ private data class BoardColumn(val id: String, val title: String, val sectionId:
 fun BoardView(state: AppState, projectId: String, today: String, onOpen: (String) -> Unit) {
     val app = LocalContext.current.app
     val sections = remember(state, projectId) { Views.sectionsOf(state, projectId) }
-    val groups = remember(state, projectId) { Views.projectTasks(state, projectId) }
-    val columns = remember(sections, groups) {
-        val tasks = groups.firstOrNull { it.first == null }?.second.orEmpty()
-        val none = if (tasks.isNotEmpty() || sections.isEmpty()) {
-            listOf(BoardColumn("none", "(No section)", null, tasks))
-        } else {
-            emptyList()
-        }
-        none + sections.map { section ->
-            BoardColumn(
-                id = section.id,
-                title = section.name,
-                sectionId = section.id,
-                tasks = groups.firstOrNull { it.first?.id == section.id }?.second.orEmpty(),
-            )
-        }
-    }
+    val columns = remember(state, projectId, sections) { Views.boardColumns(state, projectId) }
     var moving by remember { mutableStateOf<Task?>(null) }
-
-    if (columns.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-            Text("No sections yet. Add one on the web app to use the board.")
-        }
-        return
-    }
 
     LazyRow(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(columns, key = { it.id }) { column ->
+        items(columns, key = { it.section?.id ?: "none" }) { column ->
             Column(
                 Modifier
                     .width(260.dp)
@@ -97,7 +70,7 @@ fun BoardView(state: AppState, projectId: String, today: String, onOpen: (String
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(column.title, style = MaterialTheme.typography.titleSmall)
+                Text(column.section?.name ?: "(No section)", style = MaterialTheme.typography.titleSmall)
                 Text("${column.tasks.size}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 for (task in column.tasks) {
                     BoardCard(
