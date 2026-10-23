@@ -250,18 +250,23 @@ export async function relayLive(
   }
   providerSocket.on('error', () => void finish('provider_error', 'failed'));
   providerSocket.on('close', () => void finish('provider_error', 'failed'));
-  session = provider.open(
-    providerSocket,
-    route.model,
-    ctx,
-    {
-      onReady: (sampleRate) => send({ type: 'ready', sampleRate }),
-      onTranscript: (text, final) => send({ type: 'transcript', text, final }),
-      onDraft: (update) => send({ type: 'draft', ...update }),
-      onError: (code) => send({ type: 'error', code }),
-    },
-    startDraft,
-  );
+  try {
+    session = provider.open(
+      providerSocket,
+      route.model,
+      ctx,
+      {
+        onReady: (sampleRate) => send({ type: 'ready', sampleRate }),
+        onTranscript: (text, final) => send({ type: 'transcript', text, final }),
+        onDraft: (update) => send({ type: 'draft', ...update }),
+        onError: (code) => send({ type: 'error', code }),
+      },
+      startDraft,
+    );
+  } catch {
+    await finish('provider_error', 'failed');
+    return;
+  }
   started = Date.now();
   for (const message of pending.splice(0)) handle(message);
   // The cap is on the session, not on the client's messages: an idle session ends too.

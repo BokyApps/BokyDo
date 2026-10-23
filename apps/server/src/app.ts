@@ -1,7 +1,7 @@
 import path from 'node:path';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
-import { type Health, type InstanceStatus } from '@bokydo/shared';
+import { RAMBLE_LIVE, type Health, type InstanceStatus } from '@bokydo/shared';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { STATUS_CODES } from 'node:http';
 import { registerAdminSettingsRoutes } from './admin/settings-routes.js';
@@ -291,8 +291,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   await app.register(cookie);
-  // WebSocket upgrades for the live Ramble relay (must be registered before its route).
-  await app.register(websocket);
+  // WebSocket upgrades for the live Ramble relay (must be registered before its route). The
+  // frame limit matches the relay's own message cap, so a hostile client can't buffer more.
+  await app.register(websocket, { options: { maxPayload: RAMBLE_LIVE.maxMessageChars } });
   await registerSecurityHeaders(app, settings);
   registerAccessControl(app, { settings, sessions, tokens: apiTokens });
 

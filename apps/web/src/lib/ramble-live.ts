@@ -323,11 +323,21 @@ export function useLiveRamble(options: LiveRambleOptions): LiveRamble {
     setPhase('stopping');
     mic.current?.close();
     mic.current = null;
-    if (ws.readyState === OPEN) ws.send(JSON.stringify({ type: 'stop' }));
-    // The server closes the socket when it is done; this is only a backstop.
-    window.setTimeout(() => {
-      if (socket.current === ws && ws.readyState === OPEN) ws.close(1000, 'done');
-    }, 5000);
+    if (ws.readyState === OPEN) {
+      ws.send(JSON.stringify({ type: 'stop' }));
+      // The server closes the socket when it is done; this is only a backstop.
+      window.setTimeout(() => {
+        if (socket.current === ws && ws.readyState === OPEN) ws.close(1000, 'done');
+      }, 5000);
+    } else {
+      // Still connecting: closing cancels the handshake, and no microphone was opened.
+      socket.current = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      ws.close();
+      setPhase('idle');
+    }
   }, []);
 
   useEffect(() => teardown, [teardown]);
