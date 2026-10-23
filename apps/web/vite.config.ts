@@ -10,7 +10,8 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { '/api': api, '/healthz': api, '/readyz': api },
+    // `ws: true` so the live Ramble relay's WebSocket reaches the API in development.
+    proxy: { '/api': { target: api, ws: true }, '/healthz': api, '/readyz': api },
   },
   build: {
     sourcemap: false,

@@ -44,6 +44,29 @@ const spentSince = (userId: string) => sql`
     and (status <> 'reserved'
          or started_at > now() - make_interval(mins => ${RESERVATION_TTL_MINUTES}))`;
 
+/**
+ * What is left of this user's monthly budget on instance credentials. The live relay uses it to
+ * size its reservation: a session may not reserve more audio than the user can still spend.
+ * A best-effort read (the reservation itself re-checks under the lock).
+ */
+export async function remainingBudget(
+  db: Database,
+  userId: string,
+  budget: { tokens: number | null; audioSeconds: number | null },
+): Promise<{ tokens: number | null; audioSeconds: number | null }> {
+  const [spent] = (await db.execute(spentSince(userId))) as unknown as {
+    tokens: string;
+    audio: string;
+  }[];
+  const usedTokens = Number(spent?.tokens ?? 0);
+  const usedAudio = Number(spent?.audio ?? 0);
+  return {
+    tokens: budget.tokens === null ? null : Math.max(0, budget.tokens - usedTokens),
+    audioSeconds:
+      budget.audioSeconds === null ? null : Math.max(0, budget.audioSeconds - usedAudio),
+  };
+}
+
 export interface ReserveInput {
   userId: string;
   credentialId: string;

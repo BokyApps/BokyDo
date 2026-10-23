@@ -9,6 +9,7 @@ import { newId } from '../db/ids.js';
 import { users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
 import type { OutboundFetch, Resolver } from '../net/outbound.js';
+import type { LiveConnector } from '../net/outbound-ws.js';
 import { hashPassword } from '../security/password.js';
 import { freshDb } from './db.js';
 
@@ -29,6 +30,7 @@ export async function testApp(
     resolver?: Resolver;
     aiUserFetch?: OutboundFetch;
     importFetch?: OutboundFetch;
+    liveConnect?: LiveConnector;
     logger?: Parameters<typeof buildApp>[0]['logger'];
   } = {},
 ): Promise<TestApp> {
@@ -44,6 +46,7 @@ export async function testApp(
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
     ...(opts.aiUserFetch ? { aiUserFetch: opts.aiUserFetch } : {}),
     ...(opts.importFetch ? { importFetch: opts.importFetch } : {}),
+    ...(opts.liveConnect ? { liveConnect: opts.liveConnect } : {}),
     secretsDir: dataDir,
     onRestored: () => undefined,
     ...(opts.logger ? { logger: opts.logger } : {}),

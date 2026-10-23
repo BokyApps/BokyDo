@@ -17,6 +17,7 @@ import {
   createOutbound,
   PUBLIC_ONLY,
   type OutboundFetch,
+  type OutboundPolicy,
   type Resolver,
 } from '../net/outbound.js';
 import type { SettingsService } from '../settings/settings-service.js';
@@ -183,16 +184,23 @@ export class AiService {
   }
 
   /**
+   * The network policy for a credential's scope. Users' own credentials only reach the public
+   * internet; instance credentials may also reach admin-allow-listed private networks. Shared by
+   * the HTTP client and the WebSocket relay so both enforce the same SSRF rules.
+   */
+  outboundPolicy(owner: CredentialOwner): OutboundPolicy {
+    return owner === null
+      ? allowlistPolicy(this.deps.settings.get('network.privateAllowlist'))
+      : PUBLIC_ONLY;
+  }
+
+  /**
    * The outbound client for a credential. Users' own credentials only reach the public internet
    * over https; instance credentials may also reach admin-allow-listed private networks.
    */
   outboundFor(owner: CredentialOwner): OutboundFetch {
     if (owner !== null && this.deps.userFetch) return this.deps.userFetch;
-    const policy =
-      owner === null
-        ? allowlistPolicy(this.deps.settings.get('network.privateAllowlist'))
-        : PUBLIC_ONLY;
-    return createOutbound(policy, this.deps.resolver);
+    return createOutbound(this.outboundPolicy(owner), this.deps.resolver);
   }
 
   /** Subscription sign-in talks to the provider's own servers: public internet, https only. */

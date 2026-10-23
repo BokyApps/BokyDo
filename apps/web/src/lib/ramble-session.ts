@@ -10,6 +10,7 @@ import {
   createSerialQueue,
   draftForExtract,
   extractDraft,
+  keepOverrides,
   mergeExtraction,
   reconcileOverrides,
   summarizeOps,
@@ -125,6 +126,16 @@ export function useRambleSession() {
   const setContent = (ref: string, content: string) =>
     setDraft(draftRef.current.map((t) => (t.ref === ref ? { ...t, content } : t)));
 
+  /**
+   * The live model sent the whole draft. While a live session runs the model owns the draft, so
+   * its answer replaces the draft; the user's project picks stay, for the tasks still in it.
+   */
+  const applyLiveDraft = (draft: RambleResolvedTask[], ops: RambleOpSummary[]) => {
+    setDraft(draft);
+    setLastOps(ops);
+    setOverrides(keepOverrides(overridesRef.current, draft));
+  };
+
   const setProject = (ref: string, projectId: string) =>
     setOverrides({ ...overridesRef.current, [ref]: projectId });
 
@@ -189,6 +200,7 @@ export function useRambleSession() {
     committing,
     submitText,
     heard,
+    applyLiveDraft,
     setContent,
     setProject,
     remove,

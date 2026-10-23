@@ -356,7 +356,6 @@ private fun issueText(issue: String): String = when (issue) {
     else -> issue
 }
 
-private fun AppState.prefs() = user?.prefs ?: com.bokyapps.bokydo.core.Prefs("monday", "24h", "dmy", true)
 
 /** The mic entry in the app bar, next to the screen title. */
 @Composable
