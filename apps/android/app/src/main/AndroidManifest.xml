@@ -105,5 +105,47 @@
                 <action android:name="org.unifiedpush.android.connector.TEMP_UNAVAILABLE" />
             </intent-filter>
         </receiver>
+
+        <!--
+          Home-screen widgets (A4b). The host sends the protected APPWIDGET_UPDATE broadcast;
+          tapping a checkbox runs an explicit, immutable PendingIntent the host holds, so no other
+          app can complete tasks. The widget is home-screen only (not the lock screen), its config
+          is app-private, and completing a task still goes through the same queue and server checks.
+        -->
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (the launcher must reach the provider; it only draws the user's own data) -->
+        <receiver
+            android:name=".TodayWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_tasks">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_tasks_info" />
+        </receiver>
+
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (the launcher must reach the provider) -->
+        <receiver
+            android:name=".QuickAddWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_quick_add">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_quick_add_info" />
+        </receiver>
+
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (the widget host must start the configuration screen) -->
+        <activity
+            android:name=".WidgetConfigActivity"
+            android:exported="true"
+            android:theme="@style/Theme.BokyDo">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

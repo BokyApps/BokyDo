@@ -119,7 +119,7 @@ sealed interface Route {
 /** The signed-in app: task lists, quick add, browse and settings. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppShell(state: AppState) {
+fun AppShell(state: AppState, startWithQuickAdd: Boolean = false, onQuickAddOpened: () -> Unit = {}) {
     val app = LocalContext.current.app
     // "Today" moves at midnight even when nothing syncs.
     var clock by remember { mutableStateOf(0L) }
@@ -131,6 +131,13 @@ fun AppShell(state: AppState) {
     }
     var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
     var adding by remember { mutableStateOf(false) }
+    // The quick-add widget (or a share) can ask for the add sheet on open.
+    LaunchedEffect(startWithQuickAdd) {
+        if (startWithQuickAdd) {
+            adding = true
+            onQuickAddOpened()
+        }
+    }
     val route = stack.last()
     // The user's own zone wins, then the account's, then the phone's.
     val zone = state.user?.prefs?.timezone ?: state.user?.timeZone ?: TimeZones.detect() ?: "UTC"

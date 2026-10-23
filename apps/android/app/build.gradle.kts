@@ -62,4 +62,6 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     // Ramble's mic glyph lives in the extended set (BOM pins the version).
     implementation(libs.androidx.compose.material.icons.extended)
+    // Home-screen widgets (A4b) use Glance; the list/theme logic itself is in :core.
+    implementation(libs.androidx.glance.appwidget)
 }
