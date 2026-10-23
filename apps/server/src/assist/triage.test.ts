@@ -24,6 +24,7 @@ async function person(name: string) {
 
 describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
   let alice: Awaited<ReturnType<typeof person>>;
+  let bob: Awaited<ReturnType<typeof person>>;
   let work: string;
   let home: string;
   let report: string;
@@ -35,7 +36,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
     t = await testApp({ aiUserFetch: model.fetch });
     await t.app.services.settings.markSetupComplete({ userId: null, ip: null });
     alice = await person('alice');
-    const bob = await person('bob');
+    bob = await person('bob');
     const cred = (
       await alice.http.post('/api/v1/ai/credentials', {
         provider: 'openai',
@@ -126,7 +127,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
     // Create a project Alice shares with Bob
     const shared = id();
     await alice.sync.ok(cmd('project_add', { id: shared, name: 'Shared' }));
-    await alice.sync.ok(cmd('project_share', { projectId: shared, userId: await createUser(t.db, { username: 'bob', password: 'x'.repeat(12) }), role: 'member' }));
+    const invite = await alice.http.post(`/api/v1/projects/${shared}/invites`, { role: 'editor' });
+    expect(invite.statusCode).toBe(201);
+    const { token } = invite.json() as { token: string };
+    expect((await bob.http.post('/api/v1/invites/link/accept', { token })).statusCode).toBe(200);
 
     // One of Alice's tasks with an auto-apply confidence
     const high = id();
@@ -142,7 +146,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
     }));
     const res = await alice.http.post('/api/v1/assist/triage', { taskIds: [high, plants] });
     expect(res.statusCode).toBe(200);
-    const { applied, suggestions } = res.json() as { applied: unknown[] };
+    const { applied, suggestions } = res.json() as TriageResponse;
 
     // High confidence task applied (not to shared project), low confidence not applied
     expect(suggestions).toHaveLength(2);
