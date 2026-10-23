@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 
 /**
@@ -22,6 +23,108 @@ object Optimistic {
     private fun applyOne(s: AppState, c: Command): AppState {
         val a = c.args
         if (c.type == "user_update_preferences") return applyPreferences(s, a)
+        val id = a.str("id") ?: return s
+        return when (c.type) {
+            "comment_add" -> commentAdded(s, id, a)
+            "comment_update" -> {
+                val old = s.comments[id] ?: return s
+                s.copy(comments = s.comments + (id to old.copy(
+                    content = a.str("content") ?: old.content,
+                    updatedAt = now(),
+                )))
+            }
+            "comment_delete" -> s.copy(comments = s.comments - id)
+            "label_add" -> {
+                val name = a.str("name") ?: return s
+                val label = Label(
+                    id = id,
+                    name = name,
+                    color = a.str("color") ?: "charcoal",
+                    itemOrder = a.str("itemOrder") ?: LAST + id,
+                    isFavorite = (a["isFavorite"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                )
+                s.copy(labels = s.labels + (id to label))
+            }
+            "label_update" -> {
+                val old = s.labels[id] ?: return s
+                val renamed = a.str("name")
+                val label = old.copy(
+                    name = renamed ?: old.name,
+                    color = a.str("color") ?: old.color,
+                    itemOrder = a.str("itemOrder") ?: old.itemOrder,
+                    isFavorite = (a["isFavorite"] as? JsonPrimitive)?.booleanOrNull ?: old.isFavorite,
+                )
+                val withTasks = if (renamed != null && renamed != old.name) {
+                    renameLabel(s, old.name, renamed)
+                } else {
+                    s
+                }
+                withTasks.copy(labels = withTasks.labels + (id to label))
+            }
+            "label_delete" -> {
+                val old = s.labels[id] ?: return s
+                renameLabel(s.copy(labels = s.labels - id), old.name, null)
+            }
+            "filter_add" -> {
+                val name = a.str("name") ?: return s
+                val query = a.str("query") ?: return s
+                val filter = Filter(
+                    id = id,
+                    name = name,
+                    query = query,
+                    color = a.str("color") ?: "charcoal",
+                    itemOrder = a.str("itemOrder") ?: LAST + id,
+                    isFavorite = (a["isFavorite"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                )
+                s.copy(filters = s.filters + (id to filter))
+            }
+            "filter_update" -> {
+                val old = s.filters[id] ?: return s
+                val filter = old.copy(
+                    name = a.str("name") ?: old.name,
+                    query = a.str("query") ?: old.query,
+                    color = a.str("color") ?: old.color,
+                    itemOrder = a.str("itemOrder") ?: old.itemOrder,
+                    isFavorite = (a["isFavorite"] as? JsonPrimitive)?.booleanOrNull ?: old.isFavorite,
+                )
+                s.copy(filters = s.filters + (id to filter))
+            }
+            "filter_delete" -> s.copy(filters = s.filters - id)
+            else -> applyTask(s, c)
+        }
+    }
+
+    /** A comment waiting for the server: shown at once, with the author's name. */
+    private fun commentAdded(s: AppState, id: String, a: JsonObject): AppState {
+        val taskId = a.str("taskId")
+        val projectId = a.str("projectId") ?: taskId?.let { s.tasks[it]?.projectId } ?: return s
+        val stamp = now()
+        val comment = Comment(
+            id = id,
+            projectId = projectId,
+            taskId = taskId,
+            userId = s.user?.id,
+            content = a.str("content") ?: return s,
+            createdAt = stamp,
+            updatedAt = stamp,
+            pending = true,
+        )
+        return s.copy(comments = s.comments + (id to comment))
+    }
+
+    /** A renamed label follows the tasks that carry it (the server rewrites them too). */
+    private fun renameLabel(s: AppState, from: String, to: String?): AppState {
+        val tasks = s.tasks.mapValues { (_, t) ->
+            if (t.labels.none { it == from }) t
+            else t.copy(labels = if (to == null) t.labels.filter { it != from } else t.labels.map { if (it == from) to else it })
+        }
+        return s.copy(tasks = tasks)
+    }
+
+    private fun now(): String = java.time.Instant.now().toString()
+
+    private fun applyTask(s: AppState, c: Command): AppState {
+        val a = c.args
         val id = a.str("id") ?: return s
         val tasks = s.tasks.toMutableMap()
         when (c.type) {

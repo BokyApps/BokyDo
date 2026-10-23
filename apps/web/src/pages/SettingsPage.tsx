@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { AccountDataSettings } from '../components/AccountDataSettings.js';
 import { AiSettings } from '../components/AiSettings.js';
 import { ApiAccessSettings } from '../components/ApiAccessSettings.js';
+import { DeviceSettings } from '../components/DeviceSettings.js';
 import { WebhookSettings } from '../components/WebhookSettings.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
@@ -18,7 +19,15 @@ import { NotificationSettings } from './NotificationSettings.js';
 const LANGUAGE_NAMES: Record<(typeof LANGUAGES)[number], string> = { en: 'English' };
 
 type Tab =
-  'appearance' | 'general' | 'notifications' | 'calendar' | 'apps' | 'ai' | 'webhooks' | 'data';
+  | 'appearance'
+  | 'general'
+  | 'notifications'
+  | 'calendar'
+  | 'apps'
+  | 'ai'
+  | 'webhooks'
+  | 'data'
+  | 'device';
 const TAB_LABEL: Record<Tab, string> = {
   appearance: 'Appearance',
   general: 'General',
@@ -28,6 +37,7 @@ const TAB_LABEL: Record<Tab, string> = {
   ai: 'AI',
   webhooks: 'Webhooks',
   data: 'Your data',
+  device: 'This device',
 };
 
 export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }) {
@@ -60,6 +70,7 @@ export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }
       {tab === 'ai' && <AiSettings />}
       {tab === 'webhooks' && <WebhookSettings />}
       {tab === 'data' && <AccountDataSettings />}
+      {tab === 'device' && <DeviceSettings />}
     </Page>
   );
 }

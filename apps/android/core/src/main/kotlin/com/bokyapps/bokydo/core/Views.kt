@@ -87,6 +87,49 @@ object Views {
     /** By due date and time (no time last within a day), then priority: the web's "date" sort. */
     fun sortByDate(tasks: List<Task>): List<Task> =
         tasks.sortedWith(compareBy<Task>({ it.due?.let { d -> "${d.date} ${d.time ?: "99:99"}" } ?: "9999" }, { it.priority }))
+
+    /** Open tasks the user can act on: a live project and not completed. */
+    fun openTasks(s: AppState): List<Task> = liveTasks(s).filter { !it.isCompleted }
+
+    /** Open tasks with a label (the name is matched case-insensitively, like the web). */
+    fun labelTasks(s: AppState, name: String): List<Task> {
+        val n = name.lowercase()
+        return openTasks(s).filter { t -> t.labels.any { it.lowercase() == n } }
+    }
+
+    /** Every label name in use: the user's own labels plus names on shared tasks. */
+    fun allLabelNames(s: AppState): List<String> {
+        val names = linkedMapOf<String, String>()
+        for (l in s.labels.values) names[l.name.lowercase()] = l.name
+        for (t in s.tasks.values) for (l in t.labels) names.putIfAbsent(l.lowercase(), l)
+        return names.values.sorted()
+    }
+
+    /** Comments on a task, oldest first (the web's thread order). */
+    fun commentsOf(s: AppState, taskId: String): List<Comment> =
+        s.comments.values.filter { it.taskId == taskId }.sortedWith(compareBy({ it.createdAt }, { it.id }))
+
+    /** What a search finds: open tasks first, then completed ones, plus matching projects. */
+    data class Search(val tasks: List<Task>, val projects: List<Project>)
+
+    /**
+     * Search over the synced data, like the web's dialog: the task name or description contains
+     * the text; completed tasks come last (the web asks the server for those).
+     */
+    fun search(s: AppState, needle: String, limit: Int = 20): Search {
+        val n = needle.trim().lowercase()
+        if (n.isEmpty()) return Search(emptyList(), emptyList())
+        val hits = liveTasks(s).filter {
+            it.content.lowercase().contains(n) || it.description.lowercase().contains(n)
+        }
+        val open = hits.filter { !it.isCompleted }
+        val done = hits.filter { it.isCompleted }
+        val projects = s.projects.values
+            .filter { !it.isInbox && !it.isArchived && it.name.lowercase().contains(n) }
+            .sortedBy { it.name }
+            .take(5)
+        return Search((open + done).take(limit), projects)
+    }
 }
 
 /** Date labels like the web's `describeDate`: "Today", "Tomorrow 14:00", "Friday", "12 Oct". */
@@ -128,6 +171,24 @@ object Dates {
             "mdy" -> "$month ${d.dayOfMonth}$year"
             "ymd" -> if (withYear) "${d.year} $month ${d.dayOfMonth}" else "$month ${d.dayOfMonth}"
             else -> "${d.dayOfMonth} $month$year"
+        }
+    }
+
+    /**
+     * How long ago a timestamp was, like the web's `ago`: "just now", "5 min ago", "3 h ago",
+     * and the date from a day on. A timestamp the device can't read gives an empty string.
+     */
+    fun ago(iso: String, nowMs: Long = System.currentTimeMillis(), locale: Locale = Locale.getDefault()): String {
+        val then = runCatching { java.time.Instant.parse(iso) }.getOrNull() ?: return ""
+        val seconds = (nowMs - then.toEpochMilli()) / 1000
+        return when {
+            seconds < 60 -> "just now"
+            seconds < 3_600 -> "${seconds / 60} min ago"
+            seconds < 86_400 -> "${seconds / 3_600} h ago"
+            else -> {
+                val day = java.time.LocalDate.ofInstant(then, java.time.ZoneId.systemDefault())
+                "${day.dayOfMonth} ${day.month.getDisplayName(TextStyle.SHORT, locale)}"
+            }
         }
     }
 

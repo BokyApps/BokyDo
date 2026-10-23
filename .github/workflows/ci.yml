@@ -53,6 +53,9 @@ jobs:
       - run: pnpm --filter @bokydo/themes build:android
       - run: pnpm --filter @bokydo/shared build:android
       - run: git diff --exit-code -- apps/android/core/src/main/kotlin apps/android/app/src/main/res/font
+      # The saved filters run on the same sandbox (A2c).
+      - run: pnpm --filter @bokydo/filter-query build:android
+      - run: git diff --exit-code -- apps/android/app/src/main/assets/filter.js
 
   android:
     name: Android (core tests, lint, build)

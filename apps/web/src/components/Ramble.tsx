@@ -1,4 +1,4 @@
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useConfirm } from '../lib/confirm.js';
 import {
   appendSpoken,
@@ -10,6 +10,7 @@ import {
 import { useRambleSession } from '../lib/ramble-session.js';
 import { canRecordAudio, speechRecognitionCtor, useVoiceCapture } from '../lib/ramble-voice.js';
 import { useSyncState } from '../lib/sync.js';
+import { RambleLive } from './RambleLive.js';
 import { DictateControl, VoiceControls } from './RambleVoice.js';
 import { RambleReview } from './RambleReview.js';
 import { Alert, Button, Dialog, TextArea } from './ui.js';
@@ -23,16 +24,19 @@ export function RambleDialog({
   open,
   onClose,
   voice,
+  live,
 }: {
   open: boolean;
   onClose: () => void;
   /** The server can transcribe audio (ramble.transcribe). Otherwise dictation may still work. */
   voice: boolean;
+  /** The server has a live model routed (ramble.live). */
+  live: boolean;
 }) {
   const session = useRambleSession();
   return (
     <Dialog open={open} onClose={onClose} title="Ramble" wide>
-      <RambleBody session={session} voice={voice} onClose={onClose} />
+      <RambleBody session={session} voice={voice} live={live} onClose={onClose} />
     </Dialog>
   );
 }
@@ -42,10 +46,12 @@ type Session = ReturnType<typeof useRambleSession>;
 function RambleBody({
   session,
   voice,
+  live,
   onClose,
 }: {
   session: Session;
   voice: boolean;
+  live: boolean;
   onClose: () => void;
 }) {
   const state = useSyncState();
@@ -54,9 +60,11 @@ function RambleBody({
   const inboxId = state.user?.inboxProjectId ?? null;
   // The microphone lives with the dialog: closing it stops the recording (see useVoiceCapture).
   const mic = useVoiceCapture(session.heard, session.setError);
+  // A live session holds the microphone itself, so the chunked recorder steps aside while it runs.
+  const [liveRunning, setLiveRunning] = useState(false);
   // Voice needs the server's transcription and a browser that can record. Otherwise the
   // browser's own dictation (if it has one) fills the text box.
-  const recording = voice && canRecordAudio();
+  const recording = voice && canRecordAudio() && !liveRunning;
   const dictation = !recording && speechRecognitionCtor() !== null;
   const createHintId = useId();
   const draftHeading = useId();
@@ -113,6 +121,15 @@ function RambleBody({
         Say or type what is on your mind. Each piece you add updates the draft below. Nothing is
         created until you press Create.
       </p>
+
+      <RambleLive
+        available={live}
+        canRecord={canRecordAudio()}
+        draft={session.draft}
+        onDraft={session.applyLiveDraft}
+        onError={session.setError}
+        onRunningChange={setLiveRunning}
+      />
 
       <TextArea
         label="What's on your mind?"

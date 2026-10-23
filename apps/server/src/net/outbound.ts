@@ -106,7 +106,39 @@ export type OutboundFetch = (url: string, init?: OutboundRequest) => Promise<Out
 
 export type Resolver = (hostname: string) => Promise<{ address: string; family: number }[]>;
 
-const defaultResolver: Resolver = (hostname) => dnsLookup(hostname, { all: true, verbatim: true });
+export const defaultResolver: Resolver = (hostname) =>
+  dnsLookup(hostname, { all: true, verbatim: true });
+
+/**
+ * A `net`/`tls` lookup that checks every address a name resolves to and lets the socket connect
+ * only to a checked one (no second lookup, so DNS rebinding can't swap it). Shared by the HTTP
+ * client and the WebSocket client so both pin the same way.
+ */
+export function policyLookup(policy: OutboundPolicy, resolve: Resolver): LookupFunction {
+  return (hostname, options, callback) => {
+    resolve(hostname).then(
+      (found) => {
+        const parsed = found.map((a) => ({ ...a, ip: parseIp(a.address) }));
+        // Every address must be acceptable: a name that resolves to one public and one
+        // internal address is refused rather than racing for the "good" one.
+        if (parsed.length === 0 || parsed.some((a) => !a.ip || !policy.allows(a.ip, hostname))) {
+          callback(new OutboundError('blocked_address'), '', 0);
+          return;
+        }
+        if (options.all) {
+          (callback as unknown as (e: null, a: { address: string; family: number }[]) => void)(
+            null,
+            parsed.map(({ address, family }) => ({ address, family })),
+          );
+        } else {
+          const [first] = parsed as [(typeof parsed)[number]];
+          callback(null, first.address, first.family);
+        }
+      },
+      () => callback(new OutboundError('dns_failed'), '', 0),
+    );
+  };
+}
 
 export function createOutbound(
   policy: OutboundPolicy,
@@ -135,29 +167,7 @@ async function outboundRequest(
   if (literal && !policy.allows(literal, url.hostname)) throw new OutboundError('blocked_address');
   // A bracketed host that isn't a valid IPv6 literal would have failed `new URL` already.
 
-  const lookup: LookupFunction = (hostname, options, callback) => {
-    resolve(hostname).then(
-      (found) => {
-        const parsed = found.map((a) => ({ ...a, ip: parseIp(a.address) }));
-        // Every address must be acceptable: a name that resolves to one public and one
-        // internal address is refused rather than racing for the "good" one.
-        if (parsed.length === 0 || parsed.some((a) => !a.ip || !policy.allows(a.ip, hostname))) {
-          callback(new OutboundError('blocked_address'), '', 0);
-          return;
-        }
-        if (options.all) {
-          (callback as unknown as (e: null, a: { address: string; family: number }[]) => void)(
-            null,
-            parsed.map(({ address, family }) => ({ address, family })),
-          );
-        } else {
-          const [first] = parsed as [(typeof parsed)[number]];
-          callback(null, first.address, first.family);
-        }
-      },
-      () => callback(new OutboundError('dns_failed'), '', 0),
-    );
-  };
+  const lookup = policyLookup(policy, resolve);
 
   const timeoutMs = init.timeoutMs ?? 30_000;
   const maxBytes = init.maxResponseBytes ?? 10 * 1024 * 1024;

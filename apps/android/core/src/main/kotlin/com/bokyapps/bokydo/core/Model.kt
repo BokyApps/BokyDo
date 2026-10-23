@@ -34,6 +34,9 @@ data class Task(
     val labels: List<String>,
     val childOrder: String,
     val isCompleted: Boolean,
+    val assigneeId: String? = null,
+    val assignedById: String? = null,
+    val createdAt: String? = null,
 )
 
 data class Project(
@@ -53,7 +56,22 @@ data class Project(
 
 data class Section(val id: String, val projectId: String, val name: String, val sectionOrder: String, val isArchived: Boolean)
 
-data class Label(val id: String, val name: String, val color: String, val itemOrder: String)
+data class Label(val id: String, val name: String, val color: String, val itemOrder: String, val isFavorite: Boolean = false)
+
+/** A saved filter: the query is the web's filter language (`packages/filter-query`). */
+data class Filter(val id: String, val name: String, val query: String, val color: String, val itemOrder: String, val isFavorite: Boolean = false)
+
+/** A comment on a task (or on the project itself). */
+data class Comment(
+    val id: String,
+    val projectId: String,
+    val taskId: String?,
+    val userId: String?,
+    val content: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val pending: Boolean = false,
+)
 
 data class Prefs(
     val weekStart: String,
@@ -80,6 +98,8 @@ data class AppState(
     val labels: Map<String, Label>,
     val members: List<Member>,
     val people: Map<String, Person>,
+    val comments: Map<String, Comment> = emptyMap(),
+    val filters: Map<String, Filter> = emptyMap(),
 ) {
     companion object {
         val EMPTY = AppState(null, emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyList(), emptyMap())
@@ -102,6 +122,8 @@ data class AppState(
                     val o = it as? JsonObject ?: return@mapNotNull null
                     Person(o.str("id") ?: return@mapNotNull null, o.str("username") ?: return@mapNotNull null)
                 }.associateBy { it.id },
+                comments = all("comments", ::decodeComment).associateBy { it.id },
+                filters = all("filters", ::decodeFilter).associateBy { it.id },
             )
         }
     }
@@ -136,6 +158,9 @@ fun decodeTask(o: JsonObject) = Task(
     labels = (o["labels"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content },
     childOrder = o.str("childOrder") ?: "",
     isCompleted = o.bool("isCompleted"),
+    assigneeId = o.str("assigneeId"),
+    assignedById = o.str("assignedById"),
+    createdAt = o.str("createdAt"),
 )
 
 fun decodeProject(o: JsonObject) = Project(
@@ -163,6 +188,26 @@ fun decodeLabel(o: JsonObject) = Label(
     name = o.need("name"),
     color = o.str("color") ?: "charcoal",
     itemOrder = o.str("itemOrder") ?: "",
+    isFavorite = o.bool("isFavorite"),
+)
+
+fun decodeFilter(o: JsonObject) = Filter(
+    id = o.need("id"),
+    name = o.need("name"),
+    query = o.str("query") ?: "",
+    color = o.str("color") ?: "charcoal",
+    itemOrder = o.str("itemOrder") ?: "",
+    isFavorite = o.bool("isFavorite"),
+)
+
+fun decodeComment(o: JsonObject) = Comment(
+    id = o.need("id"),
+    projectId = o.need("projectId"),
+    taskId = o.str("taskId"),
+    userId = o.str("userId"),
+    content = o.str("content") ?: "",
+    createdAt = o.str("createdAt") ?: "",
+    updatedAt = o.str("updatedAt") ?: o.str("createdAt") ?: "",
 )
 
 fun decodeUser(o: JsonObject): User {
