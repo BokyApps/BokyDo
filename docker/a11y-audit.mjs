@@ -75,6 +75,8 @@ async function seed(page, csrf) {
   const project = id();
   const section = id();
   const filter = id();
+  const parent = id();
+  const child = id();
   const task = (content, over = {}) => ({
     type: 'task_add',
     uuid: id(),
@@ -92,6 +94,23 @@ async function seed(page, csrf) {
       due: due('2030-03-01'),
       description: 'See [the docs](https://example.com/docs).',
     }),
+    // A task with sub-tasks, so the collapse toggle and the drag handle are on screen (F-041).
+    {
+      type: 'task_add',
+      uuid: id(),
+      args: { id: parent, projectId: project, sectionId: section, content: 'Plan the release' },
+    },
+    {
+      type: 'task_add',
+      uuid: id(),
+      args: {
+        id: child,
+        projectId: project,
+        sectionId: section,
+        parentId: parent,
+        content: 'Draft the notes',
+      },
+    },
     task('Call the nursery', {
       due: due('2030-03-04', '09:30'),
       durationMinutes: 30,
@@ -231,7 +250,7 @@ async function axePass({ browser, project, filter, csrfOf }) {
     await ctx.close();
   }
   const phone = await browser.newContext({
-    viewport: { width: 375, height: 812 },
+    viewport: { width: 390, height: 844 },
     bypassCSP: true,
   });
   const pp = await phone.newPage();
@@ -248,6 +267,62 @@ async function axePass({ browser, project, filter, csrfOf }) {
   ]) {
     await pp.goto(BASE + url);
     await scan(pp, `${name} [phone]`);
+  }
+  // F-041: on a phone the sub-task toggle and the drag handle must sit on the row (24 px
+  // targets, not off its left edge) and never on top of each other.
+  await pp.goto(`${BASE}/project/${project}`);
+  await pp.waitForTimeout(700);
+  const geom = await pp.evaluate(() => {
+    const toggle = document.querySelector(
+      'button[aria-label="Hide sub-tasks"], button[aria-label="Show sub-tasks"]',
+    );
+    const row = toggle?.closest('[data-task-row]');
+    const handle = row?.querySelector('button[aria-label="Drag to reorder"]');
+    if (!row || !toggle || !handle) return null;
+    const r = row.getBoundingClientRect();
+    const t = toggle.getBoundingClientRect();
+    const h = handle.getBoundingClientRect();
+    const box = (b) => ({
+      left: b.left,
+      top: b.top,
+      right: b.right,
+      bottom: b.bottom,
+      width: b.width,
+      height: b.height,
+    });
+    return {
+      rowLeft: r.left,
+      rowRight: r.right,
+      viewport: innerWidth,
+      toggle: box(t),
+      handle: box(h),
+      overlaps: t.left < h.right && h.left < t.right && t.top < h.bottom && h.top < t.bottom,
+    };
+  });
+  if (!geom) {
+    problem('targets', 'phone: found no row with both a sub-task toggle and a drag handle');
+  } else {
+    const onRow = (b) => b.left >= geom.rowLeft - 0.5 && b.right <= geom.rowRight + 0.5;
+    const onScreen = (b) => b.left >= -0.5 && b.right <= geom.viewport + 0.5;
+    const full = (b) => b.width >= 24 && b.height >= 24;
+    onRow(geom.toggle) && full(geom.toggle)
+      ? ok('phone: the sub-task toggle is a full target on the row')
+      : problem(
+          'targets',
+          `phone: the sub-task toggle is off the row or too small ${JSON.stringify(geom.toggle)}`,
+        );
+    onRow(geom.handle) && full(geom.handle)
+      ? ok('phone: the drag handle is a full target on the row')
+      : problem(
+          'targets',
+          `phone: the drag handle is off the row or too small ${JSON.stringify(geom.handle)}`,
+        );
+    onScreen(geom.toggle) && onScreen(geom.handle)
+      ? ok('phone: the sub-task toggle and the drag handle are on screen')
+      : problem('targets', 'phone: a row control is off screen');
+    geom.overlaps
+      ? problem('targets', 'phone: the sub-task toggle and the drag handle overlap')
+      : ok('phone: the sub-task toggle and the drag handle do not overlap');
   }
   await phone.close();
   if (ADMIN_PASSWORD) {
