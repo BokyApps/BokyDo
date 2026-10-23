@@ -20,6 +20,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTaskActions } from '../lib/actions.js';
 import { announcementsFor, taskName } from '../lib/dnd-announcements.js';
 import { describeDate, describeDue, TONE_CLASS, todayIn } from '../lib/dates.js';
@@ -90,6 +91,7 @@ export function Board({
   showProject?: boolean;
   readOnly?: boolean;
 }) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [dragging, setDragging] = useState<Task | null>(null);
   const sensors = useSensors(
@@ -103,7 +105,9 @@ export function Board({
     if (task) return taskName(task.content);
     const column = byId.get(key.replace(/^column:/, ''));
     if (!column) return null;
-    return `the column “${column.label ?? (typeof column.title === 'string' ? column.title : 'column')}”`;
+    return t('board.announceColumn', {
+      name: column.label ?? (typeof column.title === 'string' ? column.title : t('board.column')),
+    });
   });
 
   const onDragStart = ({ active }: DragStartEvent) =>
@@ -189,23 +193,25 @@ function Column({
   showProject: boolean;
   readOnly: boolean;
 }) {
+  const { t } = useTranslation();
   const { setNodeRef, isOver } = useDroppable({
     id: `column:${column.id}`,
     disabled: column.droppable === false,
   });
   const count = column.tasks.length;
-  const name = column.label ?? (typeof column.title === 'string' ? column.title : 'Column');
+  const name =
+    column.label ?? (typeof column.title === 'string' ? column.title : t('board.column'));
   if (collapsed)
     return (
       <section
         ref={setNodeRef}
-        aria-label={`${name} (collapsed)`}
+        aria-label={t('board.collapsed', { name })}
         className={`flex w-10 shrink-0 flex-col items-center gap-2 rounded-xl bg-surface-alt/60 py-3 ${isOver ? 'ring-2 ring-accent' : ''}`}
       >
         <button
           type="button"
           onClick={onToggle}
-          aria-label="Expand column"
+          aria-label={t('board.expandColumn')}
           aria-expanded={false}
           className="rounded p-0.5 text-muted hover:text-fg"
         >
@@ -224,7 +230,7 @@ function Column({
         <button
           type="button"
           onClick={onToggle}
-          aria-label="Collapse column"
+          aria-label={t('board.collapseColumn')}
           aria-expanded
           className="rounded p-0.5 text-muted hover:text-fg"
         >
@@ -262,6 +268,7 @@ function SortableCard({
   showProject: boolean;
   disabled: boolean;
 }) {
+  const { t } = useTranslation();
   const {
     attributes,
     listeners,
@@ -285,7 +292,7 @@ function SortableCard({
           type="button"
           ref={setActivatorNodeRef}
           {...attributes}
-          aria-label={`Move “${task.content}”`}
+          aria-label={t('board.move', { content: task.content })}
           onClick={(e) => e.stopPropagation()}
           className="absolute top-1 right-1 z-10 rounded p-1 text-muted opacity-0 group-hover/card:opacity-100 hover:text-fg focus-visible:opacity-100"
         >
@@ -307,6 +314,7 @@ export function TaskCard({
   showProject?: boolean;
   lifted?: boolean;
 }) {
+  const { t } = useTranslation();
   const state = useSyncState();
   const prefs = usePreferences();
   const today = todayIn(useTimeZone());
@@ -343,7 +351,7 @@ export function TaskCard({
         {due && (
           <span className={`inline-flex items-center gap-1 ${TONE_CLASS[due.tone]}`}>
             <CalendarIcon /> {due.label}
-            {task.due?.recurrence && <span aria-label="repeats">↻</span>}
+            {task.due?.recurrence && <span aria-label={t('task.repeats')}>↻</span>}
           </span>
         )}
         {deadline && (
@@ -373,7 +381,7 @@ export function TaskCard({
         )}
         {showProject && project && (
           <span className="ml-auto inline-flex items-center gap-1">
-            {project.isInbox ? 'Inbox' : project.name}
+            {project.isInbox ? t('task.inbox') : project.name}
             <ProjectDot color={project.color} inbox={project.isInbox} />
           </span>
         )}

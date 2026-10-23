@@ -1,38 +1,27 @@
 import { webhookEventNames, type WebhookSubscriptionInfo } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
 import { errorMessage } from '../lib/messages.js';
 import { useSensitive } from '../lib/reauth.js';
 import { Alert, Button, Card, Checkbox, SecretList, TextField } from './ui.js';
 
-const day = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 'never');
+const day = (iso: string | null, never: string) =>
+  iso ? new Date(iso).toLocaleString() : never;
 
-const EVENT_LABELS: Record<(typeof webhookEventNames)[number], string> = {
-  task_added: 'Task added',
-  task_updated: 'Task updated',
-  task_moved: 'Task moved',
-  task_completed: 'Task completed',
-  task_uncompleted: 'Task uncompleted',
-  task_deleted: 'Task deleted',
-  comment_added: 'Comment added',
-  project_archived: 'Project archived',
-  project_unarchived: 'Project unarchived',
-};
-
-const STATUS_LABEL: Record<NonNullable<WebhookSubscriptionInfo['lastDeliveryStatus']>, string> = {
-  pending: 'waiting to be sent',
-  delivered: 'delivered',
-  dropped: 'dropped (no access any more)',
-  failed: 'failed after retries',
-};
+// Labels come from the catalogue; the keys are the raw event/status values.
+const eventKey = (name: string) => `settings.webhooks.events.${name}`;
+const statusKey = (status: string) => `settings.webhooks.status.${status}`;
 
 /**
  * Settings → Webhooks: per-user endpoints notified about task, project and comment events.
  * Creating and rotating shows the signing secret once, like a personal access token.
  */
 export function WebhookSettings() {
+  const { t } = useTranslation();
+  const never = t('settings.webhooks.never');
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const sensitive = useSensitive();
@@ -89,83 +78,86 @@ export function WebhookSettings() {
 
   return (
     <Card>
-      <h2 className="mb-1 font-semibold">Webhooks</h2>
-      <p className="mb-4 text-sm text-muted">
-        BokyDo POSTs a signed JSON payload to your endpoint for each event you choose, in projects
-        you can see. Verify the <code>X-BokyDo-Signature</code> header; see the webhook docs on your
-        server for examples. Endpoints must be public https addresses.
-      </p>
+      <h2 className="mb-1 font-semibold">{t('settings.webhooks.title')}</h2>
+      <p className="mb-4 text-sm text-muted">{t('settings.webhooks.description')}</p>
       {created && (
         <div className="mb-4 space-y-2">
-          <Alert tone="success">Copy your signing secret now. It won't be shown again.</Alert>
+          <Alert tone="success">{t('settings.webhooks.copySecret')}</Alert>
           <SecretList items={[created]} filename="bokydo-webhook-secret.txt" />
         </div>
       )}
-      {list.length === 0 && <p className="mb-4 text-sm text-muted">No webhook endpoints yet.</p>}
+      {list.length === 0 && (
+        <p className="mb-4 text-sm text-muted">{t('settings.webhooks.none')}</p>
+      )}
       <ul className="mb-4 divide-y divide-line">
-        {list.map((w) => (
-          <li key={w.id} className="flex flex-wrap items-start justify-between gap-2 py-3">
-            <div className="min-w-0">
-              <p className="font-medium break-words">{w.url}</p>
-              <p className="text-xs text-muted">
-                {w.events.map((e) => EVENT_LABELS[e]).join(', ')}
-              </p>
-              <p className="text-xs text-muted">
-                since {day(w.createdAt)} · last delivery {day(w.lastDeliveryAt)}{' '}
-                {w.lastDeliveryStatus ? `(${STATUS_LABEL[w.lastDeliveryStatus]}` : ''}
-                {w.lastDeliveryStatus === 'failed' && w.lastError ? `: ${w.lastError}` : ''}
-                {w.lastDeliveryStatus ? ')' : ''}
-              </p>
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <Button
-                variant="secondary"
-                busy={test.isPending && test.variables === w.id}
-                onClick={() => test.mutate(w.id)}
-              >
-                Send test
-              </Button>
-              <Button
-                variant="secondary"
-                busy={rotate.isPending && rotate.variables === w.id}
-                onClick={() =>
-                  void confirm({
-                    title: 'New signing secret?',
-                    message:
-                      'The old secret stops working immediately. Your endpoint must be updated with the new one.',
-                    confirmLabel: 'Rotate',
-                    danger: true,
-                  }).then((ok) => ok && rotate.mutate(w.id))
-                }
-              >
-                Rotate secret
-              </Button>
-              <Button
-                variant="secondary"
-                busy={remove.isPending && remove.variables === w.id}
-                onClick={() =>
-                  void confirm({
-                    title: 'Remove this webhook?',
-                    message: `Events will no longer be sent to ${w.url}.`,
-                    confirmLabel: 'Remove',
-                    danger: true,
-                  }).then((ok) => ok && remove.mutate(w.id))
-                }
-              >
-                Remove
-              </Button>
-            </div>
-          </li>
-        ))}
+        {list.map((w) => {
+          const status = w.lastDeliveryStatus
+            ? `(${t(statusKey(w.lastDeliveryStatus))}${
+                w.lastDeliveryStatus === 'failed' && w.lastError ? `: ${w.lastError}` : ''
+              })`
+            : '';
+          return (
+            <li key={w.id} className="flex flex-wrap items-start justify-between gap-2 py-3">
+              <div className="min-w-0">
+                <p className="font-medium break-words">{w.url}</p>
+                <p className="text-xs text-muted">
+                  {w.events.map((e) => t(eventKey(e))).join(', ')}
+                </p>
+                <p className="text-xs text-muted">
+                  {t('settings.webhooks.meta', {
+                    since: day(w.createdAt, never),
+                    last: day(w.lastDeliveryAt, never),
+                  })}{' '}
+                  {status}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  variant="secondary"
+                  busy={test.isPending && test.variables === w.id}
+                  onClick={() => test.mutate(w.id)}
+                >
+                  {t('settings.webhooks.sendTest')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  busy={rotate.isPending && rotate.variables === w.id}
+                  onClick={() =>
+                    void confirm({
+                      title: t('settings.webhooks.rotateTitle'),
+                      message: t('settings.webhooks.rotateMessage'),
+                      confirmLabel: t('settings.webhooks.rotate'),
+                      danger: true,
+                    }).then((ok) => ok && rotate.mutate(w.id))
+                  }
+                >
+                  {t('settings.webhooks.rotate')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  busy={remove.isPending && remove.variables === w.id}
+                  onClick={() =>
+                    void confirm({
+                      title: t('settings.webhooks.removeTitle'),
+                      message: t('settings.webhooks.removeMessage', { url: w.url }),
+                      confirmLabel: t('settings.webhooks.remove'),
+                      danger: true,
+                    }).then((ok) => ok && remove.mutate(w.id))
+                  }
+                >
+                  {t('settings.webhooks.remove')}
+                </Button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
       {test.isSuccess && test.variables && (
-        <p className="mb-3 text-sm text-muted">
-          Test delivery queued — it will arrive within seconds.
-        </p>
+        <p className="mb-3 text-sm text-muted">{t('settings.webhooks.testQueued')}</p>
       )}
       <form onSubmit={submit} className="space-y-3 border-t border-line pt-4">
         <TextField
-          label="Endpoint URL"
+          label={t('settings.webhooks.endpointUrl')}
           type="url"
           value={url}
           placeholder="https://hooks.example.com/bokydo"
@@ -174,11 +166,11 @@ export function WebhookSettings() {
           onChange={(e) => setUrl(e.target.value)}
         />
         <fieldset className="space-y-2">
-          <legend className="mb-1 text-sm font-medium">Which events to send</legend>
+          <legend className="mb-1 text-sm font-medium">{t('settings.webhooks.whichEvents')}</legend>
           {webhookEventNames.map((name) => (
             <Checkbox
               key={name}
-              label={EVENT_LABELS[name]}
+              label={t(eventKey(name))}
               checked={events.has(name)}
               onChange={() => toggle(name)}
             />
@@ -187,7 +179,7 @@ export function WebhookSettings() {
         {create.isError && <Alert tone="error">{errorMessage(create.error)}</Alert>}
         {rotate.isError && <Alert tone="error">{errorMessage(rotate.error)}</Alert>}
         <Button type="submit" busy={create.isPending} disabled={!url.trim() || events.size === 0}>
-          Add webhook
+          {t('settings.webhooks.addWebhook')}
         </Button>
       </form>
     </Card>

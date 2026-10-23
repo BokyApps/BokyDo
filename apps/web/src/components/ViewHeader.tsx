@@ -1,25 +1,26 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Layout, ViewOptions } from '../lib/view-options.js';
 import type { GroupMode, SortMode } from '../lib/views.js';
 import { Popover } from './ui.js';
 
 const SORTS: [SortMode, string][] = [
-  ['manual', 'Manual'],
-  ['date', 'Date'],
-  ['priority', 'Priority'],
-  ['name', 'Name'],
+  ['manual', 'view.manual'],
+  ['date', 'view.date'],
+  ['priority', 'view.priority'],
+  ['name', 'view.name'],
 ];
 const LAYOUTS: [Layout, string][] = [
-  ['list', 'List'],
-  ['board', 'Board'],
-  ['calendar', 'Calendar'],
+  ['list', 'view.list'],
+  ['board', 'view.board'],
+  ['calendar', 'view.calendar'],
 ];
 const GROUPS: [GroupMode, string][] = [
-  ['none', 'None'],
-  ['project', 'Project'],
-  ['date', 'Date'],
-  ['priority', 'Priority'],
-  ['label', 'Label'],
+  ['none', 'view.none'],
+  ['project', 'view.project'],
+  ['date', 'view.date'],
+  ['priority', 'view.priority'],
+  ['label', 'view.label'],
 ];
 
 export function ViewHeader({
@@ -40,6 +41,7 @@ export function ViewHeader({
   layout?: { value: Layout; onChange: (layout: Layout) => void };
   actions?: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
       <div>
@@ -57,14 +59,14 @@ export function ViewHeader({
                 {...p}
                 className="rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt"
               >
-                View
+                {t('view.view')}
               </button>
             )}
             panelClassName="w-56 p-3"
           >
             <div className="space-y-3">
               {layout && (
-                <div role="group" aria-label="Layout" className="grid grid-cols-3 gap-1">
+                <div role="group" aria-label={t('view.layout')} className="grid grid-cols-3 gap-1">
                   {LAYOUTS.map(([value, label]) => (
                     <button
                       key={value}
@@ -73,14 +75,14 @@ export function ViewHeader({
                       onClick={() => layout.onChange(value)}
                       className={`rounded-md border px-1 py-1.5 text-xs ${layout.value === value ? 'border-accent bg-accent/10 font-medium text-fg' : 'border-line text-muted hover:bg-surface-alt'}`}
                     >
-                      {label}
+                      {t(label)}
                     </button>
                   ))}
                 </div>
               )}
               {allow.sort && (
                 <Choice
-                  label="Sort by"
+                  label={t('view.sortBy')}
                   value={options.sort}
                   choices={SORTS}
                   onChange={(sort) => setOptions({ sort })}
@@ -88,7 +90,7 @@ export function ViewHeader({
               )}
               {allow.group && (
                 <Choice
-                  label="Group by"
+                  label={t('view.groupBy')}
                   value={options.group}
                   choices={GROUPS}
                   onChange={(group) => setOptions({ group })}
@@ -102,7 +104,7 @@ export function ViewHeader({
                     checked={options.showCompleted}
                     onChange={(e) => setOptions({ showCompleted: e.target.checked })}
                   />
-                  Show completed tasks
+                  {t('view.showCompleted')}
                 </label>
               )}
             </div>
@@ -124,6 +126,7 @@ function Choice<T extends string>({
   choices: [T, string][];
   onChange: (v: T) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <label className="block space-y-1">
       <span className="text-xs font-medium text-muted">{label}</span>
@@ -134,7 +137,7 @@ function Choice<T extends string>({
       >
         {choices.map(([v, l]) => (
           <option key={v} value={v}>
-            {l}
+            {t(l)}
           </option>
         ))}
       </select>

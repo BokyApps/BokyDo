@@ -5,7 +5,8 @@ import {
   type Project,
 } from '@bokydo/shared';
 import { emptyState, type SyncState } from '@bokydo/sync-client';
-import { describe, expect, it } from 'vitest';
+import type { TFunction } from 'i18next';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   buildChoicesBody,
   choiceFromValue,
@@ -23,6 +24,15 @@ import {
   teamOptions,
   type ImportDraft,
 } from './todoist-import.js';
+import { initI18n } from '../i18n.js';
+
+// The translated strings come from the real English catalogue.
+let t: TFunction;
+beforeAll(async () => {
+  await initI18n();
+  const { default: i18n } = await import('../i18n.js');
+  t = i18n.t.bind(i18n);
+});
 
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -112,7 +122,7 @@ function state(): SyncState {
 
 describe('mergeTargets', () => {
   it('lists writable, non-archived projects with the Inbox first and paths for nested ones', () => {
-    expect(mergeTargets(state())).toEqual([
+    expect(mergeTargets(state(), t)).toEqual([
       { id: U(10), label: 'Inbox' },
       { id: U(11), label: 'Work' },
       { id: U(12), label: 'Work / Q4' },
@@ -186,7 +196,7 @@ describe('defaultDraft', () => {
   });
 
   it('starts with every project, every valid label and supported filter, comments on, and nobody mapped', () => {
-    const draft = defaultDraft(p, mergeTargets(state()));
+    const draft = defaultDraft(p, mergeTargets(state(), t));
     expect(draft.projects.get('p1')).toEqual({ action: 'merge', targetId: U(10) });
     expect(draft.projects.get('p2')).toEqual({ action: 'skip' });
     expect([...draft.labels]).toEqual(['l1']);
@@ -197,7 +207,7 @@ describe('defaultDraft', () => {
 });
 
 function draftFor(p: TodoistPreview, overrides: Partial<ImportDraft> = {}): ImportDraft {
-  return { ...defaultDraft(p, mergeTargets(state())), ...overrides };
+  return { ...defaultDraft(p, mergeTargets(state(), t)), ...overrides };
 }
 
 describe('buildChoicesBody', () => {
@@ -325,7 +335,7 @@ describe('projectRows', () => {
 
 describe('groupWarnings', () => {
   it('groups by kind in a fixed order and leaves out empty kinds', () => {
-    const groups = groupWarnings([
+    const groups = groupWarnings(t, [
       { kind: 'timezone', message: 'tz 1' },
       { kind: 'recurrence', message: 'rec 1' },
       { kind: 'timezone', message: 'tz 2' },
@@ -337,7 +347,7 @@ describe('groupWarnings', () => {
   });
 
   it('returns nothing for no warnings', () => {
-    expect(groupWarnings([])).toEqual([]);
+    expect(groupWarnings(t, [])).toEqual([]);
   });
 });
 
@@ -359,7 +369,7 @@ describe('filterNotes', () => {
 
   it('explains an unsupported query and an imported-before filter', () => {
     const draft = draftFor(p, { labels: new Set(['l1']) });
-    expect(filterNotes(f({ supported: false, importedAs: 'x' }), p, draft)).toEqual([
+    expect(filterNotes(t, f({ supported: false, importedAs: 'x' }), p, draft)).toEqual([
       "BokyDo's filter language doesn't understand this query yet.",
       'Imported before.',
     ]);
@@ -373,7 +383,7 @@ describe('filterNotes', () => {
       ]),
       labels: new Set(),
     });
-    expect(filterNotes(f({ projects: ['Work', 'Home'], labels: ['urgent'] }), p, draft)).toEqual([
+    expect(filterNotes(t, f({ projects: ['Work', 'Home'], labels: ['urgent'] }), p, draft)).toEqual([
       "Mentions Home, which you aren't importing.",
       "Mentions label urgent, which isn't selected.",
     ]);
@@ -395,7 +405,7 @@ describe('teamOptions and collaboratorOptions', () => {
 
 describe('countRows and runErrorMessage', () => {
   it('labels every count once, in order', () => {
-    const rows = countRows({
+    const rows = countRows(t, {
       projects: 1,
       merged: 2,
       sections: 3,
@@ -410,8 +420,8 @@ describe('countRows and runErrorMessage', () => {
   });
 
   it('gives a sentence for each known run error and a fallback otherwise', () => {
-    expect(runErrorMessage('interrupted')).toMatch(/restarted/);
-    expect(runErrorMessage('internal')).toMatch(/Something went wrong/);
-    expect(runErrorMessage(null)).toMatch(/stopped unexpectedly/);
+    expect(runErrorMessage(t, 'interrupted')).toMatch(/restarted/);
+    expect(runErrorMessage(t, 'internal')).toMatch(/Something went wrong/);
+    expect(runErrorMessage(t, null)).toMatch(/stopped unexpectedly/);
   });
 });

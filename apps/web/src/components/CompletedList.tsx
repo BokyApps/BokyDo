@@ -1,6 +1,7 @@
 import type { Task } from '@bokydo/shared';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api.js';
 import { completedTasksPath } from '../lib/completed.js';
 import { errorMessage } from '../lib/messages.js';
@@ -12,6 +13,7 @@ import { Alert, Button } from './ui.js';
  * projectId it lists every project the user can see, and each row names its project.
  */
 export function CompletedList({ projectId }: { projectId?: string }) {
+  const { t } = useTranslation();
   const [before, setBefore] = useState<string[]>([]);
   const pages = useQuery({
     queryKey: ['completed', projectId ?? 'all', before],
@@ -37,7 +39,7 @@ export function CompletedList({ projectId }: { projectId?: string }) {
   if (pages.isPending)
     return (
       <p role="status" className="py-2 text-sm text-muted">
-        Loading completed tasks…
+        {t('completed.loading')}
       </p>
     );
   if (pages.isError)
@@ -45,7 +47,7 @@ export function CompletedList({ projectId }: { projectId?: string }) {
       <Alert>
         {errorMessage(pages.error)}{' '}
         <button type="button" className="underline" onClick={() => void pages.refetch()}>
-          Try again
+          {t('completed.tryAgain')}
         </button>
       </Alert>
     );
@@ -54,7 +56,7 @@ export function CompletedList({ projectId }: { projectId?: string }) {
       {tasks.length ? (
         <PlainTaskList tasks={tasks} showProject={!projectId} />
       ) : (
-        <p className="py-2 text-sm text-muted">No completed tasks.</p>
+        <p className="py-2 text-sm text-muted">{t('completed.empty')}</p>
       )}
       {pages.data?.more && (
         <Button
@@ -62,7 +64,7 @@ export function CompletedList({ projectId }: { projectId?: string }) {
           busy={pages.isFetching}
           onClick={() => setBefore([...before, pages.data.more ?? ''])}
         >
-          Show more
+          {t('completed.showMore')}
         </Button>
       )}
     </>

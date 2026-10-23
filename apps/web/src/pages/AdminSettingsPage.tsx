@@ -6,6 +6,7 @@ import {
 } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AiAdminSettings } from '../components/AiSettings.js';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
@@ -23,24 +24,25 @@ import { errorMessage } from '../lib/messages.js';
 import { adminSettingsQuery } from '../lib/queries.js';
 
 export function AdminSettingsPage() {
+  const { t } = useTranslation();
   const { data: settings } = useQuery(adminSettingsQuery);
   if (!settings) return null;
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">Admin settings</h1>
-      <Section title="Instance">
+      <h1 className="text-2xl font-semibold">{t('admin.title')}</h1>
+      <Section title={t('admin.instance.title')}>
         <InstanceForm settings={settings} />
       </Section>
-      <Section title="Access & security">
+      <Section title={t('admin.security.title')}>
         <SecurityForm settings={settings} />
       </Section>
-      <Section title="Email">
+      <Section title={t('admin.email.title')}>
         <EmailSettingsForm settings={settings} />
       </Section>
-      <Section title="Push services">
+      <Section title={t('admin.push.title')}>
         <PushHostsForm settings={settings} />
       </Section>
-      <Section title="AI">
+      <Section title={t('settings.tabs.ai')}>
         <AiAdminSettings />
       </Section>
     </div>
@@ -65,18 +67,20 @@ function useSaveSettings() {
 }
 
 function SaveRow({ save }: { save: ReturnType<typeof useSaveSettings> }) {
+  const { t } = useTranslation();
   return (
     <>
       {save.isError && <Alert>{errorMessage(save.error)}</Alert>}
-      {save.isSuccess && <Alert tone="success">Saved.</Alert>}
+      {save.isSuccess && <Alert tone="success">{t('admin.saved')}</Alert>}
       <Button type="submit" busy={save.isPending}>
-        Save
+        {t('common.save')}
       </Button>
     </>
   );
 }
 
 function InstanceForm({ settings }: { settings: PublicSettings }) {
+  const { t } = useTranslation();
   const save = useSaveSettings();
   const [name, setName] = useState(settings['instance.name']);
   const [publicUrl, setPublicUrl] = useState(settings['instance.publicUrl'] ?? '');
@@ -102,56 +106,58 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
   return (
     <form onSubmit={submit} className="space-y-4">
       <TextField
-        label="Instance name"
+        label={t('admin.instance.name')}
         required
         maxLength={80}
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
       <TextField
-        label="Public URL"
+        label={t('admin.instance.publicUrl')}
         type="url"
         value={publicUrl}
         onChange={(e) => setPublicUrl(e.target.value)}
-        hint="Browsers must use exactly this address to make changes."
+        hint={t('admin.instance.publicUrlHint')}
       />
       {movesAway && (
         <Alert tone="warning">
-          This differs from the address you're using now ({window.location.origin}). After saving,
-          changes will only be accepted from {normalized}.
+          {t('admin.instance.publicUrlWarning', {
+            current: window.location.origin,
+            next: normalized,
+          })}
         </Alert>
       )}
       <SelectField
-        label="Trusted reverse proxies"
+        label={t('admin.instance.proxies')}
         value={hops}
         onChange={(e) => setHops(e.target.value)}
-        hint="How many proxies in front of BokyDo add X-Forwarded-For. Set this only if one actually does: trusting a header nobody sets lets clients fake their IP."
+        hint={t('admin.instance.proxiesHint')}
         options={['0', '1', '2', '3', '4', '5'].map((v) => ({
           value: v,
-          label: v === '0' ? 'None (direct connection)' : `${v} proxy${v === '1' ? '' : 'ies'}`,
+          label: v === '0' ? t('admin.instance.noProxies') : t('admin.instance.proxyCount', { count: Number(v) }),
         }))}
       />
-      <TimeZonePicker label="Default time zone" value={timezone} onChange={setTimezone} />
+      <TimeZonePicker label={t('admin.instance.defaultTimezone')} value={timezone} onChange={setTimezone} />
       <div className="grid gap-4 sm:grid-cols-2">
         <SelectField
-          label="Week starts on"
+          label={t('settings.general.weekStartsOn')}
           value={weekStart}
           onChange={(e) => setWeekStart(e.target.value)}
           options={[
-            { value: 'monday', label: 'Monday' },
-            { value: 'sunday', label: 'Sunday' },
-            { value: 'saturday', label: 'Saturday' },
+            { value: 'monday', label: t('settings.general.monday') },
+            { value: 'sunday', label: t('settings.general.sunday') },
+            { value: 'saturday', label: t('settings.general.saturday') },
           ]}
         />
       </div>
       <TextField
-        label="Largest attachment (MB)"
+        label={t('admin.instance.maxAttachment')}
         type="number"
         min={0}
         max={100}
         value={maxMb}
         onChange={(e) => setMaxMb(e.target.value)}
-        hint="Files are stored on this server's data volume. 0 turns uploads off."
+        hint={t('admin.instance.maxAttachmentHint')}
       />
       <SaveRow save={save} />
     </form>
@@ -159,6 +165,7 @@ function InstanceForm({ settings }: { settings: PublicSettings }) {
 }
 
 function SecurityForm({ settings }: { settings: PublicSettings }) {
+  const { t } = useTranslation();
   const save = useSaveSettings();
   const [registration, setRegistration] = useState<string>(settings['access.registrationMode']);
   const [minLength, setMinLength] = useState(String(settings['security.passwordMinLength']));
@@ -184,22 +191,20 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
   return (
     <form onSubmit={submit} className="space-y-4">
       <SelectField
-        label="Registration"
+        label={t('admin.security.registration')}
         value={registration}
         onChange={(e) => setRegistration(e.target.value)}
         options={[
-          { value: 'invite', label: 'Invite only (recommended)' },
-          { value: 'closed', label: 'Closed: admins create accounts' },
-          { value: 'open', label: 'Open: anyone can sign up' },
+          { value: 'invite', label: t('admin.security.regInvite') },
+          { value: 'closed', label: t('admin.security.regClosed') },
+          { value: 'open', label: t('admin.security.regOpen') },
         ]}
       />
       {registration === 'open' && (
-        <Alert tone="warning">
-          Anyone who can reach this server will be able to create an account.
-        </Alert>
+        <Alert tone="warning">{t('admin.security.regOpenWarning')}</Alert>
       )}
       <TextField
-        label="Minimum password length"
+        label={t('admin.security.passwordMinLength')}
         type="number"
         min={10}
         max={128}
@@ -207,19 +212,19 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
         onChange={(e) => setMinLength(e.target.value)}
       />
       <SelectField
-        label="Require two-factor authentication"
+        label={t('admin.security.mfa')}
         value={mfa}
         onChange={(e) => setMfa(e.target.value)}
-        hint="Users without an authenticator app or passkey are asked to set one up before they can continue."
+        hint={t('admin.security.mfaHint')}
         options={[
-          { value: 'off', label: 'Optional' },
-          { value: 'admins', label: 'Required for admins' },
-          { value: 'everyone', label: 'Required for everyone' },
+          { value: 'off', label: t('admin.security.mfaOff') },
+          { value: 'admins', label: t('admin.security.mfaAdmins') },
+          { value: 'everyone', label: t('admin.security.mfaEveryone') },
         ]}
       />
       <div className="grid gap-4 sm:grid-cols-2">
         <TextField
-          label="Sign out after inactivity (days)"
+          label={t('admin.security.sessionIdle')}
           type="number"
           min={1}
           max={365}
@@ -227,7 +232,7 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
           onChange={(e) => setIdleDays(e.target.value)}
         />
         <TextField
-          label="Maximum session length (days)"
+          label={t('admin.security.sessionMax')}
           type="number"
           min={1}
           max={365}
@@ -236,13 +241,13 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
         />
       </div>
       <Checkbox
-        label="Email users about sign-ins from new places"
+        label={t('admin.security.loginAlerts')}
         checked={loginAlerts}
         onChange={(e) => setLoginAlerts(e.target.checked)}
       />
       <Checkbox
-        label="Reject passwords found in data breaches"
-        hint="Checks Have I Been Pwned. Only the first 5 characters of a hash of the password leave this server."
+        label={t('admin.security.breachCheck')}
+        hint={t('admin.security.breachCheckHint')}
         checked={breachCheck}
         onChange={(e) => setBreachCheck(e.target.checked)}
       />
@@ -253,6 +258,7 @@ function SecurityForm({ settings }: { settings: PublicSettings }) {
 
 /** Extra push services (UnifiedPush distributors, self-hosted) devices may register with. */
 function PushHostsForm({ settings }: { settings: PublicSettings }) {
+  const { t } = useTranslation();
   const save = useSaveSettings();
   const [text, setText] = useState(settings['push.allowedHosts'].join('\n'));
   const hosts = text
@@ -269,27 +275,24 @@ function PushHostsForm({ settings }: { settings: PublicSettings }) {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <p className="text-sm text-muted">
-        Browsers push through their vendor's service (Google, Mozilla, Apple, Microsoft), which
-        always works. The Android app can also use UnifiedPush through a distributor such as ntfy;
-        list the push servers it may use here. Notifications are end-to-end encrypted, but the
-        server will send requests to these hosts, so only list push servers you trust.
-      </p>
+      <p className="text-sm text-muted">{t('admin.push.description')}</p>
       <TextArea
-        label="Allowed push servers"
+        label={t('admin.push.allowedHosts')}
         value={text}
         onChange={(e) => setText(e.target.value)}
         spellCheck={false}
         placeholder="ntfy.sh"
-        hint="One per line: a hostname (ntfy.example.com), optionally with a port (:8443) or *. for its subdomains. HTTPS only. A listed server may be on your private network."
+        hint={t('admin.push.allowedHostsHint')}
       />
-      {invalid.length > 0 && <Alert tone="warning">Not a hostname: {invalid.join(', ')}</Alert>}
+      {invalid.length > 0 && (
+        <Alert tone="warning">{t('admin.push.invalidHosts', { hosts: invalid.join(', ') })}</Alert>
+      )}
       {!hasNtfy && (
         <Button
           variant="ghost"
           onClick={() => setText((t) => (t.trim() ? `${t.trim()}\nntfy.sh` : 'ntfy.sh'))}
         >
-          Add ntfy.sh (the public ntfy server)
+          {t('admin.push.addNtfy')}
         </Button>
       )}
       <SaveRow save={save} />
