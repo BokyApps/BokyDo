@@ -356,7 +356,6 @@ private fun issueText(issue: String): String = when (issue) {
     else -> issue
 }
 
-
 /** The mic entry in the app bar, next to the screen title. */
 @Composable
 fun RambleAction(onOpen: () -> Unit) {

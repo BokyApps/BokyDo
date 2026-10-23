@@ -93,6 +93,21 @@ class ScreensTest {
         assertEquals(listOf("a", "b", "lost"), groups[0].second.map { it.id })
         assertEquals(listOf("c"), groups[1].second.map { it.id })
         assertEquals(listOf("child"), Views.children(s, "a").map { it.id })
+
+        // The board's columns: unsectioned first, then the live sections, in order.
+        val columns = Views.boardColumns(s, "work")
+        assertEquals(listOf(null, "s1"), columns.map { it.section?.id })
+        assertEquals(listOf("a", "b", "lost"), columns[0].tasks.map { it.id })
+        assertEquals(listOf("c"), columns[1].tasks.map { it.id })
+    }
+
+    @Test
+    fun aProjectWithNoSectionsIsOneBoardColumn() {
+        val s = state(listOf(task("a", project = "work"), task("b", project = "work")))
+        val columns = Views.boardColumns(s, "work")
+        assertEquals(1, columns.size)
+        assertNull(columns[0].section)
+        assertEquals(listOf("a", "b"), columns[0].tasks.map { it.id })
     }
 
     // ---- optimistic changes ----

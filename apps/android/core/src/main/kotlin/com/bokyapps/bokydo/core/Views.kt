@@ -48,6 +48,21 @@ object Views {
     fun sectionsOf(s: AppState, projectId: String): List<Section> =
         s.sections.values.filter { it.projectId == projectId && !it.isArchived }.sortedBy { it.sectionOrder }
 
+    /** One board column: a section, or the unsectioned bucket ([section] is null). */
+    data class BoardColumn(val section: Section?, val tasks: List<Task>)
+
+    /** The project board's columns (PLAN §9 A2d): unsectioned first, then each live section. */
+    fun boardColumns(s: AppState, projectId: String): List<BoardColumn> {
+        val groups = projectTasks(s, projectId)
+        val sections = sectionsOf(s, projectId)
+        val unsectioned = groups.firstOrNull { it.first == null }?.second.orEmpty()
+        val columns = mutableListOf<BoardColumn>()
+        // A project with no sections is still one column, so the board is never empty.
+        if (unsectioned.isNotEmpty() || sections.isEmpty()) columns += BoardColumn(null, unsectioned)
+        for ((section, tasks) in groups) if (section != null) columns += BoardColumn(section, tasks)
+        return columns
+    }
+
     fun children(s: AppState, parentId: String): List<Task> =
         s.tasks.values.filter { it.parentId == parentId }.sortedWith(byOrder)
 

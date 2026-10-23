@@ -22,6 +22,7 @@ object Optimistic {
 
     private fun applyOne(s: AppState, c: Command): AppState {
         val a = c.args
+        if (c.type == "user_update_preferences") return applyPreferences(s, a)
         val id = a.str("id") ?: return s
         return when (c.type) {
             "comment_add" -> commentAdded(s, id, a)
@@ -201,6 +202,18 @@ object Optimistic {
 
     private fun labelsOf(a: JsonObject): List<String>? =
         (a["labels"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }
+
+    /**
+     * The user's own settings: the appearance (theme, font, text size, density) and the time
+     * zone. Shown at once, like the web's reducer does, while the change is still queued.
+     */
+    private fun applyPreferences(s: AppState, args: JsonObject): AppState {
+        val user = s.user ?: return s
+        val patch = args["appearance"] as? JsonObject
+        val appearance = if (patch != null) Appearance.merge(user.prefs.appearance, patch) else user.prefs.appearance
+        val timezone = if ("timezone" in args) args.str("timezone") else user.prefs.timezone
+        return s.copy(user = user.copy(prefs = user.prefs.copy(timezone = timezone, appearance = appearance)))
+    }
 
     private fun descendants(tasks: Map<String, Task>, id: String): List<String> {
         val out = mutableListOf<String>()
