@@ -121,9 +121,10 @@ sealed interface Route {
 @Composable
 fun AppShell(
     state: AppState,
-    openQuickAdd: Boolean = false,
+    startWithQuickAdd: Boolean = false,
     quickAddText: String = "",
     quickAddDetails: String = "",
+    onQuickAddOpened: () -> Unit = {},
 ) {
     val app = LocalContext.current.app
     // "Today" moves at midnight even when nothing syncs.
@@ -136,7 +137,14 @@ fun AppShell(
     }
     // Every entry point (launcher, share, tile, shortcut) opens Today.
     var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
-    var adding by remember { mutableStateOf(openQuickAdd) }
+    var adding by remember { mutableStateOf(false) }
+    // The quick-add widget, tile, shortcut or a share can ask for the add sheet on open.
+    LaunchedEffect(startWithQuickAdd) {
+        if (startWithQuickAdd) {
+            adding = true
+            onQuickAddOpened()
+        }
+    }
     val route = stack.last()
     // The user's own zone wins, then the account's, then the phone's.
     val zone = state.user?.prefs?.timezone ?: state.user?.timeZone ?: TimeZones.detect() ?: "UTC"

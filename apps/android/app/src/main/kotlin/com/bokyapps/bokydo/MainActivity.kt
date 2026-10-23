@@ -62,10 +62,10 @@ import java.util.Date
  */
 class MainActivity : ComponentActivity() {
     /**
-     * The intent that opened us (launcher, share, tile, shortcut); tiles and shortcuts re-send
-     * it. A share is consumed the first time it is answered — re-opening the activity (rotation,
-     * back from recents, a process restart) must not pre-fill the sheet again and invite a
-     * duplicate task.
+     * The intent that opened us (launcher, share, tile, shortcut, widget); tiles, shortcuts and
+     * widgets re-send it. A share is consumed the first time it is answered — re-opening the
+     * activity (rotation, back from recents, a process restart) must not pre-fill the sheet again
+     * and invite a duplicate task.
      */
     private val launch = mutableStateOf<Intent?>(null)
 
@@ -89,8 +89,8 @@ class MainActivity : ComponentActivity() {
             BokyDoTheme(appearance, dynamic) {
                 Surface(Modifier.fillMaxSize()) {
                     val screen by app.screen.collectAsState()
-                    // A new tile/shortcut/share intent restarts the shell so it opens where
-                    // asked. That also resets the back stack, which is the expected shape:
+                    // A new tile/shortcut/share/widget intent restarts the shell so it opens
+                    // where asked. That also resets the back stack, which is the expected shape:
                     // the user asked for this screen by hand.
                     key(launch.value) {
                         when (val s = screen) {
@@ -100,7 +100,7 @@ class MainActivity : ComponentActivity() {
                                 val parsed = parseLaunch(launch.value)
                                 AppShell(
                                     state,
-                                    openQuickAdd = parsed.quickAdd,
+                                    startWithQuickAdd = parsed.quickAdd,
                                     quickAddText = parsed.text,
                                     quickAddDetails = parsed.details,
                                 )
@@ -112,14 +112,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** The launch mode is singleTask, so a widget, tile, shortcut or share while open arrives here. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         launch.value = intent
     }
+
+    companion object {
+        const val EXTRA_QUICK_ADD = "com.bokyapps.bokydo.extra.QUICK_ADD"
+    }
 }
 
-/** Where a launcher, share, tile or shortcut intent wants to land. */
+/** Where a launcher, share, tile, shortcut or widget intent wants to land. */
 private data class Launch(val route: Route, val quickAdd: Boolean, val text: String, val details: String)
 
 private fun parseLaunch(intent: Intent?): Launch {
@@ -130,6 +135,8 @@ private fun parseLaunch(intent: Intent?): Launch {
         if (shared != null) return Launch(Route.Today, true, shared.title, shared.details)
         return Launch(Route.Today, false, "", "")
     }
+    // The quick-add widget asks for the sheet with an extra rather than an action.
+    if (intent.getBooleanExtra(MainActivity.EXTRA_QUICK_ADD, false)) return Launch(Route.Today, true, "", "")
     return when (intent.action) {
         "com.bokyapps.bokydo.QUICK_ADD" -> Launch(Route.Today, true, "", "")
         "com.bokyapps.bokydo.SHOW_TODAY" -> Launch(Route.Today, false, "", "")
