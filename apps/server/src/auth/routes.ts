@@ -407,6 +407,9 @@ export async function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
         ip: req.ip,
       });
       clearSessionCookies(reply);
+      // Backstop for the client-side wipe (only honoured on HTTPS): drop the HTTP cache and this
+      // origin's storage, which unregisters the service worker and clears localStorage/IndexedDB.
+      reply.header('Clear-Site-Data', '"cache", "storage"');
       return reply.status(204).send();
     },
   );

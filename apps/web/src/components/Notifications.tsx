@@ -1,40 +1,53 @@
 import type { AppNotification } from '@bokydo/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 import { useSend, useSyncState } from '../lib/sync.js';
 import { useTaskUI } from '../lib/task-ui.js';
 import { Avatar } from './Sharing.js';
 import { Button, Popover } from './ui.js';
 
-const text = (n: AppNotification, actor: string): string => {
+const text = (t: TFunction, n: AppNotification, actor: string): string => {
   const d = n.data;
-  const title = typeof d.title === 'string' ? `“${d.title}”` : 'a task';
+  const title =
+    typeof d.title === 'string'
+      ? t('notifications.quoted', { name: d.title })
+      : t('notifications.aTask');
   const project =
     typeof d.workspaceName === 'string'
-      ? `the team “${d.workspaceName}”`
+      ? t('notifications.theTeam', { name: d.workspaceName })
       : typeof d.projectName === 'string'
-        ? `“${d.projectName}”`
-        : 'a project';
+        ? t('notifications.quoted', { name: d.projectName })
+        : t('notifications.aProject');
   switch (n.type) {
     case 'reminder':
-      return `Reminder: ${title}${d.late ? ' (sent late)' : ''}`;
+      return t('notifications.reminder', {
+        title,
+        late: d.late ? ` ${t('notifications.sentLate')}` : '',
+      });
     case 'invited':
-      return `${actor} invited you to ${project}`;
+      return t('notifications.invited', { actor, project });
     case 'completed':
-      return `${actor} completed ${title}`;
+      return t('notifications.completed', { actor, title });
     case 'security':
-      return typeof d.message === 'string' ? d.message : 'Security alert on your account';
+      return typeof d.message === 'string' ? d.message : t('notifications.security');
     case 'assigned':
-      return `${actor} assigned ${title} to you`;
+      return t('notifications.assigned', { actor, title });
     case 'mentioned':
-      return `${actor} mentioned you${d.title ? ` on ${title}` : ` in ${project}`}`;
+      return t('notifications.mentioned', {
+        actor,
+        where: d.title
+          ? t('notifications.onTask', { title })
+          : t('notifications.inProject', { project }),
+      });
     case 'commented':
-      return `${actor} commented on ${title}`;
+      return t('notifications.commented', { actor, title });
     case 'role_changed':
-      return `${actor} made you ${String(d.role)} in ${project}`;
+      return t('notifications.roleChanged', { actor, role: String(d.role), project });
     case 'removed_from_project':
-      return `${actor} removed you from ${project}`;
+      return t('notifications.removed', { actor, project });
     case 'became_owner':
-      return `${actor} made you the owner of ${project}`;
+      return t('notifications.becameOwner', { actor, project });
   }
 };
 
@@ -56,6 +69,7 @@ export const BellIcon = () => (
 
 /** Header bell: unread count and the latest notifications. */
 export function NotificationBell() {
+  const { t } = useTranslation();
   const state = useSyncState();
   const send = useSend();
   const navigate = useNavigate();
@@ -74,7 +88,7 @@ export function NotificationBell() {
       trigger={(p) => (
         <button
           type="button"
-          aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}
+          aria-label={unread ? t('notifications.unread', { count: unread }) : t('notifications.bell')}
           className="relative rounded-md p-1.5 text-muted hover:bg-surface-alt hover:text-fg"
           {...p}
         >
@@ -91,23 +105,24 @@ export function NotificationBell() {
       {(close) => (
         <div className="space-y-1 p-1">
           <div className="flex items-center justify-between px-2 py-1">
-            <span className="font-semibold">Notifications</span>
+            <span className="font-semibold">{t('notifications.title')}</span>
             {unread > 0 && (
               <Button
                 variant="ghost"
                 onClick={() => send('notifications_mark_read', { all: true })}
               >
-                Mark all read
+                {t('notifications.markAll')}
               </Button>
             )}
           </div>
           {state.notifications.length === 0 && (
-            <p className="px-2 py-3 text-muted">You're all caught up.</p>
+            <p className="px-2 py-3 text-muted">{t('notifications.caughtUp')}</p>
           )}
           <ul className="max-h-96 overflow-y-auto">
             {state.notifications.map((n) => {
               const actor =
-                (n.actorId && state.collaborators.get(n.actorId)?.username) || 'Someone';
+                (n.actorId && state.collaborators.get(n.actorId)?.username) ||
+                t('notifications.someone');
               return (
                 <li key={n.id}>
                   <button
@@ -126,7 +141,7 @@ export function NotificationBell() {
                       <Avatar name={actor} />
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm">{text(n, actor)}</span>
+                      <span className="block text-sm">{text(t, n, actor)}</span>
                       {typeof n.data.excerpt === 'string' && (
                         <span className="block truncate text-xs text-muted">{n.data.excerpt}</span>
                       )}
@@ -137,7 +152,7 @@ export function NotificationBell() {
                     {!n.read && (
                       <span
                         className="mt-1.5 size-2 shrink-0 rounded-full bg-accent"
-                        aria-label="unread"
+                        aria-label={t('notifications.unreadDot')}
                       />
                     )}
                   </button>
@@ -151,8 +166,7 @@ export function NotificationBell() {
               onClick={close}
               className="block rounded-md px-2 py-2 text-sm text-accent hover:bg-surface-alt"
             >
-              {state.invitations.length} project invitation
-              {state.invitations.length === 1 ? '' : 's'} waiting
+              {t('notifications.invitations', { count: state.invitations.length })}
             </Link>
           )}
         </div>

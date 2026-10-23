@@ -7,6 +7,7 @@ import {
 } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../lib/api.js';
 import { useConfirm } from '../lib/confirm.js';
 import { errorMessage } from '../lib/messages.js';
@@ -15,7 +16,8 @@ import { useSyncState } from '../lib/sync.js';
 import { flattenTree, projectTree } from '../lib/views.js';
 import { Alert, Button, Card, Checkbox, SecretList, SelectField, TextField } from './ui.js';
 
-const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
+const day = (iso: string | null, never: string) =>
+  iso ? new Date(iso).toLocaleDateString() : never;
 
 /** Settings → Apps & tokens: connected apps (OAuth) and personal access tokens. */
 export function ApiAccessSettings() {
@@ -28,6 +30,8 @@ export function ApiAccessSettings() {
 }
 
 function ConnectedApps() {
+  const { t } = useTranslation();
+  const never = t('settings.apps.never');
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const apps = useQuery({
@@ -41,19 +45,20 @@ function ConnectedApps() {
   const list = apps.data?.apps ?? [];
   return (
     <Card>
-      <h2 className="mb-1 font-semibold">Connected apps</h2>
-      <p className="mb-4 text-sm text-muted">
-        Apps and AI assistants you allowed to use your account. Removing one signs it out.
-      </p>
-      {list.length === 0 && <p className="text-sm text-muted">No apps connected.</p>}
+      <h2 className="mb-1 font-semibold">{t('settings.apps.title')}</h2>
+      <p className="mb-4 text-sm text-muted">{t('settings.apps.description')}</p>
+      {list.length === 0 && <p className="text-sm text-muted">{t('settings.apps.noApps')}</p>}
       <ul className="divide-y divide-line">
         {list.map((a) => (
           <li key={a.clientId} className="flex flex-wrap items-start justify-between gap-2 py-3">
             <div className="min-w-0">
               <p className="font-medium break-words">{a.name}</p>
               <p className="text-xs text-muted">
-                {a.redirectHosts.join(', ')} · since {day(a.firstAuthorizedAt)} · last used{' '}
-                {day(a.lastUsedAt)}
+                {t('settings.apps.appMeta', {
+                  hosts: a.redirectHosts.join(', '),
+                  since: day(a.firstAuthorizedAt, never),
+                  last: day(a.lastUsedAt, never),
+                })}
               </p>
               <p className="text-xs text-muted">{a.scopes.join(', ')}</p>
             </div>
@@ -62,14 +67,14 @@ function ConnectedApps() {
               busy={revoke.isPending && revoke.variables === a.clientId}
               onClick={() =>
                 void confirm({
-                  title: 'Remove this app?',
-                  message: `“${a.name}” will lose access to your account.`,
-                  confirmLabel: 'Remove',
+                  title: t('settings.apps.removeTitle'),
+                  message: t('settings.apps.removeMessage', { name: a.name }),
+                  confirmLabel: t('settings.apps.remove'),
                   danger: true,
                 }).then((ok) => ok && revoke.mutate(a.clientId))
               }
             >
-              Remove
+              {t('settings.apps.remove')}
             </Button>
           </li>
         ))}
@@ -80,6 +85,8 @@ function ConnectedApps() {
 }
 
 function PersonalTokens() {
+  const { t } = useTranslation();
+  const never = t('settings.tokens.never');
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const sensitive = useSensitive();
@@ -95,7 +102,7 @@ function PersonalTokens() {
     ...(inbox ? [{ project: inbox, depth: 0 }] : []),
     ...flattenTree(projectTree(state)),
   ];
-  const projectName = (id: string) => state.projects.get(id)?.name ?? 'a deleted project';
+  const projectName = (id: string) => state.projects.get(id)?.name ?? t('settings.tokens.deletedProject');
   // Full access is the whole account (settings, labels, notifications): it can't be limited.
   const limitable = !scopes.has('sync');
   const limited = limitable ? limitTo : null;
@@ -147,58 +154,61 @@ function PersonalTokens() {
 
   return (
     <Card>
-      <h2 className="mb-1 font-semibold">Personal access tokens</h2>
-      <p className="mb-4 text-sm text-muted">
-        For scripts and tools such as n8n or Home Assistant. Treat a token like a password.
-      </p>
+      <h2 className="mb-1 font-semibold">{t('settings.tokens.title')}</h2>
+      <p className="mb-4 text-sm text-muted">{t('settings.tokens.description')}</p>
       {created && (
         <div className="mb-4 space-y-2">
-          <Alert tone="success">Copy your new token now. It won't be shown again.</Alert>
+          <Alert tone="success">{t('settings.tokens.copyNow')}</Alert>
           <SecretList items={[created]} filename="bokydo-token.txt" />
         </div>
       )}
       <ul className="mb-4 divide-y divide-line">
-        {(tokens.data?.tokens ?? []).map((t) => (
-          <li key={t.id} className="flex flex-wrap items-start justify-between gap-2 py-3">
+        {(tokens.data?.tokens ?? []).map((token) => (
+          <li key={token.id} className="flex flex-wrap items-start justify-between gap-2 py-3">
             <div className="min-w-0">
-              <p className="font-medium break-words">{t.name}</p>
+              <p className="font-medium break-words">{token.name}</p>
               <p className="text-xs text-muted">
-                {t.scopes.join(', ')} · expires {t.expiresAt ? day(t.expiresAt) : 'never'} · last
-                used {day(t.lastUsedAt)}
+                {t('settings.tokens.tokenMeta', {
+                  scopes: token.scopes.join(', '),
+                  expires: token.expiresAt ? day(token.expiresAt, never) : never,
+                  last: day(token.lastUsedAt, never),
+                })}
               </p>
-              {t.projectIds && (
+              {token.projectIds && (
                 <p className="text-xs break-words text-muted">
-                  Only {t.projectIds.map(projectName).join(', ')}
+                  {t('settings.tokens.limitedTo', {
+                    names: token.projectIds.map(projectName).join(', '),
+                  })}
                 </p>
               )}
             </div>
             <Button
               variant="secondary"
-              busy={revoke.isPending && revoke.variables === t.id}
+              busy={revoke.isPending && revoke.variables === token.id}
               onClick={() =>
                 void confirm({
-                  title: 'Revoke this token?',
-                  message: `Anything using “${t.name}” will stop working.`,
-                  confirmLabel: 'Revoke',
+                  title: t('settings.tokens.revokeTitle'),
+                  message: t('settings.tokens.revokeMessage', { name: token.name }),
+                  confirmLabel: t('settings.tokens.revoke'),
                   danger: true,
-                }).then((ok) => ok && revoke.mutate(t.id))
+                }).then((ok) => ok && revoke.mutate(token.id))
               }
             >
-              Revoke
+              {t('settings.tokens.revoke')}
             </Button>
           </li>
         ))}
       </ul>
       <form onSubmit={submit} className="space-y-3 border-t border-line pt-4">
         <TextField
-          label="New token name"
+          label={t('settings.tokens.newName')}
           value={name}
           maxLength={80}
           required
           onChange={(e) => setName(e.target.value)}
         />
         <fieldset className="space-y-2">
-          <legend className="mb-1 text-sm font-medium">What it may do</legend>
+          <legend className="mb-1 text-sm font-medium">{t('settings.tokens.whatItMayDo')}</legend>
           {API_SCOPE_KEYS.map((s) => (
             <Checkbox
               key={s}
@@ -210,17 +220,17 @@ function PersonalTokens() {
           ))}
         </fieldset>
         <fieldset className="space-y-2">
-          <legend className="mb-1 text-sm font-medium">Which projects</legend>
+          <legend className="mb-1 text-sm font-medium">{t('settings.tokens.whichProjects')}</legend>
           {limitable ? (
             <>
               <SelectField
-                label="Projects"
+                label={t('settings.tokens.projectsLink')}
                 hideLabel
                 value={limitTo ? 'some' : 'all'}
                 onChange={(e) => setLimitTo(e.target.value === 'some' ? new Set() : null)}
                 options={[
-                  { value: 'all', label: 'All my projects, including new ones' },
-                  { value: 'some', label: 'Only the projects I choose' },
+                  { value: 'all', label: t('settings.tokens.allProjects') },
+                  { value: 'some', label: t('settings.tokens.someProjects') },
                 ]}
               />
               {limitTo && (
@@ -234,29 +244,24 @@ function PersonalTokens() {
                       />
                     </div>
                   ))}
-                  <p className="text-xs text-muted">
-                    It can’t see or change anything else: not your other projects, labels, filters
-                    or settings, and it can’t create projects. Sub-projects need ticking too.
-                  </p>
+                  <p className="text-xs text-muted">{t('settings.tokens.limitNote')}</p>
                 </div>
               )}
             </>
           ) : (
-            <p className="text-sm text-muted">
-              Full access covers your whole account, so it can’t be limited to projects.
-            </p>
+            <p className="text-sm text-muted">{t('settings.tokens.fullAccessNote')}</p>
           )}
         </fieldset>
         <SelectField
-          label="Expires"
+          label={t('settings.tokens.expires')}
           value={expires}
           onChange={(e) => setExpires(e.target.value)}
           options={[
-            { value: '7', label: 'In 7 days' },
-            { value: '30', label: 'In 30 days' },
-            { value: '90', label: 'In 90 days' },
-            { value: '366', label: 'In a year' },
-            { value: 'never', label: 'Never' },
+            { value: '7', label: t('settings.tokens.in7d') },
+            { value: '30', label: t('settings.tokens.in30d') },
+            { value: '90', label: t('settings.tokens.in90d') },
+            { value: '366', label: t('settings.tokens.inAYear') },
+            { value: 'never', label: never },
           ]}
         />
         {create.isError && <Alert tone="error">{errorMessage(create.error)}</Alert>}
@@ -265,7 +270,7 @@ function PersonalTokens() {
           busy={create.isPending}
           disabled={!name.trim() || scopes.size === 0 || limited?.size === 0}
         >
-          Create token
+          {t('settings.tokens.createToken')}
         </Button>
       </form>
     </Card>

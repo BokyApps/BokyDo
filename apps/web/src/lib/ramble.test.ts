@@ -21,6 +21,7 @@ import {
   draftForExtract,
   draftProblem,
   issueText,
+  keepOverrides,
   mergeExtraction,
   projectFor,
   reconcileOverrides,
@@ -148,6 +149,13 @@ describe('reconcileOverrides', () => {
   it('drops a pick for a task that is no longer in the draft', () => {
     const next = [task('d2', 'Bread')];
     expect(reconcileOverrides({ d1: 'p1' }, sent, next)).toEqual({});
+  });
+});
+
+describe('keepOverrides', () => {
+  it('keeps picks for tasks still in the live draft and drops the rest', () => {
+    const next = [task('d1', 'Milk'), task('d3', 'Eggs')];
+    expect(keepOverrides({ d1: 'p1', d2: 'p2' }, next)).toEqual({ d1: 'p1' });
   });
 });
 
