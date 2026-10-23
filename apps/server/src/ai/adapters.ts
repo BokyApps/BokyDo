@@ -19,7 +19,7 @@ export function authHeaders(credential: UsableCredential): Record<string, string
   const dialect: AiDialect = AI_PROVIDERS[credential.provider].dialect;
   const auth: Record<string, string> = {};
   if (credential.apiKey) {
-    if (dialect === 'openai') auth.authorization = `Bearer ${credential.apiKey}`;
+    if (dialect === 'openai' || dialect === 'typesafe') auth.authorization = `Bearer ${credential.apiKey}`;
     if (dialect === 'anthropic') auth['x-api-key'] = credential.apiKey;
     // Header, not the ?key= query parameter: URLs end up in proxy and server logs.
     if (dialect === 'gemini') auth['x-goog-api-key'] = credential.apiKey;

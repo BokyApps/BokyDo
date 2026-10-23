@@ -83,6 +83,18 @@ export const notificationPrefsSchema = z
   .strict();
 export type NotificationPrefs = z.infer<typeof notificationPrefsSchema>;
 
+/** What the user lets the AI decide on its own (W9). */
+export const aiPrefsSchema = z
+  .object({
+    /**
+     * Auto-apply a triage suggestion at or above this confidence; null: never (suggest only).
+     * Only changes that show the task to nobody else are applied by themselves.
+     */
+    triageAutoApply: z.number().min(0).max(1).nullable(),
+  })
+  .strict();
+export type AiPrefs = z.infer<typeof aiPrefsSchema>;
+
 /** Per-user preferences, synced to every client (web, Android, widgets). */
 export const preferencesSchema = z
   .object({
@@ -98,6 +110,7 @@ export const preferencesSchema = z
     appearance: appearanceSchema,
     notifications: notificationPrefsSchema,
     productivity: productivityPrefsSchema,
+    ai: aiPrefsSchema,
   })
   .strict();
 export type Preferences = z.infer<typeof preferencesSchema>;
@@ -136,6 +149,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     report: { enabled: false, kind: 'week', time: '08:00', weekday: 'monday' },
   },
   productivity: { ...DEFAULT_PRODUCTIVITY_PREFS },
+  ai: { triageAutoApply: null },
 };
 
 /** Stored preferences merged over defaults (tolerates older/partial rows). */
@@ -150,6 +164,7 @@ export function resolvePreferences(stored: unknown): Preferences {
     notifications: mergeNotifications(base.notifications, s.notifications ?? {}),
     // Nested, so a row stored before the goals existed keeps the defaults for the fields it lacks.
     productivity: { ...base.productivity, ...(s.productivity ?? {}) },
+    ai: { ...base.ai, ...(s.ai ?? {}) },
   };
   const parsed = preferencesSchema.safeParse(merged);
   if (parsed.success) return parsed.data;
@@ -215,13 +230,14 @@ export type NotificationPrefsPatch = z.infer<typeof notificationPrefsPatchSchema
 
 /** Patch sent by clients: any subset; appearance and notifications may be partial too. */
 export const preferencesPatchSchema = preferencesSchema
-  .omit({ appearance: true, notifications: true })
+  .omit({ appearance: true, notifications: true, ai: true })
   .partial()
   .extend({
     appearance: appearanceSchema.partial().strict().optional(),
     notifications: notificationPrefsPatchSchema.optional(),
     /** Partial, so changing one goal does not require sending the others back. */
     productivity: productivityPrefsFields.partial().strict().optional(),
+    ai: aiPrefsSchema.partial().strict().optional(),
   })
   .strict();
 export type PreferencesPatch = z.infer<typeof preferencesPatchSchema>;

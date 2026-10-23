@@ -3,6 +3,7 @@ export * from './api-auth.js';
 export * from './assist.js';
 export * from './auth.js';
 export * from './csv.js';
+export * from './decision.js';
 export * from './errors.js';
 export * from './instance.js';
 export * from './ip.js';

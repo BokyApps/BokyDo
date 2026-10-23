@@ -20,6 +20,7 @@ import { aiError } from '../ramble/routes.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import type { SyncService } from '../sync/sync-service.js';
 import { ask, confirm, type AskDeps } from './ask.js';
+import { listDecisions } from './decisions.js';
 import { report } from './report.js';
 import { triage } from './triage.js';
 import { EvalNotConfiguredError, runEval } from './eval.js';
@@ -153,15 +154,17 @@ export function registerAssistRoutes(
       const me = requireUser(req);
       if (!limiter.attempt(me.id).allowed) return tooMany(reply);
       try {
-        const suggestions = await triage(
-          db,
-          ai,
+        return await triage(
+          { db, ai, sync },
           { id: me.id, isAdmin: me.isAdmin },
           body.taskIds,
-          callerScope(req),
-          abortOnClose(reply),
+          {
+            scope: callerScope(req),
+            // Only a signed-in user gets changes applied for them; a token never does.
+            autoApply: req.session !== null,
+            signal: abortOnClose(reply),
+          },
         );
-        return { suggestions };
       } catch (err) {
         if (err instanceof AssistNotFoundError)
           return reply.status(404).send({ error: 'not_found' });
@@ -169,6 +172,12 @@ export function registerAssistRoutes(
       }
     },
   );
+
+  /** What BokyDo decided by itself, and why (the decision log). Session only. */
+  app.get('/api/v1/assist/decisions', { config: { access: 'user' } }, async (req) => {
+    const me = requireSession(req).user;
+    return { decisions: await listDecisions(db, me.id) };
+  });
 
   // Session only: an app with a token has its own model and the MCP server.
   app.post('/api/v1/assist/ask', { config: { access: 'user' } }, async (req, reply) => {

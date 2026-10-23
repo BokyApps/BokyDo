@@ -50,7 +50,7 @@ const signInProviderParams = z.object({
 });
 const flowParams = z.object({ flowId: z.uuid() });
 const tryBody = z
-  .object({ model: aiModelSchema, kind: z.enum(['chat', 'transcribe', 'embed']) })
+  .object({ model: aiModelSchema, kind: z.enum(['chat', 'transcribe', 'embed', 'decision']) })
   .strict();
 
 /**

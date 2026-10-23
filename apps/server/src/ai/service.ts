@@ -1,11 +1,15 @@
 import {
   AI_FEATURES,
   AI_FEATURE_KEYS,
+  AI_PROVIDERS,
   aiRoutingSchema,
   isSignInProvider,
+  providerIsDecisionModel,
   providerSupports,
   type AiFeature,
   type AiRouting,
+  type DecisionAnswers,
+  type DecisionRequest,
 } from '@bokydo/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -29,6 +33,7 @@ import {
   type ChatResult,
 } from './chat.js';
 import type { AiCredentialStore, CredentialOwner, UsableCredential } from './credentials.js';
+import { jevDecision } from './jev.js';
 import { REFRESH_MARGIN_MS, SIGN_IN_PROTOCOLS, SignInProviderError } from './sign-in.js';
 import {
   checkEmbedRequest,
@@ -443,6 +448,50 @@ export class AiService {
     });
   }
 
+  /**
+   * The decision model routed for the `decision` feature, if the user has one (PLAN §5.4).
+   * Without one, decisions fall back to a chat model that answers in JSON.
+   */
+  async decisionModel(user: AiUser): Promise<ResolvedRoute | null> {
+    const route = await this.resolve(user, 'decision');
+    if (route && providerIsDecisionModel(route.credential.provider)) return route;
+    return null;
+  }
+
+  /**
+   * The feature whose chat model answers decisions: the `decision` route when it points at a
+   * chat provider, else Task Assist's model (the LLM fallback ADR 0021 describes).
+   */
+  async decisionChatFeature(user: AiUser): Promise<'decision' | 'assist.task'> {
+    const route = await this.resolve(user, 'decision');
+    if (route && !providerIsDecisionModel(route.credential.provider)) return 'decision';
+    return 'assist.task';
+  }
+
+  /**
+   * Ask the routed decision model. Only a real decision model can do this; a chat model answers
+   * decisions through `chatJson` instead (the LLM fallback).
+   */
+  async decide(
+    user: AiUser,
+    request: DecisionRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<DecisionAnswers> {
+    const route = await this.resolve(user, 'decision');
+    if (!route || !providerIsDecisionModel(route.credential.provider))
+      throw new AiNotConfiguredError('decision');
+    return this.run(user, {
+      feature: 'decision',
+      // The state is read once; the questions are small.
+      estimate: { tokens: promptEstimate(request.state.length) + 500 },
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      run: async (ctx) => {
+        const result = await jevDecision(ctx, request, this.deps.transport);
+        return { result: result.answers, usage: result.usage };
+      },
+    });
+  }
+
   /** Speech to text for `feature` (a speech-to-text route), metered by audio length. */
   async transcribe(
     user: AiUser,
@@ -490,18 +539,44 @@ export class AiService {
     owner: CredentialOwner,
     id: string,
     model: string,
-    kind: 'chat' | 'transcribe' | 'embed',
+    kind: 'chat' | 'transcribe' | 'embed' | 'decision',
   ): Promise<TryResult | null> {
     const stored = await this.deps.credentials.usable(owner, id);
     if (!stored || !this.allowed(stored)) return null;
+    // A real decision model is asked a question; a chat provider is the LLM fallback and is
+    // tried with an ordinary chat call, because that is how it will answer.
+    if (kind === 'decision' && providerIsDecisionModel(stored.provider)) {
+      const started = Date.now();
+      try {
+        const credential = await this.fresh(stored);
+        const ctx: AiCallContext = { credential, model, fetch: this.outboundFor(owner) };
+        await jevDecision(
+          ctx,
+          {
+            state: 'A connection test.',
+            questions: [{ id: 'works', type: 'noul', instructions: 'Is this a test?' }],
+          },
+          { ...this.deps.transport, timeoutMs: 30_000 },
+        );
+        return { ok: true, latencyMs: Date.now() - started };
+      } catch (err) {
+        if (err instanceof AiProviderError)
+          return { ok: false, error: err.code, ...(err.status ? { status: err.status } : {}) };
+        throw err;
+      }
+    }
     const capability =
-      kind === 'chat' ? 'chat.structured' : kind === 'transcribe' ? 'stt.batch' : 'embeddings';
+      kind === 'chat' || kind === 'decision'
+        ? 'chat.structured'
+        : kind === 'transcribe'
+          ? 'stt.batch'
+          : 'embeddings';
     if (!providerSupports(stored.provider, capability)) return { ok: false, error: 'unsupported' };
     const started = Date.now();
     try {
       const credential = await this.fresh(stored);
       const ctx: AiCallContext = { credential, model, fetch: this.outboundFor(owner) };
-      if (kind === 'chat') {
+      if (kind === 'chat' || kind === 'decision') {
         const r = await chat(
           ctx,
           {
@@ -533,6 +608,30 @@ export class AiService {
   async test(owner: CredentialOwner, id: string): Promise<TestResult | null> {
     const stored = await this.deps.credentials.usable(owner, id);
     if (!stored || !this.allowed(stored)) return null;
+    // A decision model has no model list: check the key with one tiny call instead.
+    if (AI_PROVIDERS[stored.provider].dialect === 'typesafe') {
+      try {
+        const credential = await this.fresh(stored);
+        const ctx: AiCallContext = {
+          credential,
+          model: 'jev-latest',
+          fetch: this.outboundFor(owner),
+        };
+        await jevDecision(
+          ctx,
+          {
+            state: 'A connection test.',
+            questions: [{ id: 'works', type: 'noul', instructions: 'Is this a test?' }],
+          },
+          { ...this.deps.transport, timeoutMs: 30_000 },
+        );
+        return { ok: true, models: ['jev-latest'] };
+      } catch (err) {
+        if (err instanceof AiProviderError)
+          return { ok: false, error: err.code, ...(err.status ? { status: err.status } : {}) };
+        throw err;
+      }
+    }
     try {
       const credential = await this.fresh(stored);
       return await listModels({ credential, fetch: this.outboundFor(owner) });
