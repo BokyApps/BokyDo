@@ -120,9 +120,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
 
   it('applies suggestions above the auto-apply threshold (shared project protection)', async () => {
     // Alice sets a low auto-apply threshold
-    await alice.http.put('/api/v1/users/me/preferences', {
-      ai: { triageAutoApply: 0.9 },
-    });
+    await alice.sync.ok(cmd('user_update_preferences', { ai: { triageAutoApply: 0.9 } }));
 
     // Create a project Alice shares with Bob
     const shared = id();
@@ -136,8 +134,12 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
     const high = id();
     await alice.sync.ok(cmd('task_add', { id: high, content: 'Go to Shared', projectId: alice.sync.inbox }));
 
-    // Model returns high confidence for moving to Shared
+    // Learn the project keys from a call that suggests nothing
+    model.replies.push('{"tasks":[]}');
+    await alice.http.post('/api/v1/assist/triage', { taskIds: [high, plants] });
     const workKey = new RegExp('"key":"(p\\d+)","name":"Work"').exec(model.seen[0]!.user)?.[1];
+
+    // Model returns high confidence for moving to Work
     model.replies.push(JSON.stringify({
       tasks: [
         { task: 't1', project: workKey, labels: [], priority: null, confidence: 0.95, why: 'Work task' },
@@ -164,8 +166,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
 
   it('writes to the decision log when auto-applying', async () => {
     // No auto-apply by default
-    await alice.http.put('/api/v1/users/me/preferences', { ai: { triageAutoApply: null } });
+    await alice.sync.ok(cmd('user_update_preferences', { ai: { triageAutoApply: null } }));
 
+    model.replies.push('{"tasks":[]}');
+    await alice.http.post('/api/v1/assist/triage', { taskIds: [report] });
     const workKey = new RegExp('"key":"(p\\d+)","name":"Work"').exec(model.seen[0]!.user)?.[1];
     model.replies.push(JSON.stringify({
       tasks: [{ task: 't1', project: workKey, labels: [], priority: null, confidence: 0.95, why: 'Work task' }],
@@ -176,10 +180,10 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
     expect(suggestions).toHaveLength(1);
 
     // Now enable auto-apply
-    await alice.http.put('/api/v1/users/me/preferences', { ai: { triageAutoApply: 0.5 } });
+    await alice.sync.ok(cmd('user_update_preferences', { ai: { triageAutoApply: 0.5 } }));
 
     model.replies.push(JSON.stringify({
-      tasks: [{ task: 't2', project: workKey, labels: [], priority: null, confidence: 0.8, why: 'Work task' }],
+      tasks: [{ task: 't1', project: workKey, labels: [], priority: null, confidence: 0.8, why: 'Work task' }],
     }));
     const res2 = await alice.http.post('/api/v1/assist/triage', { taskIds: [plants] });
     expect(res2.statusCode).toBe(200);
