@@ -32,7 +32,7 @@ export const AI_FEATURE_KEYS = Object.keys(AI_FEATURES) as AiFeature[];
  * Wire protocol a provider speaks. Adapters are written per dialect, not per vendor.
  * `responses` is OpenAI's Responses API, which the ChatGPT (Codex) backend speaks.
  */
-export type AiDialect = 'openai' | 'anthropic' | 'gemini' | 'responses';
+export type AiDialect = 'openai' | 'anthropic' | 'gemini' | 'responses' | 'typesafe';
 
 export interface AiProviderInfo {
   name: string;
@@ -130,6 +130,15 @@ export const AI_PROVIDERS = {
     customHeaders: false,
     capabilities: [...CHAT, 'stt.batch'],
   },
+  typesafe: {
+    name: 'TypeSafe (Jev)',
+    dialect: 'typesafe',
+    baseUrl: 'fixed',
+    defaultBaseUrl: 'https://api.typesafe.ai/v1',
+    apiKey: 'required',
+    customHeaders: false,
+    capabilities: ['decision'],
+  },
   'ollama-cloud': {
     name: 'Ollama Cloud',
     dialect: 'openai',
@@ -189,6 +198,15 @@ export function providerSupports(provider: AiProvider, capability: AiCapability)
   return (
     caps.includes(capability) || (capability === 'decision' && caps.includes('chat.structured'))
   );
+}
+
+/**
+ * Whether a provider has a real decision model (PLAN §5.4). Others answer decisions with the LLM
+ * fallback: a structured choice plus a confidence the model claims about itself.
+ */
+export function providerIsDecisionModel(provider: AiProvider): boolean {
+  const caps: readonly AiCapability[] = AI_PROVIDERS[provider].capabilities;
+  return caps.includes('decision');
 }
 
 /**

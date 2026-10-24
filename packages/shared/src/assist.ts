@@ -160,8 +160,39 @@ export interface TriageSuggestion {
   why: string;
 }
 
+/** A change BokyDo made by itself, because the user asked it to (auto-apply, W9). */
+export interface TriageApplied {
+  taskId: string;
+  /** The project the task was moved to; null: it stayed where it was. */
+  projectId: string | null;
+  /** Labels that were added. */
+  labels: string[];
+  /** The priority that was set; null: unchanged. */
+  priority: number | null;
+  /** How sure the model was. */
+  confidence: number;
+  /** Why it did it, in the model's words. Plain text. */
+  why: string;
+}
+
 export interface TriageResponse {
   suggestions: TriageSuggestion[];
+  /** What the server applied by itself (empty when auto-apply is off). */
+  applied: TriageApplied[];
+}
+
+/** One decision BokyDo made by itself, with why (the decision log, PLAN §5.4). */
+export interface AiDecision {
+  id: string;
+  /** The task it was about; null once the task is gone. */
+  taskId: string | null;
+  /** What happened, in words ("Moved to Work"). */
+  summary: string;
+  /** How sure the model was, 0 to 1. */
+  confidence: number;
+  /** Why it did it, in the model's words. Plain text. */
+  why: string;
+  createdAt: string;
 }
 
 // ---- Eval harness ----

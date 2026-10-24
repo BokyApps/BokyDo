@@ -814,7 +814,13 @@ function RoutingPanel({ scope, canWrite }: { scope: Scope; canWrite: boolean }) 
     }) => {
       const capability = AI_FEATURES[feature];
       const kind =
-        capability === 'stt.batch' ? 'transcribe' : capability === 'embeddings' ? 'embed' : 'chat';
+        capability === 'stt.batch'
+          ? 'transcribe'
+          : capability === 'embeddings'
+            ? 'embed'
+            : capability === 'decision'
+              ? 'decision'
+              : 'chat';
       return api<TryResult>('POST', `${ENDPOINTS[scope].credentials}/${route.credentialId}/try`, {
         model: route.model.trim(),
         kind,

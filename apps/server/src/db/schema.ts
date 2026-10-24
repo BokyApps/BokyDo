@@ -11,6 +11,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -767,6 +768,30 @@ export const aiUsage = pgTable(
     check('ai_usage_billing_check', sql`billing in ('own', 'instance')`),
     check('ai_usage_status_check', sql`status in ('reserved', 'done', 'failed')`),
   ],
+);
+
+/**
+ * The decision log (PLAN §5.4): what BokyDo changed by itself, and why. One row per task the
+ * AI decided on, so the user can see "why was this moved?" and tune the threshold later.
+ */
+export const aiDecisions = pgTable(
+  'ai_decisions',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The task it was about; null once the task is gone. */
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    /** What happened, in words ("Moved “buy milk” to Shopping"). */
+    summary: text('summary').notNull(),
+    /** How sure the model was, 0 to 1. */
+    confidence: real('confidence').notNull(),
+    /** Why it did it, in the model's words. */
+    why: text('why').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_decisions_user_created_idx').on(t.userId, t.createdAt)],
 );
 
 /**
