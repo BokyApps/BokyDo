@@ -1,5 +1,7 @@
 # ADR 0002: Zero-config secrets and the initial admin
 
+> Initial-admin bootstrap superseded by [ADR 0024](0024-first-admin-signup.md): the owner creates the account in the browser. Infrastructure-secret decisions below remain in effect.
+
 - Status: Accepted (2026-10-04); amended 2026-10-05 (no init container)
 
 ## Context

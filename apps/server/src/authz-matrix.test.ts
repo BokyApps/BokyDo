@@ -53,6 +53,7 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/account/delete': 'user/after',
   // Setup and administration
   'GET /api/v1/setup': 'admin/before',
+  'POST /api/v1/setup/admin': 'public/always',
   'PUT /api/v1/setup/public-url': 'admin/before',
   'POST /api/v1/setup/complete': 'admin/before',
   'GET /api/v1/admin/settings': 'admin/always',
