@@ -29,7 +29,10 @@ describe.skipIf(!TEST_DATABASE_URL)('HTTP app', () => {
   it('exposes only the public instance status, uncached', async () => {
     t = await testApp();
     const res = await t.app.inject('/api/v1/instance');
-    expect(instanceStatusSchema.strict().parse(res.json()).setupComplete).toBe(false);
+    expect(instanceStatusSchema.strict().parse(res.json())).toMatchObject({
+      setupComplete: false,
+      initialAdminRequired: true,
+    });
     expect(res.headers['cache-control']).toBe('no-store');
   });
 

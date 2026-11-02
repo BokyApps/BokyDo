@@ -97,12 +97,6 @@ export function LoginPage() {
           </Link>
         )}
       </div>
-      {!instance?.setupComplete && (
-        <p className="mt-6 text-xs text-muted">
-          First time here? Sign in as <code className="font-mono">admin</code> with the one-time
-          passphrase from <code className="font-mono">docker compose logs app</code>.
-        </p>
-      )}
     </AuthLayout>
   );
 }

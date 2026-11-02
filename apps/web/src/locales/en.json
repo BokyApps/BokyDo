@@ -310,6 +310,19 @@
         "truncated": "Shortened text"
       }
     },
+    "initialAdmin": {
+      "claimed": "The admin account has already been created. Sign in with that account to continue.",
+      "confirmPassword": "Confirm password",
+      "create": "Create admin account",
+      "intro": "Choose a username and password for your administrator account.",
+      "password": "Password",
+      "passwordHint_one": "Use at least {{count}} character.",
+      "passwordHint_other": "Use at least {{count}} characters.",
+      "passwordMismatch": "The passwords do not match.",
+      "signIn": "Go to sign in",
+      "title": "Create the admin account",
+      "username": "Username"
+    },
     "nav": {
       "addTask": "Add task",
       "ask": "Ask",

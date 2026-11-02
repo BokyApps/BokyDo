@@ -38,6 +38,12 @@ describe('i18n plumbing', () => {
     expect(en.translation.sidebar).toHaveProperty('noProjects', 'No projects yet.');
   });
 
+  it('renders the first-admin password guidance with its required length', async () => {
+    await setLanguage('en');
+    const { default: i18n } = await import('./i18n.js');
+    expect(i18n.t('initialAdmin.passwordHint', { count: 12 })).toBe('Use at least 12 characters.');
+  });
+
   it('falls back to English for a language with no catalogue', async () => {
     expect(await setLanguage('af', languages())).toBe('en');
     expect(await setLanguage('not-a-tag', languages())).toBe('en');

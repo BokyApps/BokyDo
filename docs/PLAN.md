@@ -11,7 +11,7 @@ Owner: Sarel
 
 - **What:** Todoist feature parity (tasks, projects, sections, sub-tasks, labels, filters, natural-language quick add, recurring dates, board/calendar layouts, collaboration, reminders, Ramble voice capture), plus things Todoist doesn't give you: self-hosting, BYOK AI from any provider, a first-class REST API + MCP server, and an Android app that works against *your* server.
 - **Stack (recommended):** TypeScript monorepo. Fastify + PostgreSQL + Drizzle on the server, React + Vite on the web, shared packages for the natural-language parser and filter language so they run identically in the browser and on the server. Phase 2: native Kotlin + Jetpack Compose + Glance widgets.
-- **Zero env config:** `docker compose up`, open the URL, log in as `admin` with a one-time password printed to the container log, forced password reset, then *everything* (public URL, SMTP, AI providers, registration policy, MFA policy…) is set in the Admin → Settings UI.
+- **Zero env config:** `docker compose up`, open the URL, create the initial admin with a username and password of your choice, then configure everything in the app (ADR 0024, owner decision 2026-11-02).
 - **Security:** OWASP ASVS Level 2 as the target. Every deliverable has a *security gate* (threat-model update, automated scans, deliverable-specific abuse-case tests, manual pentest checklist) that must pass before it's done.
 - **Deliverables:** 4 foundation items (F1–F4), 13 web deliverables (W1–W13), 7 Android deliverables (A1–A7). See §8 and §9.
 
@@ -44,7 +44,7 @@ D1, D3, D4, D5 (as passphrase), D7 confirmed 2026-10-04.
 | D2 | Database | **PostgreSQL 17** (bundled in compose) | Multi-user collaboration, row-level locking, robust JSON, full-text search, and `pg-boss` job queue → no Redis needed. Fewer moving parts = smaller attack surface. |
 | D3 | Android | **Native Kotlin + Compose + Glance** (not Flutter) ✅ confirmed | Widgets are a headline feature and are native-only on Android anyway (Flutter needs native widget code regardless). Native gives Room/WorkManager/AlarmManager/Credential Manager without bridges. |
 | D4 | License | **AGPL-3.0** ✅ confirmed | Keeps it free: anyone offering it as a hosted service must publish changes. Same choice as Vikunja. (MIT if you'd rather maximise adoption.) |
-| D5 | Default admin | Username `admin`, **random one-time passphrase (6 words from the EFF large wordlist, ≈77 bits) printed to container logs on first boot**, forced reset + MFA enrolment prompt | A fixed default like `admin/admin` is a guaranteed pentest finding (instances get exposed before setup). A log-printed passphrase keeps the "default admin" UX, is easy to type, and has no known default. ✅ confirmed |
+| D5 | Initial admin | **Owner-created through browser signup; no generated account or startup password** | Owner decision 2026-11-02 (ADR 0024), superseding the original log-printed passphrase. Initial signup closes atomically once any user exists. |
 | D6 | Registration | Default **invite-only**; admin can switch to open or closed | Safe default for internet-exposed self-hosts. |
 | D7 | Android push | **App syncs and schedules reminders itself as local exact alarms; UnifiedPush** only nudges it to sync sooner / shows live events; optional FCM relay build later ✅ confirmed | A self-hosted server can't send FCM to our app without our Firebase credentials. Reminders must not depend on push at all. |
 | D8 | IDs | **UUIDv7** everywhere, never sequential ints | Unguessable (defence-in-depth vs IDOR), sortable, safe for client-generated temp IDs. |
@@ -111,7 +111,7 @@ bokydo/
 
 ### 3.4 Zero-config bootstrap
 1. The app generates `/data/secrets/*` on first run: DB password, master encryption key (KEK), session signing key, VAPID keypair. It shares only the DB password with Postgres (through a small `db-secret` volume that Postgres waits for), and Postgres reads it via `POSTGRES_PASSWORD_FILE`. Nothing is hard-coded in the compose file, and the stack is just two containers: app and Postgres (ADR 0002).
-2. Server runs migrations automatically, creates `admin` with a random one-time **passphrase** (6 EFF-wordlist words, e.g. `crumpet-velvet-anchor-…`), prints it **once** to stdout with a clear banner.
+2. Server runs migrations automatically and creates no account. The first page lets the owner choose the initial admin username and password; startup prints no admin credentials (ADR 0024).
 3. Until the admin completes **setup** (new password → optional MFA → public URL confirmation), every other route returns the setup screen; API/MCP are disabled.
 4. Lost admin access recovery: `docker compose exec app bokydo admin reset-password <user>` (host shell access = already trusted).
 
@@ -362,7 +362,7 @@ Sizes: **S** ≈ days, **M** ≈ 1–2 weeks, **L** ≈ 3–4 weeks, **XL** ≈ 
 #### F2 — Packaging & zero-config bootstrap · M
 - Multi-stage Dockerfile (distroless, non-root, read-only FS), `compose.yml` (app, postgres; originally plus a one-shot bootstrap container, folded into the app on 2026-10-05), optional Caddy profile.
 - Secret generation, auto-migrations, health/readiness endpoints, structured logs.
-- One-time admin passphrase banner (EFF wordlist, CSPRNG); CLI `bokydo admin reset-password`.
+- Browser signup creates the first admin with owner-chosen credentials (ADR 0024); optional CLI `bokydo admin reset-password` remains for recovery.
 - **Security gate:** no default creds anywhere; DB not exposed outside the compose network; secrets files `0600`; container runs as non-root; Trivy clean (no High/Critical).
 
 #### F3 — Setup wizard & Admin Settings framework · M

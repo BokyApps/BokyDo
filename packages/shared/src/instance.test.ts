@@ -7,6 +7,7 @@ describe('instanceStatusSchema', () => {
       name: 'BokyDo',
       version: '0.0.0',
       setupComplete: false,
+      initialAdminRequired: true,
       passwordMinLength: 12,
       registrationOpen: false,
       emailEnabled: false,
