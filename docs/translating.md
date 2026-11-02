@@ -37,7 +37,7 @@ component later.
 1. Write the screen with the English text straight in `t('screen.key')`.
 2. Run `pnpm --filter @bokydo/web i18n:extract`. CI runs the same command and fails if
    `en.json` is out of date, so this step is not optional.
-4. Fill in the English value for the new key in `en.json` if the extractor left the key as a
+3. Fill in the English value for the new key in `en.json` if the extractor left the key as a
    placeholder, and commit both.
 
 Keys whose text is built at runtime cannot be found by the extractor. Add them to

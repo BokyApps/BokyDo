@@ -507,17 +507,17 @@ export function planImport(input: PlanInput): Plan {
       );
       if (!content) continue;
       // A file in the comment (opt-in): only an https URL is fetched, through the outbound client.
-       let attachment: PlannedStep['attachment'];
-       const url = c.attachment?.url;
-       if (choices.attachments && targetProject && url && /^https:\/\//i.test(url) && c.attachment) {
-         if (attachments < LIMITS.attachments) {
-           attachment = { name: c.attachment.name, url, projectId: targetProject };
-           attachments++;
-         } else if (!attachmentsCapped) {
-           attachmentsCapped = true;
-           warn('attachment', `Only the first ${LIMITS.attachments} comment files are downloaded.`);
-         }
-       }
+      let attachment: PlannedStep['attachment'];
+      const url = c.attachment?.url;
+      if (choices.attachments && targetProject && url && /^https:\/\//i.test(url) && c.attachment) {
+        if (attachments < LIMITS.attachments) {
+          attachment = { name: c.attachment.name, url, projectId: targetProject };
+          attachments++;
+        } else if (!attachmentsCapped) {
+          attachmentsCapped = true;
+          warn('attachment', `Only the first ${LIMITS.attachments} comment files are downloaded.`);
+        }
+      }
       const id = newId();
       const args = {
         id,
