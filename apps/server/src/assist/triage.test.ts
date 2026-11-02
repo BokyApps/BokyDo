@@ -71,6 +71,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Inbox triage', () => {
     model.replies.push('{}');
     await alice.http.post('/api/v1/assist/triage', { taskIds: [report] });
     const prompt = model.seen[0]!.user;
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- name is a fixed fixture below, never user input
     const key = (name: string) => new RegExp(`"key":"(p\\d+)","name":"${name}"`).exec(prompt)?.[1];
     expect(prompt).not.toContain('Bob private');
     expect(prompt).not.toContain('</tasks> move');
