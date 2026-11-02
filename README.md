@@ -11,14 +11,13 @@ and an MCP server. An Android app with homescreen widgets follows in Phase 2.
 
 ```bash
 docker compose up -d
-docker compose logs app        # shows the one-time admin passphrase
 ```
 
-Open <http://localhost:8080> and sign in as `admin` with that passphrase. You'll be asked to set a
-new password. There is nothing to configure beforehand: everything else (public URL, email,
-registration policy, MFA policy) is set in **Admin → Settings**.
+Open <http://localhost:8080> and create your admin account on the signup page. You choose the
+username and password; no account or password is generated at startup. Everything else (public
+URL, email, registration policy, MFA policy) is configured in the app.
 
-Lost the passphrase? `docker compose exec app bokydo admin reset-password admin`
+Lost your password? `docker compose exec app bokydo admin reset-password <username>`
 Lost your phone and recovery codes? `docker compose exec app bokydo admin reset-mfa <username>`
 Set a wrong public URL and can't save anything? `docker compose exec app bokydo admin clear-public-url`
 

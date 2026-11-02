@@ -19,6 +19,7 @@ import type { AuthDeps } from './deps.js';
 import { issueSession } from './issue-session.js';
 import { validateNewPassword } from './password-check.js';
 import { RateLimiter } from './rate-limiter.js';
+import { INITIAL_ADMIN_LOCK } from '../setup/instance-settings.js';
 
 const RESET_TTL_MS = 30 * 60_000;
 const VERIFY_TTL_MS = 24 * 60 * 60_000;
@@ -155,6 +156,9 @@ export function registerPublicAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
   });
 
   app.post('/api/v1/auth/register', { config: { access: 'public' } }, async (req, reply) => {
+    // Even an open or preconfigured instance must have an owner before normal registration.
+    if ((await db.select({ id: users.id }).from(users).limit(1)).length === 0)
+      return reply.status(403).send({ error: 'initial_admin_required' });
     const body = parseBody(registerRequestSchema, req.body, reply);
     if (!body) return;
     const mode = settings.get('access.registrationMode');
@@ -178,11 +182,14 @@ export function registerPublicAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
     const isAdmin = Boolean((invite?.data as { isAdmin?: boolean } | undefined)?.isAdmin);
     const id = newId();
     const passwordHash = await hashPassword(body.password);
-    let created: boolean;
+    let created: 'created' | 'invalid_token' | 'initial_admin_required';
     try {
       created = await db.transaction(async (tx) => {
+        await tx.execute(INITIAL_ADMIN_LOCK);
+        if ((await tx.select({ id: users.id }).from(users).limit(1)).length === 0)
+          return 'initial_admin_required' as const;
         if (body.inviteToken && !(await tokens.consume('invite', body.inviteToken, tx)))
-          return false;
+          return 'invalid_token' as const;
         await tx.insert(users).values({
           id,
           username: body.username,
@@ -198,14 +205,16 @@ export function registerPublicAuthRoutes(app: FastifyInstance, deps: AuthDeps): 
           ip: req.ip,
           meta: { via: invite ? 'invite' : 'open', inviteRef: invite?.ref ?? null, isAdmin },
         });
-        return true;
+        return 'created' as const;
       });
     } catch (err) {
       if (pgCode(err) === '23505')
         return reply.status(409).send({ error: 'conflict', message: 'username_or_email_taken' });
       throw err;
     }
-    if (!created) return reply.status(400).send({ error: 'invalid_token' });
+    if (created === 'initial_admin_required')
+      return reply.status(403).send({ error: 'initial_admin_required' });
+    if (created === 'invalid_token') return reply.status(400).send({ error: 'invalid_token' });
 
     if (email && !emailVerified && notifier.canEmail) {
       const { token } = await tokens.create({

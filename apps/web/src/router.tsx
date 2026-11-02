@@ -63,7 +63,13 @@ const AdminSettingsPage = lazy(() => import('./pages/AdminSettingsPage.js'), 'Ad
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage.js'), 'AdminUsersPage');
 const AdminBackupsPage = lazy(() => import('./pages/AdminBackupsPage.js'), 'AdminBackupsPage');
 
-type Gate = '/login' | '/change-password' | '/account/security' | '/setup' | '/setup-pending';
+type Gate =
+  | '/setup/admin'
+  | '/login'
+  | '/change-password'
+  | '/account/security'
+  | '/setup'
+  | '/setup-pending';
 /** Screens that only make sense while signed out. */
 const SIGNED_OUT_ONLY = ['/login', '/forgot-password', '/reset-password', '/register', '/invite'];
 /** Screens that are only reachable as the current gate. */
@@ -71,6 +77,7 @@ const GATE_ONLY = ['/change-password', '/setup', '/setup-pending'];
 
 /** Where the user must be right now, or null when the app itself is available. */
 function requiredGate(instance: InstanceStatus, session: SessionInfo | null): Gate | null {
+  if (instance.initialAdminRequired) return '/setup/admin';
   if (!session) return '/login';
   if (session.user.mustChangePassword) return '/change-password';
   if (session.user.mustEnrollMfa) return '/account/security';
@@ -86,6 +93,8 @@ async function guard(path: string, opts: { adminOnly?: boolean } = {}) {
     queryClient.fetchQuery(sessionQuery),
   ]);
   const gate = requiredGate(instance, session);
+  if (gate === '/setup/admin' && path !== gate) throw redirect({ to: gate });
+  if (path === '/setup/admin' && gate !== path) throw redirect({ to: gate ?? '/' });
   if (!session && SIGNED_OUT_ONLY.includes(path)) return;
   if (gate === path) return;
   if (gate) throw redirect({ to: gate });
@@ -155,6 +164,10 @@ const taskRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
+  page(
+    '/setup/admin',
+    lazy(() => import('./pages/InitialAdminPage.js'), 'InitialAdminPage'),
+  ),
   page('/login', LoginPage),
   page('/forgot-password', ForgotPasswordPage),
   page('/reset-password', ResetPasswordPage),
