@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Layout, ViewOptions } from '../lib/view-options.js';
 import type { GroupMode, SortMode } from '../lib/views.js';
+import { BoardIcon, CalendarIcon, ListIcon } from './icons.js';
 import { Popover } from './ui.js';
 
 const SORTS: [SortMode, string][] = [
@@ -15,6 +16,7 @@ const LAYOUTS: [Layout, string][] = [
   ['board', 'view.board'],
   ['calendar', 'view.calendar'],
 ];
+const LAYOUT_ICONS = { list: ListIcon, board: BoardIcon, calendar: CalendarIcon };
 const GROUPS: [GroupMode, string][] = [
   ['none', 'view.none'],
   ['project', 'view.project'],
@@ -42,6 +44,7 @@ export function ViewHeader({
   actions?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const LayoutIcon = layout ? LAYOUT_ICONS[layout.value] : null;
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
       <div>
@@ -57,8 +60,9 @@ export function ViewHeader({
               <button
                 type="button"
                 {...p}
-                className="rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted hover:bg-surface-alt"
               >
+                {LayoutIcon && <LayoutIcon />}
                 {t('view.view')}
               </button>
             )}
@@ -67,17 +71,23 @@ export function ViewHeader({
             <div className="space-y-3">
               {layout && (
                 <div role="group" aria-label={t('view.layout')} className="grid grid-cols-3 gap-1">
-                  {LAYOUTS.map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      aria-pressed={layout.value === value}
-                      onClick={() => layout.onChange(value)}
-                      className={`rounded-md border px-1 py-1.5 text-xs ${layout.value === value ? 'border-accent bg-accent/10 font-medium text-fg' : 'border-line text-muted hover:bg-surface-alt'}`}
-                    >
-                      {t(label)}
-                    </button>
-                  ))}
+                  {LAYOUTS.map(([value, label]) => {
+                    const LayoutIcon = LAYOUT_ICONS[value];
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-label={t(label)}
+                        title={t(label)}
+                        aria-pressed={layout.value === value}
+                        onClick={() => layout.onChange(value)}
+                        className={`inline-flex flex-col items-center gap-1 rounded-md border px-1 py-1.5 text-xs ${layout.value === value ? 'border-accent bg-accent/10 font-medium text-fg' : 'border-line text-muted hover:bg-surface-alt'}`}
+                      >
+                        <LayoutIcon />
+                        {t(label)}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
               {allow.sort && (

@@ -806,8 +806,18 @@
       "week": "Week"
     },
     "view": {
+      "board": "Board",
+      "calendar": "Calendar",
+      "date": "Date",
       "groupBy": "Group by",
+      "label": "Label",
       "layout": "Layout",
+      "list": "List",
+      "manual": "Manual",
+      "name": "Name",
+      "none": "None",
+      "priority": "Priority",
+      "project": "Project",
       "showCompleted": "Show completed tasks",
       "sortBy": "Sort by",
       "view": "View"

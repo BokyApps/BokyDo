@@ -22,6 +22,7 @@ export default {
       'settings.tabs.*',
       'settings.webhooks.events.*',
       'settings.webhooks.status.*',
+      'view.*',
     ],
   },
   defaultNamespace: 'translation',
