@@ -83,6 +83,20 @@ export const CalendarIcon = () => (
     <path d="M3 10h18M8 3v4M16 3v4" />
   </Icon>
 );
+export const ListIcon = () => (
+  <Icon>
+    <path d="M9 6h12M9 12h12M9 18h12" />
+    <circle cx="4" cy="6" r=".8" fill="currentColor" />
+    <circle cx="4" cy="12" r=".8" fill="currentColor" />
+    <circle cx="4" cy="18" r=".8" fill="currentColor" />
+  </Icon>
+);
+export const BoardIcon = () => (
+  <Icon>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16M15 4v16" />
+  </Icon>
+);
 export const FlagIcon = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M5 21V4M5 4h11l-2 4 2 4H5" />

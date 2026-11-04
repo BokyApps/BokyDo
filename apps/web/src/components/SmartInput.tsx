@@ -71,7 +71,9 @@ export function SmartInput({
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    // A composer can mount inside a dialog before showModal(). Hidden elements report zero;
+    // keep the native one-row height until it is visible and the user starts typing.
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
   }, [value, inputRef]);
 
   const pick = (s: Suggestion) => {
@@ -158,7 +160,7 @@ export function SmartInput({
         placeholder={placeholder}
         aria-autocomplete="list"
         spellCheck
-        className={`relative block resize-none overflow-hidden bg-transparent text-fg placeholder:text-muted focus:outline-none ${textClass}`}
+        className={`relative block min-h-6 resize-none overflow-hidden bg-transparent text-fg placeholder:text-muted focus:outline-none ${textClass}`}
         value={value}
         onChange={(e) => {
           onChange(e.target.value);
