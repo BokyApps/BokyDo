@@ -249,12 +249,14 @@ export function Dialog({
   title,
   children,
   wide = false,
+  dismissible = true,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   wide?: boolean;
+  dismissible?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -268,8 +270,11 @@ export function Dialog({
     <dialog
       ref={ref}
       onClose={onClose}
+      onCancel={(e) => {
+        if (!dismissible) e.preventDefault();
+      }}
       onClick={(e) => {
-        if (e.target === ref.current) onClose(); // click on the backdrop
+        if (dismissible && e.target === ref.current) onClose(); // click on the backdrop
       }}
       aria-labelledby={titleId}
       className={`m-auto w-[calc(100%-2rem)] ${wide ? 'max-w-3xl' : 'max-w-md'} rounded-2xl border border-line bg-surface p-0 text-fg shadow-xl backdrop:bg-black/40`}

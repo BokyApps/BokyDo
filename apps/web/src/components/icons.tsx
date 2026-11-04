@@ -97,6 +97,12 @@ export const BoardIcon = () => (
     <path d="M9 4v16M15 4v16" />
   </Icon>
 );
+export const HabitIcon = () => (
+  <Icon>
+    <path d="M20 7v5h-5M4 17v-5h5" />
+    <path d="M5.4 8a7 7 0 0 1 11.5-3L20 8M4 16l3.1 3a7 7 0 0 0 11.5-3" />
+  </Icon>
+);
 export const FlagIcon = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M5 21V4M5 4h11l-2 4 2 4H5" />

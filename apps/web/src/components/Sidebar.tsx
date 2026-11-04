@@ -13,6 +13,7 @@ import {
   ChevronIcon,
   TemplateIcon,
   InboxIcon,
+  HabitIcon,
   MicIcon,
   PlusIcon,
   SearchIcon,
@@ -125,8 +126,11 @@ export function Sidebar({
           </span>{' '}
           {t('nav.completed')}
         </Link>
-        <Link to="/productivity" className={item} activeProps={active}>
-          <span className="text-muted">▤</span> {t('nav.productivity')}
+        <Link to="/habits" className={item} activeProps={active}>
+          <span className="text-muted">
+            <HabitIcon />
+          </span>{' '}
+          {t('nav.habits', { defaultValue: 'Habits' })}
         </Link>
         {state.invitations.length > 0 && (
           <Link to="/invitations" className={item} activeProps={active}>

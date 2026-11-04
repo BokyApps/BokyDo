@@ -157,7 +157,11 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'POST /api/v1/invites/link/preview': 'user/after',
   'POST /api/v1/invites/link/accept': 'user/after',
   'GET /api/v1/activity': 'user/after',
-  'GET /api/v1/productivity': 'user/after',
+  'GET /api/v1/habits': 'user/after',
+  'POST /api/v1/habits': 'user/after',
+  'PATCH /api/v1/habits/:id': 'user/after',
+  'DELETE /api/v1/habits/:id': 'user/after',
+  'PUT /api/v1/habits/:id/check-ins/:date': 'user/after',
   // Import from Todoist (W11a): session only, the user hands over another service's token
   'POST /api/v1/import/todoist/connect': 'user/after',
   'POST /api/v1/import/todoist/disconnect': 'user/after',
