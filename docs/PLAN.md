@@ -655,7 +655,7 @@ iOS app (+ widgets), Wear OS (Ramble on wrist), desktop (Tauri) with global quic
 | Notifications (in-app, email, push) | ✅ | W6 |
 | Ramble (voice → tasks, live edits) | ✅ | W8 |
 | AI Assist (break down, filter assist) | ✅ | W9 |
-| Productivity / karma / goals / vacation mode | ✅ | W11 |
+| Habits: independent check-ins, goals and streaks | ✅ | Replaces W11 task gamification |
 | Templates (import/export, gallery) | ✅ | W11 |
 | Import / export / backups | ✅ | W11 |
 | Calendar feed / calendar sync | ✅ feed / ⏳ 2-way sync | W11 / Phase 3 |

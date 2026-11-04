@@ -8,6 +8,18 @@ import {
 } from './preferences.js';
 
 describe('notification preferences', () => {
+  it('ignores removed goal preferences while preserving stored settings', () => {
+    const stored = {
+      ...DEFAULT_PREFERENCES,
+      timezone: 'Asia/Phnom_Penh',
+      productivity: { dailyGoal: 5 },
+    };
+    const resolved = resolvePreferences(stored);
+    expect(resolved.timezone).toBe('Asia/Phnom_Penh');
+    expect(resolved.appearance).toEqual(stored.appearance);
+    expect(resolved).not.toHaveProperty('productivity');
+  });
+
   it('fills in defaults for rows stored before notifications existed', () => {
     const old = { ...DEFAULT_PREFERENCES, notifications: undefined, timezone: 'Asia/Phnom_Penh' };
     const p = resolvePreferences(old);

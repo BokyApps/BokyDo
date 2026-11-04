@@ -16,7 +16,7 @@ import { stashOAuthRequest } from './lib/oauth.js';
 
 /**
  * Route-level code splitting (F-023): each screen is its own chunk, loaded on navigation. The
- * start-up bundle keeps only the shell and the guard; Settings, Admin, Productivity, the project
+ * start-up bundle keeps only the shell and the guard; Settings, Admin, Habits, the project
  * views (board, calendar) and the import/AI panels arrive when they are opened.
  */
 function lazy<T extends Record<string, unknown>, K extends keyof T & string>(
@@ -50,7 +50,7 @@ const ArchivedPage = lazy(() => import('./pages/LabelsPages.js'), 'ArchivedPage'
 const TodayPage = lazy(() => import('./pages/TodayPage.js'), 'TodayPage');
 const UpcomingPage = lazy(() => import('./pages/UpcomingPage.js'), 'UpcomingPage');
 const CompletedPage = lazy(() => import('./pages/CompletedPage.js'), 'CompletedPage');
-const ProductivityPage = lazy(() => import('./pages/ProductivityPage.js'), 'ProductivityPage');
+const HabitsPage = lazy(() => import('./pages/HabitsPage.js'), 'HabitsPage');
 const TemplatesPage = lazy(() => import('./pages/TemplatesPage.js'), 'TemplatesPage');
 const SettingsPage = lazy(() => import('./pages/SettingsPage.js'), 'SettingsPage');
 const InvitationsPage = lazy(() => import('./pages/SharingPages.js'), 'InvitationsPage');
@@ -198,7 +198,14 @@ const routeTree = rootRoute.addChildren([
     appPage('/today', TodayPage),
     appPage('/upcoming', UpcomingPage),
     appPage('/completed', CompletedPage),
-    appPage('/productivity', ProductivityPage),
+    appPage('/habits', HabitsPage),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/productivity',
+      beforeLoad: () => {
+        throw redirect({ to: '/habits' });
+      },
+    }),
     appPage('/filters-labels', FiltersLabelsPage),
     appPage('/templates', TemplatesPage),
     appPage('/archived', ArchivedPage),

@@ -11,6 +11,8 @@ import {
   attachments,
   auditLog,
   comments,
+  habits,
+  habitCheckIns,
   projects,
   tasks,
   users,
@@ -106,6 +108,12 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       expiresInDays: 1,
     });
 
+    const habitId = id();
+    await t.db.db.insert(habits).values([
+      { id: habitId, ownerUserId: alice.id, name: 'Alice daily reading', period: 'day', target: 1 },
+      { id: id(), ownerUserId: bob.id, name: 'Bob private habit', period: 'day', target: 1 },
+    ]);
+    await t.db.db.insert(habitCheckIns).values({ habitId, date: '2026-11-01' });
     const res = await alice.http.request({ method: 'GET', url: '/api/v1/account/export' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/zip');
@@ -127,11 +135,15 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
 
     const data = JSON.parse(files['export.json'] ?? '{}') as {
       account: { username: string };
+      habits: { id: string; name: string }[];
+      habitCheckIns: { habitId: string; date: string }[];
       tasks: { content: string; isCompleted: boolean }[];
       projects: { name: string }[];
       personalAccessTokens: { name: string }[];
     };
     expect(data.account.username).toBe('alice');
+    expect(data.habits.map((h) => h.name)).toEqual(['Alice daily reading']);
+    expect(data.habitCheckIns).toEqual([expect.objectContaining({ habitId, date: '2026-11-01' })]);
     expect(data.tasks.map((x) => x.content)).toEqual(
       expect.arrayContaining(['Long done', 'Bob task in shared']),
     );
@@ -140,6 +152,7 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
     const everything = JSON.stringify(files);
     for (const leak of [
       'bob-only secret',
+      'Bob private habit',
       '$argon2',
       'passwordHash',
       'bkd_pat_',
@@ -222,12 +235,25 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
       scopes: ['sync'],
       expiresInDays: 1,
     });
+    const habitId = id();
+    await t.db.db.insert(habits).values({
+      id: habitId,
+      ownerUserId: alice.id,
+      name: 'Private routine',
+      period: 'day',
+      target: 1,
+    });
+    await t.db.db.insert(habitCheckIns).values({ habitId, date: '2026-11-01' });
     const bobCursor = (await bob.sync.run()).cursor;
 
     const res = await alice.http.post('/api/v1/account/delete', { confirm: 'alice' });
     expect(res.statusCode).toBe(204);
 
     expect(await t.db.db.select().from(users).where(eq(users.id, alice.id))).toEqual([]);
+    expect(await t.db.db.select().from(habits).where(eq(habits.id, habitId))).toEqual([]);
+    expect(
+      await t.db.db.select().from(habitCheckIns).where(eq(habitCheckIns.habitId, habitId)),
+    ).toEqual([]);
     expect(await t.db.db.select().from(projects).where(eq(projects.id, own))).toEqual([]);
     expect(await t.db.db.select().from(tasks).where(eq(tasks.id, ownTask))).toEqual([]);
     const [kept] = await t.db.db.select().from(tasks).where(eq(tasks.id, aliceInShared));

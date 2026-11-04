@@ -492,10 +492,18 @@ check "asset links empty until fingerprints are configured" test "$(curl -s "$BA
 echo "== export, account deletion and backups (W11e)"
 as_admin
 api POST /api/v1/auth/reauth "{\"password\":\"$NEWPW2\"}" >/dev/null
+r=$(api POST /api/v1/habits '{"name":"Smoke habit","period":"day","target":1}')
+HABIT=$(body_of "$r" | jq -r .habit.id)
+check "habit created independently of tasks" test "$(status_of "$r")" = 201
+HABIT_TODAY=$(body_of "$(api GET /api/v1/habits)" | jq -r .today)
+api PUT "/api/v1/habits/$HABIT/check-ins/$HABIT_TODAY" '{"completed":true}' >/dev/null
+check "repeated habit check-in counts once" \
+  test "$(body_of "$(api PUT "/api/v1/habits/$HABIT/check-ins/$HABIT_TODAY" '{"completed":true}')" | jq -r .habit.progress.completed)" = 1
+check "task productivity gamification removed" test "$(status_of "$(api GET /api/v1/productivity)")" = 404
 EXPORT_ZIP=$(mktemp)
 curl -s -b "$JAR" -o "$EXPORT_ZIP" "$BASE/api/v1/account/export"
 check "export is a valid ZIP with everything in it" \
-  python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; n=z.namelist(); assert 'export.json' in n and 'tasks.csv' in n; assert b'Smoke task' in z.read('export.json')" "$EXPORT_ZIP"
+  python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; n=z.namelist(); assert 'export.json' in n and 'tasks.csv' in n; data=z.read('export.json'); assert b'Smoke task' in data and b'Smoke habit' in data and b'habitCheckIns' in data" "$EXPORT_ZIP"
 LEAVER=$(body_of "$(api POST /api/v1/admin/users '{"username":"leaver","email":"leaver@example.com"}')" | jq -r .id)
 check "admin deletes an account (username confirmed)" \
   test "$(status_of "$(api POST "/api/v1/admin/users/$LEAVER/delete" '{"confirm":"leaver"}')")" = 204
@@ -508,6 +516,7 @@ check "backup created" test "$(status_of "$r")" = 201
 BK_STATE="$(volume app-data stat -c '%a' "/v/backups/$BK") $(volume app-data grep -c 'Smoke task' "/v/backups/$BK" || true)"
 check "backup file is 0600 and encrypted at rest" test "$BK_STATE" = "600 0"
 AFTER=$(uuid)
+api PUT "/api/v1/habits/$HABIT/check-ins/$HABIT_TODAY" '{"completed":false}' >/dev/null
 sync_cmds "$(cmd project_add "{\"id\":\"$AFTER\",\"name\":\"Made after the backup\"}")" >/dev/null
 check "wrong passphrase refused, nothing changed" \
   test "$(body_of "$(api POST "/api/v1/admin/backups/$BK/restore" '{"passphrase":"not-the-passphrase","confirm":"RESTORE"}')" | jq -r .error)" = backup_passphrase_or_damaged
@@ -530,6 +539,8 @@ r=$(api POST /api/v1/sync '{"cursor":null}')
 check "restored data is back and later changes are gone" \
   bash -c "jq -e '(any(.tasks[]; .content == \"Smoke task\")) and (all(.projects[]; .id != \"$AFTER\"))' <<<'$(body_of "$r")' >/dev/null"
 check "a pre-restore backup was kept" test "$(volume app-data ls /v/backups | grep -c '^pre-restore-')" -ge 1
+check "habit check-ins restored from encrypted backup" \
+  test "$(body_of "$(api GET /api/v1/habits)" | jq -r --arg id "$HABIT" '.habits[] | select(.id == $id) | .todayCompleted')" = true
 
 echo "== restarts & recovery"
 "${C[@]}" restart app >/dev/null 2>&1
