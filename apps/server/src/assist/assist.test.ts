@@ -1,6 +1,6 @@
 import type { FilterAssistResponse, TaskAssistResponse } from '@bokydo/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, testApp, type TestApp } from '../test/ai-app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { fakeModel } from '../test/model.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
@@ -129,7 +129,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Task Assist and Filter Assist', () => {
       headers: { host: 'localhost', authorization: `Bearer ${token}` },
       payload: { taskId: trip },
     });
-    expect(bearer.statusCode).toBe(404);
+    expect(bearer.statusCode).toBe(403);
     expect(model.seen).toHaveLength(0);
   });
 

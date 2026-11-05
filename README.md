@@ -1,8 +1,7 @@
 # BokyDo
 
 A free, open-source, self-hostable task manager with the features of Todoist: natural-language quick
-add, projects, boards, filters, collaboration, Ramble voice capture, bring-your-own-key AI, a REST API
-and an MCP server. An Android app with homescreen widgets follows in Phase 2.
+add, projects, boards, filters, collaboration, a REST API and an MCP server. An Android app with homescreen widgets follows in Phase 2.
 
 > **Status:** early development. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 > Quick add syntax: [docs/quick-add.md](docs/quick-add.md) · Filters: [docs/filters.md](docs/filters.md).

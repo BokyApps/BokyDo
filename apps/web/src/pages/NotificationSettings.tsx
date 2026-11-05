@@ -1,7 +1,6 @@
 import {
   NOTIFICATION_EVENTS,
   type NotificationEvent,
-  type NotificationPrefs,
   type NotificationPrefsPatch,
   type Preferences,
 } from '@bokydo/shared';
@@ -11,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Checkbox, inputClass, SelectField } from '../components/ui.js';
 import { api } from '../lib/api.js';
 import { disablePush, enablePush, pushState, type PushState } from '../lib/push.js';
-import { aiCatalogQuery, instanceQuery } from '../lib/queries.js';
+import { instanceQuery } from '../lib/queries.js';
 import { relativeLabel } from '../lib/reminders.js';
 
 // Labels come from the catalogue; the keys are the raw event values.
@@ -156,8 +155,6 @@ export function NotificationSettings({
           </div>
         </div>
       </Section>
-
-      <ReportEmailSettings n={n} set={set} />
     </>
   );
 }
@@ -262,78 +259,6 @@ function PushSection() {
         </div>
       )}
       {message && <p className="mt-2 text-sm text-muted">{message}</p>}
-    </Section>
-  );
-}
-
-// Weekday names come from the catalogue; the keys are the preference values.
-const WEEKDAY_KEY = {
-  monday: 'settings.notifications.weekday.monday',
-  tuesday: 'settings.notifications.weekday.tuesday',
-  wednesday: 'settings.notifications.weekday.wednesday',
-  thursday: 'settings.notifications.weekday.thursday',
-  friday: 'settings.notifications.weekday.friday',
-  saturday: 'settings.notifications.weekday.saturday',
-  sunday: 'settings.notifications.weekday.sunday',
-} as const;
-
-/** The AI report by email (W9): shown only when the user has a model for reports. */
-function ReportEmailSettings({
-  n,
-  set,
-}: {
-  n: NotificationPrefs;
-  set: (patch: NotificationPrefsPatch) => void;
-}) {
-  const { t } = useTranslation();
-  const catalog = useQuery(aiCatalogQuery);
-  if (!catalog.data?.available.includes('reports')) return null;
-  const r = n.report;
-  return (
-    <Section title={t('settings.notifications.reportTitle')}>
-      <div className="space-y-3">
-        <Checkbox
-          label={t('settings.notifications.reportEnabled')}
-          hint={t('settings.notifications.reportHint')}
-          checked={r.enabled}
-          onChange={(e) => set({ report: { enabled: e.target.checked } })}
-        />
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <SelectField
-            label={t('settings.notifications.reportKind')}
-            hideLabel
-            value={r.kind}
-            onChange={(e) => set({ report: { kind: e.target.value as 'day' | 'week' } })}
-            options={[
-              { value: 'day', label: t('settings.notifications.reportDay') },
-              { value: 'week', label: t('settings.notifications.reportWeek') },
-            ]}
-          />
-          {r.kind === 'week' && (
-            <>
-              {t('settings.notifications.on')}
-              <SelectField
-                label={t('settings.notifications.weekday')}
-                hideLabel
-                value={r.weekday}
-                onChange={(e) =>
-                  set({ report: { weekday: e.target.value as keyof typeof WEEKDAY_KEY } })
-                }
-                options={Object.entries(WEEKDAY_KEY).map(([value, key]) => ({
-                  value,
-                  label: t(key),
-                }))}
-              />
-            </>
-          )}
-          {t('settings.notifications.at')}
-          <TimeInput
-            label={t('settings.notifications.reportTime')}
-            value={r.time}
-            onChange={(time) => set({ report: { time } })}
-          />
-        </div>
-      </div>
     </Section>
   );
 }

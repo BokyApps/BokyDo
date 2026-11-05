@@ -1,4 +1,4 @@
-import { CSRF_HEADER, isLoopbackHost, type ApiScope } from '@bokydo/shared';
+import { CSRF_HEADER, isLoopbackHost, scopesAllow, type ApiScope } from '@bokydo/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import { REAUTH_WINDOW_MS, type SessionContext, type SessionStore } from '../auth/sessions.js';
@@ -148,7 +148,7 @@ export function registerAccessControl(app: FastifyInstance, deps: AccessDeps): v
     }
     if (token.user.mustChangePassword) return deny(reply, 403, 'password_change_required');
     if (token.user.mustEnrollMfa) return deny(reply, 403, 'mfa_enrollment_required');
-    if (!scopes.every((s) => token.scopes.includes(s))) {
+    if (!scopesAllow(token.scopes, scopes)) {
       challenge('insufficient_scope', `, scope="${scopes.join(' ')}"`);
       return deny(reply, 403, 'insufficient_scope');
     }

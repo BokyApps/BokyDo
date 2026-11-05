@@ -96,6 +96,19 @@ const syncWith = (token: string) =>
     payload: { cursor: null },
   });
 
+const mcpWith = (token: string, method = 'initialize') =>
+  raw({
+    method: 'POST',
+    url: '/mcp',
+    headers: {
+      host: TEST_HOST,
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    payload: { jsonrpc: '2.0', id: 1, method },
+  });
+
 describe.skipIf(!TEST_DATABASE_URL)('OAuth authorization server', () => {
   beforeEach(async () => {
     t = await testApp();
@@ -443,6 +456,7 @@ describe.skipIf(!TEST_DATABASE_URL)('personal access tokens', () => {
     expect(JSON.stringify(await t.db.db.select().from(auditLog))).not.toContain(token.slice(8));
 
     expect((await syncWith(token)).statusCode).toBe(200);
+    expect((await mcpWith(token)).statusCode).toBe(200);
     // Tokens can't manage tokens.
     const viaToken = await raw({
       method: 'POST',
@@ -462,6 +476,7 @@ describe.skipIf(!TEST_DATABASE_URL)('personal access tokens', () => {
         .statusCode,
     ).toBe(204);
     expect((await syncWith(token)).statusCode).toBe(401);
+    expect((await mcpWith(token)).statusCode).toBe(401);
   });
 
   it('need a recent sign-in and alert the user', async () => {
@@ -482,6 +497,7 @@ describe.skipIf(!TEST_DATABASE_URL)('personal access tokens', () => {
     const short = (await create(alice.http, { expiresInDays: 1 })).json().token;
     await t.db.db.execute(`update api_tokens set expires_at = now() - interval '1 second'`);
     expect((await syncWith(short)).statusCode).toBe(401);
+    expect((await mcpWith(short)).statusCode).toBe(401);
 
     const token = (await create(alice.http)).json().token;
     expect((await syncWith(token)).statusCode).toBe(200);

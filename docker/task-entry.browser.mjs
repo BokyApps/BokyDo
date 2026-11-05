@@ -116,6 +116,8 @@ try {
   const reloaded = await fresh.newPage();
   reloaded.on('pageerror', (error) => errors.push(error.message));
   await reloaded.goto(`${base}/inbox`);
+  // The old tab is no longer needed; leaving its event stream open doubles sync traffic.
+  await page.close();
   await reloaded.getByRole('group', { name: 'Quick entry', exact: true }).waitFor();
   await reloaded.getByRole('group', { name: 'Keyboard entry', exact: true }).waitFor();
   await reloaded.getByRole('group', { name: 'Quick entry', exact: true }).click();
@@ -385,14 +387,99 @@ try {
   await reloaded.getByRole('navigation', { name: 'Settings sections', exact: true }).waitFor();
   await reloaded.goto(`${base}/settings/themes`);
   await reloaded.getByRole('combobox', { name: 'Font', exact: true }).waitFor();
+  await reloaded.waitForFunction(() =>
+    [...globalThis.document.querySelectorAll('select')].some(
+      (element) => element.value === 'fira-code',
+    ),
+  );
   assert.equal(await font.inputValue(), 'fira-code');
   assert.equal(
     await reloaded.evaluate(() => globalThis.document.documentElement.dataset.theme),
     'kanagawa-wave',
   );
+  // A token created in Settings must work for both protocols without any browser cookies.
+  const retiredRequests = [];
+  reloaded.on('request', (request) => {
+    if (/\/api\/v1\/(ai|assist|ramble|admin\/ai)(\/|$)/.test(new URL(request.url()).pathname))
+      retiredRequests.push(new URL(request.url()).pathname);
+  });
+  await reloaded.goto(`${base}/settings/ai`);
+  await reloaded.waitForURL(`${base}/settings/apps`);
+  await reloaded.getByRole('heading', { name: 'API & MCP', exact: true }).waitFor();
+  assert.equal(await sections.getByRole('link', { name: 'AI', exact: true }).count(), 0);
+  assert.equal(await reloaded.getByRole('checkbox', { name: /AI features/ }).count(), 0);
+  const tokenName = 'Hermes + n8n';
+  await reloaded.getByRole('textbox', { name: 'New token name', exact: true }).fill(tokenName);
+  await reloaded.getByRole('button', { name: 'Full access', exact: true }).click();
+  await reloaded.getByRole('button', { name: 'Create token', exact: true }).click();
+  const tokenElement = reloaded.getByText(/^bkd_pat_[A-Za-z0-9_-]+$/);
+  await tokenElement.waitFor();
+  const token = await tokenElement.innerText();
+  const yaml = await reloaded.locator('pre').innerText();
+  assert(yaml.includes('mcp_servers:') && yaml.includes(`${base}/mcp`));
+  assert(yaml.includes(`Bearer ${token}`), 'Hermes configuration contains the newly created token');
+  assert(
+    !(await reloaded.evaluate(() => JSON.stringify(globalThis.localStorage))).includes(token),
+    'The token is not persisted in localStorage',
+  );
+  const external = await browser.newContext();
+  const bearerHeaders = { authorization: `Bearer ${token}` };
+  const rest = await external.request.post(`${base}/api/v1/tasks`, {
+    headers: bearerHeaders,
+    data: { content: 'REST to MCP integration check' },
+  });
+  assert.equal(rest.status(), 201);
+  const restTask = (await rest.json()).task;
+  let rpcId = 0;
+  const rpc = (method, params = {}) =>
+    external.request.post(`${base}/mcp`, {
+      headers: { ...bearerHeaders, accept: 'application/json, text/event-stream' },
+      data: { jsonrpc: '2.0', id: ++rpcId, method, params },
+    });
+  const init = await rpc('initialize', {
+    protocolVersion: '2025-11-25',
+    capabilities: {},
+    clientInfo: { name: 'integration-check', version: '1.0' },
+  });
+  assert.equal(init.status(), 200);
+  assert.equal((await init.json()).result.serverInfo.name, 'bokydo');
+  const read = (
+    await (await rpc('tools/call', { name: 'get_task', arguments: { id: restTask.id } })).json()
+  ).result;
+  assert.equal(read.structuredContent.task.content, restTask.content);
+  const added = (
+    await (
+      await rpc('tools/call', {
+        name: 'add_task',
+        arguments: { text: 'MCP to REST integration check tomorrow p2' },
+      })
+    ).json()
+  ).result;
+  assert(!added.isError, 'MCP can create a task with the same full-access token');
+  const mcpTask = added.structuredContent.task;
+  const back = await external.request.get(`${base}/api/v1/tasks/${mcpTask.id}`, {
+    headers: bearerHeaders,
+  });
+  assert.equal(back.status(), 200);
+  assert.equal((await back.json()).task.priority, 2);
+  const row = reloaded
+    .locator('li')
+    .filter({ has: reloaded.getByText(tokenName, { exact: true }) });
+  await row.getByRole('button', { name: 'Revoke', exact: true }).click();
+  const revokeDialog = reloaded.getByRole('dialog', { name: 'Revoke this token?', exact: true });
+  await revokeDialog.getByRole('button', { name: 'Revoke', exact: true }).click();
+  await row.waitFor({ state: 'hidden' });
+  assert.equal(await tokenElement.count(), 0, 'Revocation clears the newly created secret');
+  assert.equal(
+    (await external.request.get(`${base}/api/v1/tasks`, { headers: bearerHeaders })).status(),
+    401,
+  );
+  assert.equal((await rpc('ping')).status(), 401);
+  await external.close();
+  assert.deepEqual(retiredRequests, []);
   assert.deepEqual(errors, []);
   console.log(
-    'PASS: task and habit entry, unified Settings, all theme families, bundled font switching/subsets/races and fixed logo',
+    'PASS: task and habit entry, unified Settings, themes/fonts/logo, legacy AI redirect and one PAT across REST/MCP with revocation',
   );
 } finally {
   await browser.close();

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { aiUsage, projectMembers, projects, tasks } from '../db/schema.js';
 import { newId } from '../db/ids.js';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, testApp, type TestApp } from '../test/ai-app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import {
   applyOps,
@@ -393,7 +393,7 @@ describe.skipIf(!TEST_DATABASE_URL || !lanIp)('Ramble end to end', () => {
     ).toBe(413);
   });
 
-  it('serves a real HTTP client with a token, and only cancels when the client leaves', async () => {
+  it('rejects a real HTTP client token with the retired ai:use scope', async () => {
     const { token } = await t.app.services.apiTokens.createPat(alice.id, {
       name: 'ramble',
       scopes: ['ai:use'],
@@ -401,36 +401,12 @@ describe.skipIf(!TEST_DATABASE_URL || !lanIp)('Ramble end to end', () => {
     });
     await t.app.listen({ port: 0, host: '127.0.0.1' });
     const base = `http://127.0.0.1:${(t.app.server.address() as AddressInfo).port}`;
-    // A slow model: the answer must still arrive (nothing cancels it early).
-    slowMs = 300;
-    replies.chat.push({ ops: [{ op: 'add', content: 'Water the plants' }] });
     const res = await fetch(`${base}/api/v1/ramble/extract`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'water the plants' }),
     });
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { draft: { content: string }[] }).draft[0]!.content).toBe(
-      'Water the plants',
-    );
-
-    // The client gives up: the call is cancelled and metered as failed, not left running.
-    slowMs = 2000;
-    const gone = new AbortController();
-    const pending = fetch(`${base}/api/v1/ramble/extract`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ text: 'something else' }),
-      signal: gone.signal,
-    }).catch(() => null);
-    await new Promise((r) => setTimeout(r, 200));
-    gone.abort();
-    await pending;
-    await expect
-      .poll(async () => (await t.db.db.select().from(aiUsage)).map((r) => r.status).sort(), {
-        timeout: 1500,
-      })
-      .toEqual(['done', 'failed']);
+    expect(res.status).toBe(403);
   });
 
   it('answers clearly when Ramble is not set up or over budget', async () => {

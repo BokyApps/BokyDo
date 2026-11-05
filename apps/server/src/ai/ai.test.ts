@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { aiCredentials, aiUsage, auditLog, users } from '../db/schema.js';
 import { ensureAppSecrets } from '../security/app-secrets.js';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, testApp, type TestApp } from '../test/ai-app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { listModels } from './adapters.js';
 import { AiCredentialStore } from './credentials.js';

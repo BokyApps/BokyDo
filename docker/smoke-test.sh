@@ -398,34 +398,13 @@ C_ON=$(cmd user_update_preferences '{"keyboardShortcuts":true}')
 sync_cmds "$C_ON" >/dev/null
 check "and they can be turned back on" shortcuts_on "$(body_of "$(api POST /api/v1/sync '{"cursor":null}')")"
 
-echo "== AI provider layer (W7a)"
-r=$(api POST /api/v1/admin/ai/credentials '{"provider":"openai-compatible","label":"Mailpit as a model server","baseUrl":"http://mailpit:8025/api/v1","apiKey":"smoke-ai-secret-key"}')
-check "instance AI credential saved" test "$(status_of "$r")" = 201
-check "AI key is write-only" bash -c "! grep -q smoke-ai-secret <<<'$(body_of "$r")'"
-AI_CRED=$(body_of "$r" | jq -r .id)
-check "AI key encrypted at rest" \
-  bash -c "! docker exec ${PROJECT}-db-1 psql -U bokydo -d bokydo -Atc \"select secret::text from ai_credentials\" | grep -q smoke-ai-secret"
-check "private network unreachable until allow-listed (SSRF)" \
-  bash -c "jq -e '.error == \"blocked_address\"' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
-api PATCH /api/v1/admin/settings '{"network.privateAllowlist":["mailpit"]}' >/dev/null
-check "allow-listed private host is reached (and answers 404)" \
-  bash -c "jq -e '.error == \"unexpected_status\" and .status == 404' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/test")")'"
-check "a real model call through the allow-listed host fails cleanly (W7b)" \
-  bash -c "jq -e '.ok == false and (.status == 404 or .status == 405)' <<<'$(body_of "$(api POST "/api/v1/admin/ai/credentials/$AI_CRED/try" '{"model":"smoke-model","kind":"chat"}')")'"
-check "Ramble answers clearly when no model is set up (W8)" \
-  bash -c "jq -e '.error == \"ai_not_configured\"' <<<'$(body_of "$(api POST /api/v1/ramble/extract '{"text":"buy milk tomorrow"}')")'"
-check "Ramble refuses non-audio uploads" \
-  test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "Origin: $BASE" -H "x-csrf-token: $CSRF" -H 'content-type: video/mp4' --data-binary 'x' "$BASE/api/v1/ramble/transcribe?seconds=1")" = 415
-check "Ramble commit creates the reviewed tasks" \
-  test "$(status_of "$(api POST /api/v1/ramble/commit '{"tasks":[{"ref":"d1","content":"Smoke ramble task","due":"tomorrow","priority":2}]}')")" = 201
-check "metadata address refused even for admins" \
-  test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://169.254.169.254/latest"}')")" = 400
-r=$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"Mine","baseUrl":"https://mailpit:8025/v1"}')
-check "own credentials can't reach allow-listed private hosts" \
-  bash -c "jq -e '.error == \"blocked_address\"' <<<'$(body_of "$(api POST "/api/v1/ai/credentials/$(body_of "$r" | jq -r .id)/test")")'"
-check "own credentials need https" \
-  test "$(status_of "$(api POST /api/v1/ai/credentials '{"provider":"ollama","label":"x","baseUrl":"http://models.example.com/v1"}')")" = 400
-check "AI key never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q smoke-ai-secret"
+echo "== external AI integrations"
+api PATCH /api/v1/admin/settings '{"ai.instanceAccess":"everyone","ai.userKeys":true}' >/dev/null
+check "built-in AI catalog removed even with saved AI flag" test "$(status_of "$(api GET /api/v1/ai/catalog)")" = 404
+check "provider credential endpoint removed" test "$(status_of "$(api POST /api/v1/admin/ai/credentials '{}')")" = 404
+check "built-in task assistant removed" test "$(status_of "$(api POST /api/v1/assist/task '{}')")" = 404
+check "built-in Ramble removed" test "$(status_of "$(api POST /api/v1/ramble/extract '{}')")" = 404
+api PATCH /api/v1/admin/settings '{"ai.instanceAccess":"off","ai.userKeys":false}' >/dev/null
 
 echo "== public API auth: OAuth 2.1 and personal access tokens (W10a)"
 check "OAuth metadata names this instance as issuer" \
@@ -448,6 +427,7 @@ check "consent returns a code to the registered redirect" bash -c "[[ -n '$CODE'
 token_req() { curl -s -X POST -H 'content-type: application/x-www-form-urlencoded' --data "$1" "$BASE/oauth/token"; }
 TOKENS=$(token_req "grant_type=authorization_code&code=$CODE&redirect_uri=https://client.example/cb&client_id=$CLIENT&code_verifier=$VERIFIER")
 AT=$(jq -r .access_token <<<"$TOKENS")
+mcp() { curl -s -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' "${@:2}" --data "$1" "$BASE/mcp"; }
 bearer_sync() { curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $1" -H 'content-type: application/json' --data '{"cursor":null}' "$BASE/api/v1/sync"; }
 check "access token works for sync" test "$(bearer_sync "$AT")" = 200
 check "bearer tokens can't reach session-only routes" \
@@ -458,14 +438,22 @@ api POST /api/v1/auth/reauth "{\"password\":\"$NEWPW2\"}" >/dev/null
 r=$(api POST /api/v1/account/tokens '{"name":"smoke","scopes":["sync"],"expiresInDays":1}')
 PAT=$(body_of "$r" | jq -r .token)
 check "personal access token created and works" bash -c "[[ $(status_of "$r") == 201 && $(bearer_sync "$PAT") == 200 ]]"
+check "the same full-access PAT reads REST tasks" \
+  test "$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $PAT" "$BASE/api/v1/tasks")" = 200
+check "the same full-access PAT initializes MCP" \
+  test "$(mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' -H "authorization: Bearer $PAT" | jq -r .result.serverInfo.name)" = bokydo
 check "tokens stored only as hashes" \
   bash -c "! docker exec ${PROJECT}-db-1 psql -U bokydo -d bokydo -Atc 'select hash from api_tokens' | grep -q '${PAT#bkd_pat_}'"
 check "tokens never logged" bash -c "! ${C[*]} logs app 2>&1 | grep -q -e '${PAT#bkd_pat_}' -e '${AT#bkd_at_}'"
 api DELETE "/api/v1/account/tokens/$(body_of "$r" | jq -r .pat.id)" >/dev/null
 check "revoked token stops working" test "$(bearer_sync "$PAT")" = 401
 
+check "revoking the PAT stops REST access" \
+  test "$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $PAT" "$BASE/api/v1/tasks")" = 401
+check "revoking the PAT stops MCP access" \
+  test "$(mcp '{"jsonrpc":"2.0","id":1,"method":"ping"}' -H "authorization: Bearer $PAT" -o /dev/null -w '%{http_code}')" = 401
+
 echo "== MCP server (W10c)"
-mcp() { curl -s -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' "${@:2}" --data "$1" "$BASE/mcp"; }
 check "MCP asks for a token and points to its metadata" \
   bash -c "curl -s -D - -o /dev/null -X POST -H 'content-type: application/json' --data '{}' $BASE/mcp | grep -qi 'resource_metadata=\"$BASE/.well-known/oauth-protected-resource/mcp\"'"
 check "MCP resource metadata published" \

@@ -1,7 +1,6 @@
 import path from 'node:path';
 import cookie from '@fastify/cookie';
-import websocket from '@fastify/websocket';
-import { RAMBLE_LIVE, type Health, type InstanceStatus } from '@bokydo/shared';
+import { type Health, type InstanceStatus } from '@bokydo/shared';
 import { count } from 'drizzle-orm';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { STATUS_CODES } from 'node:http';
@@ -44,20 +43,13 @@ import { AttachmentStore } from './attachments/store.js';
 import { SyncService } from './sync/sync-service.js';
 import { JobRunner } from './jobs/runner.js';
 import { Delivery } from './delivery/delivery.js';
-import { AiCredentialStore } from './ai/credentials.js';
-import { registerAiRoutes } from './ai/routes.js';
-import { AiService } from './ai/service.js';
 import { createOutbound, PUBLIC_ONLY, type OutboundFetch, type Resolver } from './net/outbound.js';
-import { createLiveConnector, type LiveConnector } from './net/outbound-ws.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerHabitRoutes } from './habits/routes.js';
-import { report } from './assist/report.js';
-import { registerAssistRoutes } from './assist/routes.js';
 import { registerImportRoutes } from './import/routes.js';
 import { TodoistImporter } from './import/todoist-import.js';
-import { registerRambleRoutes } from './ramble/routes.js';
 import { fireDueReminders } from './reminders/reminders.js';
 import { registerWebhookRoutes } from './webhooks/routes.js';
 import { Webhooks } from './webhooks/webhooks.js';
@@ -78,14 +70,14 @@ export interface AppDeps {
   onRestored?: () => void;
   /** DNS for the SSRF-safe outbound client; injectable for tests. */
   resolver?: Resolver;
-  /** Tests only: the network for users' own AI credentials and subscription sign-in. */
-  aiUserFetch?: OutboundFetch;
+  /** Test-only plugin setup before access hooks (for upgrade lifecycle handling). */
+  configurePluginsForTest?: (app: FastifyInstance) => Promise<void> | void;
+  /** Test fixture routes. Production callers must not provide these hooks. */
+  configureForTest?: (app: FastifyInstance, deps: AppDeps) => Promise<void> | void;
   /** Tests only: the network the Todoist importer reads through. */
   importFetch?: OutboundFetch;
   /** Tests only: the importer's clock, so completed-task windows are not wall-clock bound. */
   importNow?: () => Date;
-  /** Tests only: how the live Ramble relay reaches a provider WebSocket. */
-  liveConnect?: LiveConnector;
 }
 
 export interface AppServices {
@@ -99,7 +91,6 @@ export interface AppServices {
   /** Reminders, notification delivery and digests (started by main; tests call `tick`). */
   jobs: JobRunner;
   delivery: Delivery;
-  ai: AiService;
   apiTokens: ApiTokenStore;
   backups: BackupService;
   /** Outgoing webhook deliveries (the `webhooks` background job drives enqueue + dispatch). */
@@ -211,42 +202,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       },
     },
   );
-  const aiCredentials = new AiCredentialStore(db, deps.secrets.masterKey);
-  const ai = new AiService({
-    db,
-    settings,
-    credentials: aiCredentials,
-    ...(deps.resolver ? { resolver: deps.resolver } : {}),
-    ...(deps.aiUserFetch ? { userFetch: deps.aiUserFetch } : {}),
-  });
-  let lastSignInKeepAlive = 0;
-  jobs.add({
-    name: 'ai-sign-in-keepalive',
-    run: async (now) => {
-      // Hourly: renew subscription sign-ins idle for 3 days, so their refresh tokens stay alive.
-      if (now.getTime() - lastSignInKeepAlive < 3600_000) return;
-      lastSignInKeepAlive = now.getTime();
-      await ai.renewIdleSignIns(now, 3 * 86_400_000);
-    },
-  });
-  // AI report emails (W9): written at send time, from what each user can see then.
-  jobs.add({
-    name: 'ai-reports',
-    run: (now) =>
-      delivery.reports(now, (user, kind, at) =>
-        report(
-          db,
-          ai,
-          user,
-          kind,
-          undefined,
-          null,
-          settings.get('instance.defaultTimezone'),
-          undefined,
-          at,
-        ),
-      ),
-  });
   // User-configured endpoints are public-internet only, whatever the admin allow-list says.
   const webhooks = new Webhooks({
     db,
@@ -277,7 +232,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     tokens,
     jobs,
     delivery,
-    ai,
     apiTokens,
     backups,
     webhooks,
@@ -299,9 +253,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   await app.register(cookie);
-  // WebSocket upgrades for the live Ramble relay (must be registered before its route). The
-  // frame limit matches the relay's own message cap, so a hostile client can't buffer more.
-  await app.register(websocket, { options: { maxPayload: RAMBLE_LIVE.maxMessageChars } });
+  await deps.configurePluginsForTest?.(app);
   await registerSecurityHeaders(app, settings);
   registerAccessControl(app, { settings, sessions, tokens: apiTokens });
 
@@ -373,17 +325,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     vapid,
     sessionKey: deps.secrets.sessionKey,
   });
-  registerAiRoutes(app, { db, settings, credentials: aiCredentials, ai });
-  registerRambleRoutes(app, {
-    db,
-    settings,
-    sync,
-    ai,
-    sessions,
-    tokens: apiTokens,
-    connect: deps.liveConnect ?? createLiveConnector(deps.resolver),
-  });
-  registerAssistRoutes(app, { db, settings, ai, sync });
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   registerHabitRoutes(app, { db, settings });
@@ -408,6 +349,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     store: attachmentStore,
     tokens: apiTokens,
   });
+
+  await deps.configureForTest?.(app, deps);
 
   const servesWebApp = await registerWebApp(app, deps.webRoot);
   app.setNotFoundHandler((req, reply) => {

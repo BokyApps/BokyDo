@@ -158,6 +158,39 @@ describe.skipIf(!TEST_DATABASE_URL)('project-limited personal access tokens', ()
   });
 
   describe('REST', () => {
+    it('uses full sync permission across REST and MCP', async () => {
+      const token = await limitedToken(null, ['sync']);
+      const api = bearer(token);
+      expect((await call(api, 'GET', '/api/v1/tasks')).status).toBe(200);
+      const init = await t.app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: {
+          host: TEST_HOST,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${token}`,
+        },
+        payload: { jsonrpc: '2.0', id: ++seq, method: 'initialize' },
+      });
+      expect(init.statusCode).toBe(200);
+      const tools = await t.app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: {
+          host: TEST_HOST,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${token}`,
+        },
+        payload: { jsonrpc: '2.0', id: ++seq, method: 'tools/list' },
+      });
+      expect(tools.json().result.tools.map((x: { name: string }) => x.name)).toContain(
+        'list_filters',
+      );
+      expect((await tool(token, 'get_task', { id: allowedTask })).isError).toBeFalsy();
+    });
+
     it('reads only inside its projects', async () => {
       const api = bearer(await limitedToken());
       const list = await call(api, 'GET', '/api/v1/projects');
