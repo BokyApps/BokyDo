@@ -4,6 +4,10 @@ import {
   commandArgs,
   dueSchema,
   idSchema,
+  habitPeriodSchema,
+  habitCreateRequestSchema,
+  habitPatchSchema,
+  habitCheckInSchema,
   orderKeySchema,
   prioritySchema,
   projectVisibilitySchema,
@@ -113,7 +117,7 @@ const COMMAND_STATUS: Record<CommandError, number> = {
 // ---------------------------------------------------------------------------------------------
 
 interface RestOperation {
-  method: 'get' | 'post' | 'patch' | 'delete';
+  method: 'get' | 'post' | 'patch' | 'delete' | 'put';
   /** Fastify path, with `:param` placeholders. */
   path: string;
   summary: string;
@@ -123,6 +127,25 @@ interface RestOperation {
   body?: z.ZodType;
   response?: z.ZodType;
 }
+
+const habitResource = z.object({
+  id: idSchema,
+  name: z.string(),
+  period: habitPeriodSchema,
+  target: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  todayCompleted: z.boolean(),
+  progress: z.object({
+    completed: z.number().int(),
+    target: z.number().int(),
+    start: z.string(),
+    end: z.string(),
+  }),
+  streak: z.object({ current: z.number().int(), unit: habitPeriodSchema }),
+  history: z.array(z.object({ date: z.string(), completed: z.boolean() })),
+});
+const habitSingle = z.object({ habit: habitResource });
 
 export const REST_OPERATIONS: RestOperation[] = [
   {
@@ -224,6 +247,48 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Projects',
     scopes: ['projects:write'],
   },
+  {
+    method: 'get',
+    path: '/api/v1/habits',
+    summary: 'List your personal habits with progress, streaks and history',
+    tag: 'Habits',
+    scopes: ['habits:read'],
+    response: z.object({ today: z.string(), habits: z.array(habitResource) }),
+  },
+  {
+    method: 'post',
+    path: '/api/v1/habits',
+    summary: 'Create a personal habit (a stable id makes retries safe)',
+    tag: 'Habits',
+    scopes: ['habits:write'],
+    body: habitCreateRequestSchema,
+    response: habitSingle,
+  },
+  {
+    method: 'patch',
+    path: '/api/v1/habits/:id',
+    summary: 'Update a personal habit',
+    tag: 'Habits',
+    scopes: ['habits:write'],
+    body: habitPatchSchema,
+    response: habitSingle,
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/habits/:id',
+    summary: 'Delete a personal habit and its check-ins',
+    tag: 'Habits',
+    scopes: ['habits:write'],
+  },
+  {
+    method: 'put',
+    path: '/api/v1/habits/:id/check-ins/:date',
+    summary: 'Set a check-in on a local calendar date (not in the future)',
+    tag: 'Habits',
+    scopes: ['habits:write'],
+    body: habitCheckInSchema,
+    response: habitSingle,
+  },
 ];
 
 /** Zod → JSON Schema 2020-12, which is the dialect OpenAPI 3.1 uses. */
@@ -258,7 +323,7 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
         name: match[1],
         in: 'path',
         required: true,
-        schema: { type: 'string', format: 'uuid' },
+        schema: { type: 'string', format: match[1] === 'date' ? 'date' : 'uuid' },
       });
     }
     if (op.query) parameters.push(...queryParameters(op.query));
@@ -298,7 +363,7 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
       title: 'BokyDo REST API',
       version: '1.0.0',
       description:
-        'Resource-oriented access to tasks and projects for integrations. Authenticate with a personal access token or an OAuth 2.1 access token as a bearer token; each operation needs the scope listed on it. Everything is scoped to what the token’s owner can see.',
+        'Resource-oriented access to tasks, projects and personal habits for integrations. Authenticate with a personal access token or an OAuth 2.1 access token as a bearer token; each operation needs the scope listed on it. Everything is scoped to what the token’s owner can see.',
     },
     ...(publicUrl ? { servers: [{ url: publicUrl }] } : {}),
     components: {
@@ -307,7 +372,7 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
           type: 'http',
           scheme: 'bearer',
           description:
-            'A personal access token (Settings → Apps & tokens) or an OAuth 2.1 access token.',
+            'A personal access token (Settings → API & MCP) or an OAuth 2.1 access token.',
         },
       },
     },

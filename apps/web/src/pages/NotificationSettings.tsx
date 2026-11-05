@@ -5,13 +5,21 @@ import {
   type Preferences,
 } from '@bokydo/shared';
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Checkbox, inputClass, SelectField } from '../components/ui.js';
 import { api } from '../lib/api.js';
+import { useSyncState } from '../lib/sync.js';
 import { disablePush, enablePush, PushSetupError, pushState, type PushState } from '../lib/push.js';
 import { instanceQuery } from '../lib/queries.js';
 import { relativeLabel } from '../lib/reminders.js';
+import {
+  desktopNotificationAvailability,
+  desktopConsentChanged,
+  OPT_IN_EVENT,
+  desktopNotificationsOptedIn,
+  setDesktopNotificationsOptIn,
+} from '../lib/desktop-notifications.js';
 
 // Labels come from the catalogue; the keys are the raw event values.
 export const EVENT_LABEL_KEY: Record<NotificationEvent, string> = {
@@ -50,6 +58,7 @@ export function NotificationSettings({
   const eventLabel = (e: NotificationEvent) => t(EVENT_LABEL_KEY[e]);
   return (
     <>
+      <DesktopNotificationsSection />
       <PushSection />
       <Section title={t('settings.notifications.whatToSend')}>
         {!instance.data?.emailEnabled && (
@@ -156,6 +165,112 @@ export function NotificationSettings({
         </div>
       </Section>
     </>
+  );
+}
+
+function DesktopNotificationsSection() {
+  const { t } = useTranslation();
+  const state = useSyncState();
+  const userId = state.user?.id;
+  const enabled = useSyncExternalStore(
+    (onChange) => {
+      const onStorage = (event: StorageEvent) => {
+        if (desktopConsentChanged(event.key, userId ?? null)) onChange();
+      };
+      window.addEventListener(OPT_IN_EVENT, onChange);
+      window.addEventListener('storage', onStorage);
+      return () => {
+        window.removeEventListener(OPT_IN_EVENT, onChange);
+        window.removeEventListener('storage', onStorage);
+      };
+    },
+    () => (userId ? desktopNotificationsOptedIn(userId) : false),
+  );
+  const [availability, setAvailability] = useState(desktopNotificationAvailability);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onFocus = () => setAvailability(desktopNotificationAvailability());
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  const enable = async () => {
+    if (!userId) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const next = desktopNotificationAvailability();
+      if (next === 'unsupported' || next === 'insecure' || next === 'denied') {
+        setAvailability(next);
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setAvailability(permission === 'denied' ? 'denied' : 'dismissed');
+        setMessage(
+          permission === 'denied'
+            ? t('settings.notifications.liveDenied')
+            : t('settings.notifications.liveDismissed'),
+        );
+        return;
+      }
+      setDesktopNotificationsOptIn(userId, true);
+      setAvailability('granted');
+    } catch {
+      setMessage(t('settings.notifications.liveDismissed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title={t('settings.notifications.liveTitle')}>
+      <p className="mb-3 text-sm text-muted">{t('settings.notifications.liveDescription')}</p>
+      {availability === 'unsupported' && (
+        <p className="text-sm text-muted">{t('settings.notifications.liveUnsupported')}</p>
+      )}
+      {availability === 'insecure' && (
+        <Alert tone="error">{t('settings.notifications.liveInsecure')}</Alert>
+      )}
+      {availability === 'denied' && (
+        <p className="text-sm text-muted">{t('settings.notifications.liveDenied')}</p>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="flex-1 text-sm">
+          {enabled ? t('settings.notifications.liveOn') : t('settings.notifications.liveOff')}
+        </span>
+        {enabled ? (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (userId) setDesktopNotificationsOptIn(userId, false);
+            }}
+          >
+            {t('settings.notifications.liveDisable')}
+          </Button>
+        ) : (
+          <Button
+            busy={busy}
+            disabled={
+              !userId ||
+              availability === 'unsupported' ||
+              availability === 'insecure' ||
+              availability === 'denied'
+            }
+            onClick={() => void enable()}
+          >
+            {t('settings.notifications.liveEnable')}
+          </Button>
+        )}
+      </div>
+      {message && (
+        <p role="status" className="mt-2 text-sm text-muted">
+          {message}
+        </p>
+      )}
+    </Section>
   );
 }
 

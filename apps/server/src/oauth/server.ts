@@ -101,7 +101,9 @@ export function registerOAuthServer(app: FastifyInstance, deps: OAuthDeps): void
         return reply.status(404).send({ error: 'not_found' });
       return {
         resource: `${iss}${path}`,
-        authorization_servers: [iss],
+        ...(path !== '/mcp' || settings.get('api.mcpAuthMode') !== 'pat'
+          ? { authorization_servers: [iss] }
+          : {}),
         scopes_supported:
           path === '/mcp' ? API_SCOPE_KEYS.filter((s) => s !== 'sync') : API_SCOPE_KEYS,
         bearer_methods_supported: ['header'],
@@ -199,6 +201,11 @@ export function registerOAuthServer(app: FastifyInstance, deps: OAuthDeps): void
       return fail('invalid_request', 'state is too long');
     const audience = audienceOf(iss, q.resource);
     if (!audience) return fail('invalid_target', 'Unknown resource');
+    if (
+      audience === 'mcp' &&
+      (!settings.get('api.mcpEnabled') || settings.get('api.mcpAuthMode') === 'pat')
+    )
+      return fail('access_denied', 'MCP browser sign-in is disabled on this instance');
     let scopes: ApiScope[] | null =
       q.scope === undefined || q.scope.trim() === ''
         ? [...DEFAULT_OAUTH_SCOPES]
@@ -292,6 +299,11 @@ export function registerOAuthServer(app: FastifyInstance, deps: OAuthDeps): void
             await revokeGrant(tx, row.oauth_grants.id, 'code_exchange_failed');
             return null;
           }
+          if (
+            row.oauth_grants.audience === 'mcp' &&
+            (!settings.get('api.mcpEnabled') || settings.get('api.mcpAuthMode') === 'pat')
+          )
+            return null;
           return tokens.issue(tx, {
             id: row.oauth_grants.id,
             userId: row.oauth_grants.userId,

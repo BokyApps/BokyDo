@@ -156,6 +156,14 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
     expect(Object.keys(spec.body.paths)).toEqual(
       expect.arrayContaining(['/api/v1/tasks', '/api/v1/tasks/{id}', '/api/v1/projects']),
     );
+    const habitRead = spec.body.paths['/api/v1/habits'].get;
+    expect(habitRead.security).toEqual([{ bearerAuth: ['habits:read'] }]);
+    const checkIn = spec.body.paths['/api/v1/habits/{id}/check-ins/{date}'].put;
+    expect(checkIn.security).toEqual([{ bearerAuth: ['habits:write'] }]);
+    expect(
+      checkIn.parameters.find((parameter: { name: string }) => parameter.name === 'date').schema
+        .format,
+    ).toBe('date');
     const listed = spec.body.paths['/api/v1/tasks'].get;
     expect(listed.security).toEqual([{ bearerAuth: ['tasks:read'] }]);
     expect(listed.responses['200'].content['application/json'].schema).toMatchObject({

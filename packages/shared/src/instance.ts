@@ -18,6 +18,8 @@ export const instanceStatusSchema = z.object({
   passkeysAvailable: z.boolean(),
   /** Largest attachment in MB (0: uploads are off). */
   attachmentMaxMb: z.number().int(),
+  /** Allowed MCP authentication methods; no credentials are exposed. */
+  mcpAuthMode: z.enum(['both', 'sign-in', 'pat']).default('both'),
 });
 export type InstanceStatus = z.infer<typeof instanceStatusSchema>;
 

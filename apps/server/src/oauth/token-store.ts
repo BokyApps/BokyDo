@@ -293,6 +293,11 @@ export class ApiTokenStore {
         (row.expiresAt && row.expiresAt.getTime() <= Date.now())
       )
         return 'invalid_grant';
+      if (
+        grant.oauth_grants.audience === 'mcp' &&
+        (!this.settings.get('api.mcpEnabled') || this.settings.get('api.mcpAuthMode') === 'pat')
+      )
+        return 'invalid_grant';
       const granted = grant.oauth_grants.scopes as ApiScope[];
       let scopes = granted;
       if (narrowTo) {
