@@ -193,7 +193,6 @@ async function axePass({ browser, project, filter, csrfOf }) {
       ['/settings/calendar', 'Settings: calendar'],
       ['/settings/apps', 'Settings: apps & tokens'],
       ['/settings/data', 'Settings: your data'],
-      ['/settings/ai', 'Settings: AI'],
     ]) {
       await page.goto(BASE + url);
       await scan(page, tag(name));
@@ -204,7 +203,10 @@ async function axePass({ browser, project, filter, csrfOf }) {
     await scan(page, tag('Dialog: delete account'));
     await page.keyboard.press('Escape');
     await page.goto(`${BASE}/settings`);
-    await page.getByRole('tab', { name: 'general' }).click();
+    await page
+      .getByRole('navigation', { name: 'Settings sections' })
+      .getByRole('link', { name: 'General', exact: true })
+      .click();
     await scan(page, tag('Settings: general'));
     await page.goto(`${BASE}/today`);
     for (const [key, name] of [
@@ -265,7 +267,6 @@ async function axePass({ browser, project, filter, csrfOf }) {
     ['/templates', 'Templates'],
     ['/settings/calendar', 'Settings: calendar'],
     ['/settings/data', 'Settings: your data'],
-    ['/settings/ai', 'Settings: AI'],
   ]) {
     await pp.goto(BASE + url);
     await scan(pp, `${name} [phone]`);
@@ -567,7 +568,10 @@ async function keyboardPass({ browser, project, csrfOf }) {
 
   console.log('\n[shortcuts] single-key shortcuts can be turned off (WCAG 2.1.4)');
   await open('/settings');
-  await page.getByRole('tab', { name: 'general' }).click();
+  await page
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('link', { name: 'General', exact: true })
+    .click();
   const box = page.getByLabel('Single-key keyboard shortcuts');
   if ((await box.count()) === 0) problem('shortcuts', 'no setting found');
   else {
@@ -586,7 +590,10 @@ async function keyboardPass({ browser, project, csrfOf }) {
       : problem('shortcuts', 'Ctrl+K stopped working');
     await page.keyboard.press('Escape');
     await open('/settings');
-    await page.getByRole('tab', { name: 'general' }).click();
+    await page
+      .getByRole('navigation', { name: 'Settings sections' })
+      .getByRole('link', { name: 'General', exact: true })
+      .click();
     await page.getByLabel('Single-key keyboard shortcuts').check();
     await page.waitForTimeout(600);
   }

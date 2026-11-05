@@ -1,24 +1,20 @@
 import { NotificationBell } from './Notifications.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { resyncPush } from '../lib/push.js';
 import { api, clearCsrfToken } from '../lib/api.js';
 import { wipeDevice } from '../lib/device.js';
 import { ConfirmProvider } from '../lib/confirm.js';
-import { aiCatalogQuery, sessionQuery } from '../lib/queries.js';
+import { sessionQuery } from '../lib/queries.js';
 import { PreferenceEffects, SyncProvider, usePreferences } from '../lib/sync.js';
 import { TaskUIProvider, useTaskUI } from '../lib/task-ui.js';
 import { ToastProvider } from '../lib/toasts.js';
 import { MenuIcon, PlusIcon, SettingsIcon } from './icons.js';
-import { RambleDialog } from './Ramble.js';
 import { BulkBar, QuickAddDialog, SearchDialog, ShortcutsDialog } from './Overlays.js';
 import { Sidebar } from './Sidebar.js';
 import { TaskDetailDialog } from './TaskDetail.js';
 import { IconButton, Logo, MenuItem, Popover } from './ui.js';
-
-// Ask is a sizeable screen of its own (F-023): load it the first time the dialog is opened.
-const AskDialog = lazy(() => import('./Ask.js').then((m) => ({ default: m.AskDialog })));
 
 /** Signed-in layout: providers for sync, toasts and task UI around the sidebar + page. */
 export function AppShell() {
@@ -49,17 +45,7 @@ function Layout() {
   );
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [rambleOpen, setRambleOpen] = useState(false);
-  const [askOpen, setAskOpen] = useState(false);
   const pendingG = useRef(false);
-  // Ramble is offered only when the server says this user has the feature (ramble.extract).
-  const catalog = useQuery(aiCatalogQuery);
-  const ramble = catalog.data?.available.includes('ramble.extract') ?? false;
-  const voice = catalog.data?.available.includes('ramble.transcribe') ?? false;
-  // Live Ramble needs a model that can listen in real time (ramble.live).
-  const liveRamble = catalog.data?.available.includes('ramble.live') ?? false;
-  // Ask your tasks is offered only when the server says this user has the feature (ask).
-  const ask = catalog.data?.available.includes('ask') ?? false;
 
   // Push: re-attach this browser's subscription to the current session, and open what a
   // clicked notification points at (same-origin paths only).
@@ -160,8 +146,6 @@ function Layout() {
             <aside className="absolute inset-y-0 left-0 z-30 w-72 border-r border-line bg-surface md:static md:z-auto md:w-64 md:bg-bg">
               <Sidebar
                 onSearch={() => setSearchOpen(true)}
-                onRamble={ramble ? () => setRambleOpen(true) : undefined}
-                onAsk={ask ? () => setAskOpen(true) : undefined}
                 onNavigate={() =>
                   !window.matchMedia('(min-width: 768px)').matches && setSidebarOpen(false)
                 }
@@ -176,19 +160,6 @@ function Layout() {
       <TaskDetailDialog />
       <QuickAddDialog />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
-      {ramble && (
-        <RambleDialog
-          open={rambleOpen}
-          onClose={() => setRambleOpen(false)}
-          voice={voice}
-          live={liveRamble}
-        />
-      )}
-      {ask && askOpen && (
-        <Suspense fallback={null}>
-          <AskDialog open onClose={() => setAskOpen(false)} />
-        </Suspense>
-      )}
       <ShortcutsDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       <BulkBar />
     </div>

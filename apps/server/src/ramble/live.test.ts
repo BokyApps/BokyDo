@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { aiUsage } from '../db/schema.js';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, testApp, type TestApp } from '../test/ai-app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 
 /** A tiny stand-in for a browser/app connecting to the relay, with a message queue. */
@@ -213,26 +213,39 @@ describe.skipIf(!TEST_DATABASE_URL)('live Ramble relay', () => {
     expect(await h.waitFor('closed')).toMatchObject({ reason: 'not_configured' });
   });
 
-  it('accepts a bearer token with ai:use (apps, not just the browser)', async () => {
+  it('rejects a bearer token carrying the retired ai:use scope', async () => {
     const { token } = await t.app.services.apiTokens.createPat(alice.id, {
       name: 'live',
       scopes: ['ai:use'],
       expiresInDays: 1,
     });
-    const h = harness(new WebSocket(url, { headers: { authorization: `Bearer ${token}` } }));
-    await new Promise<void>((r) => h.socket.once('open', r));
-    expect(await h.waitFor('ready')).toMatchObject({ sampleRate: 24000 });
-    h.socket.close();
+    const socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } });
+    const outcome = await new Promise<string>((resolve) => {
+      socket.once('open', () => resolve('open'));
+      socket.once('unexpected-response', (req, res) => {
+        resolve(`status:${res.statusCode}`);
+        res.destroy();
+        req.destroy();
+        socket.terminate();
+      });
+      socket.once('error', () => resolve('error'));
+    });
+    expect(outcome).toBe('status:403');
   });
 
   it('rejects an unauthenticated upgrade', async () => {
     const socket = new WebSocket(url, { headers: headers() });
     const outcome = await new Promise<string>((resolve) => {
       socket.once('open', () => resolve('open'));
-      socket.once('unexpected-response', (_req, res) => resolve(`status:${res.statusCode}`));
+      socket.once('unexpected-response', (req, res) => {
+        resolve(`status:${res.statusCode}`);
+        res.destroy();
+        req.destroy();
+        socket.terminate();
+      });
       socket.once('error', () => resolve('error'));
     });
-    expect(outcome).not.toBe('open');
+    expect(outcome).toBe('status:401');
   });
 
   it('rejects a cross-origin cookie upgrade (no CSRF header exists on a WebSocket)', async () => {

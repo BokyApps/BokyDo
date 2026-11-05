@@ -230,7 +230,13 @@ const routeTree = rootRoute.addChildren([
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
     appPage('/settings/calendar', () => <SettingsPage initialTab="calendar" />),
     appPage('/settings/apps', () => <SettingsPage initialTab="apps" />),
-    appPage('/settings/ai', () => <SettingsPage initialTab="ai" />),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/settings/ai',
+      beforeLoad: () => {
+        throw redirect({ to: '/settings/apps' });
+      },
+    }),
     appPage('/settings/data', () => <SettingsPage initialTab="data" />),
     appPage('/settings/device', () => <SettingsPage initialTab="device" />),
     appPage('/invitations', InvitationsPage),

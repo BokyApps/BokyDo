@@ -7,6 +7,7 @@ import {
   type RambleExtractResponse,
 } from '@bokydo/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type {} from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import { AUDIO_TYPES } from '../ai/media.js';
 import { AiNotConfiguredError, type AiService } from '../ai/service.js';

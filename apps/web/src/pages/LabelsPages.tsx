@@ -2,7 +2,6 @@ import { COLORS, type Color, type Filter, type Label } from '@bokydo/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { EditIcon, PlusIcon, StarIcon, TagIcon, TrashIcon } from '../components/icons.js';
-import { FilterAssist } from '../components/FilterAssist.js';
 import { ProjectDot } from '../components/pickers.js';
 import { Board } from '../components/Board.js';
 import { TaskCollection } from '../components/TaskViews.js';
@@ -379,11 +378,6 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
     else send('filter_add', { id: newId(), name: name.trim(), query: query.trim(), color });
     onClose();
   };
-  // A suggested query goes into the field (it is not saved), and focus moves there to review it.
-  const useSuggested = (suggested: string) => {
-    setQuery(suggested);
-    formRef.current?.querySelector<HTMLInputElement>('input[name="query"]')?.focus();
-  };
   return (
     <form ref={formRef} onSubmit={submit} className="space-y-4">
       <TextField
@@ -394,7 +388,6 @@ function FilterForm({ filter, onClose }: { filter: Filter | null; onClose: () =>
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <FilterAssist onUse={useSuggested} />
       <TextField
         label="Query"
         name="query"

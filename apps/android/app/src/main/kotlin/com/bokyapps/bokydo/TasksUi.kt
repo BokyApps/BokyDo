@@ -106,7 +106,6 @@ sealed interface Route {
     data class Project(val id: String) : Route
     data class Board(val id: String) : Route
     data class TaskDetail(val id: String) : Route
-    data object Ramble : Route
     data object Settings : Route
     data object TimeZone : Route
     data object Search : Route
@@ -162,7 +161,6 @@ fun AppShell(
         Route.Browse -> "Browse"
         Route.Settings -> "Settings"
         Route.TimeZone -> "Time zone"
-        Route.Ramble -> "Ramble"
         is Route.Project -> state.projects[route.id]?.name ?: "Project"
         is Route.Board -> state.projects[route.id]?.name ?: "Board"
         is Route.TaskDetail -> state.tasks[route.id]?.content?.take(30) ?: "Task"
@@ -220,7 +218,6 @@ fun AppShell(
                             Icon(Icons.Filled.Search, contentDescription = "Search")
                         }
                     }
-                    if (route != Route.Ramble) RambleAction { go(Route.Ramble) }
                 },
             )
         },
@@ -234,7 +231,7 @@ fun AppShell(
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && route !is Route.TaskDetail && route != Route.Ramble &&
+            if (route != Route.Settings && route !is Route.TaskDetail &&
                 route != Route.Search && route != Route.Labels && route != Route.Filters && defaults != null
             ) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
@@ -250,7 +247,6 @@ fun AppShell(
                 is Route.Project -> ProjectList(state, route.id, today) { go(Route.TaskDetail(it)) }
                 is Route.Board -> BoardView(state, route.id, today) { go(Route.TaskDetail(it)) }
                 is Route.TaskDetail -> TaskDetailScreen(state, route.id, today, { go(Route.TaskDetail(it)) }, { stack = stack.dropLast(1) })
-                Route.Ramble -> RambleScreen(state, today)
                 Route.Settings -> SettingsScreen(state) { go(Route.TimeZone) }
                 Route.TimeZone -> TimeZoneScreen(
                     current = state.user?.prefs?.timezone ?: state.user?.timeZone,
@@ -360,9 +356,6 @@ private fun BrowseList(state: AppState, open: (Route) -> Unit) {
             Text("Search", Modifier.fillMaxWidth().clickable { open(Route.Search) }.padding(16.dp))
         }
         item { HorizontalDivider() }
-        item {
-            Text("Ramble (voice → tasks)", Modifier.fillMaxWidth().clickable { open(Route.Ramble) }.padding(16.dp))
-        }
         item {
             Text("Settings", Modifier.fillMaxWidth().clickable { open(Route.Settings) }.padding(16.dp))
         }

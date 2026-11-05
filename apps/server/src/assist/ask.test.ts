@@ -1,6 +1,6 @@
 import type { AskResponse } from '@bokydo/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, testApp, type TestApp } from '../test/ai-app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { fakeModel } from '../test/model.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
