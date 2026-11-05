@@ -164,10 +164,11 @@ Deterministic parser in `packages/nlp` — **not** an LLM — so it's instant, o
 
 ## 4a. Appearance: themes and fonts
 
-Selectable themes based on the ten most popular terminal/editor color schemes, plus BokyDo's own light and dark defaults. A theme is a **per-user setting that syncs**, so the web app, Android app and Android widgets all follow it.
+Selectable themes from ten established terminal/editor palettes, plus Doist's Todoist-inspired light and dark defaults. A theme is a **per-user setting that syncs**, so the web app, Android app and Android widgets all follow it.
 
 | Theme | Variants |
 |---|---|
+| Doist | Light, Dark |
 | Catppuccin | Latte (light), Frappé, Macchiato, Mocha |
 | Gruvbox | Light, Dark |
 | Dracula | Dracula (dark), Alucard (light) |
@@ -189,23 +190,23 @@ Selectable themes based on the ten most popular terminal/editor color schemes, p
 
 ### Fonts
 
-Font choice sits next to theme choice under **Settings → Appearance**, and syncs per user like the theme.
+Font choice sits next to theme choice under **Settings → Themes**, and syncs per user like the theme.
 
 | Option | Why |
 |---|---|
-| **System** (default) | The OS UI font: native look, nothing to download |
-| Inter | Clean, highly legible UI sans |
+| **Inter** (default) | Clean, highly legible bundled UI sans |
 | IBM Plex Sans | Neutral, slightly technical |
 | Atkinson Hyperlegible | Designed for low-vision readers |
 | Lexend | Tuned for reading fluency |
 | OpenDyslexic | For readers with dyslexia |
 | JetBrains Mono | Monospace, for the terminal-theme crowd |
-| Fira Code / Fira Mono | Monospace alternative |
+| Fira Code | Monospace alternative |
 
-- **Self-hosted** WOFF2 files, subset to the scripts we support, served from the app (CSP `font-src 'self'`). No Google Fonts CDN: no third-party requests, works offline and on air-gapped installs. Only the chosen font is loaded.
+- **Self-hosted** WOFF2 files, subset to the scripts we support, served from the app (CSP `font-src 'self'`). No Google Fonts CDN: no third-party requests, works offline and on air-gapped installs. Inter and JetBrains Mono are loaded for the app shell; Settings preloads the font choices. Font switches wait for all bundled subsets and preserve the current face until ready.
+- **Wordmark**: BokyDo always uses bundled JetBrains Mono, independently of the selected UI font.
 - **Text size** (small / default / large / larger) and **density** (comfortable / compact) are separate settings, both rem-based so they scale everything consistently. Browser zoom keeps working.
 - Fonts are chosen only from SIL Open Font License (or similar) families; attributions go in `NOTICE`.
-- **Android**: the same families bundled in the app (subset), plus "System".
+- **Android**: the same seven families are bundled in the app. Legacy System preferences normalize to Inter.
 - **Delivery**: with the theme engine in **W2**; Android in **A2**. Widgets use the system font (Glance limitation).
 
 

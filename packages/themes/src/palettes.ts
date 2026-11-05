@@ -1,7 +1,7 @@
 /**
- * Source palettes, taken from each theme's published colours (all MIT or similarly licensed;
- * see NOTICE). Only `raw` values live here; semantic tokens and accessibility adjustments are
- * derived in tokens.ts.
+ * Terminal palettes use their published colours (see NOTICE). Doist follows Todoist's classic
+ * neutral surfaces and red accent. Only raw values live here; semantic tokens and contrast
+ * adjustments are derived in tokens.ts. Legacy bokydo-light/dark IDs remain stable for saved preferences.
  */
 export interface RawPalette {
   bg: string; // app background
@@ -39,9 +39,9 @@ export interface FamilyDef {
 
 export const FAMILIES: FamilyDef[] = [
   {
-    id: 'bokydo',
-    name: 'BokyDo',
-    homepage: '',
+    id: 'doist',
+    name: 'Doist',
+    homepage: 'https://www.todoist.com',
     defaultLight: 'bokydo-light',
     defaultDark: 'bokydo-dark',
   },
@@ -126,25 +126,25 @@ const v = (id: string, family: string, name: string, mode: Mode, raw: RawPalette
 });
 
 export const VARIANTS: VariantDef[] = [
-  v('bokydo-light', 'bokydo', 'Light', 'light', {
-    bg: '#fafafa',
-    surface: '#ffffff',
+  v('bokydo-light', 'doist', 'Light', 'light', {
+    bg: '#ffffff',
+    surface: '#fcfaf8',
     surfaceAlt: '#f2f2f2',
     border: '#e5e5e5',
     fg: '#1f1f1f',
     muted: '#666666',
-    accent: '#c3392b',
+    accent: '#dc4c3e',
     red: '#d1453b',
     orange: '#eb8909',
     yellow: '#b8860b',
     green: '#058527',
     blue: '#246fe0',
   }),
-  v('bokydo-dark', 'bokydo', 'Dark', 'dark', {
-    bg: '#141414',
-    surface: '#1e1e1e',
-    surfaceAlt: '#2a2a2a',
-    border: '#333333',
+  v('bokydo-dark', 'doist', 'Dark', 'dark', {
+    bg: '#1e1e1e',
+    surface: '#262626',
+    surfaceAlt: '#333333',
+    border: '#3d3d3d',
     fg: '#ececec',
     muted: '#a3a3a3',
     accent: '#ef6f5e',

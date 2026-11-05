@@ -29,6 +29,13 @@ val LocalCompact = staticCompositionLocalOf { false }
 /** The tokens of the theme in use, so the lists can use its priority and project colours. */
 val LocalThemeTokens = staticCompositionLocalOf { Themes.all.first().tokens }
 
+/** Fixed brand face; unlike app typography, the wordmark never follows the user's font choice. */
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+val BrandFontFamily = FontFamily(
+    Font(R.font.jetbrains_mono, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
+    Font(R.font.jetbrains_mono, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))),
+)
+
 /**
  * The app's theme, built from the web's tokens (PLAN §4a): the user's synced appearance picks
  * the theme variant, the system setting picks between light and dark, and Material You (dynamic
@@ -124,11 +131,11 @@ private fun colorScheme(t: ThemeTokens): ColorScheme {
     )
 }
 
-/** The bundled font family for a font id (the system font needs no file). */
+/** Resolve every font id to a bundled family, including legacy `system` preferences. */
 @OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
 private fun fontFamily(id: String): FontFamily {
-    if (id == "system") return FontFamily.Default
-    val resource = when (BundledFonts.files[id]) {
+    val fontId = if (id == "system") "inter" else id
+    val resource = when (BundledFonts.files[fontId]) {
         "inter" -> R.font.inter
         "ibm_plex_sans" -> R.font.ibm_plex_sans
         "atkinson" -> R.font.atkinson
@@ -136,9 +143,9 @@ private fun fontFamily(id: String): FontFamily {
         "opendyslexic" -> R.font.opendyslexic
         "jetbrains_mono" -> R.font.jetbrains_mono
         "fira_code" -> R.font.fira_code
-        else -> return FontFamily.Default
+        else -> R.font.inter
     }
-    if (id !in BundledFonts.variable) return FontFamily(Font(resource, FontWeight.Normal))
+    if (fontId !in BundledFonts.variable) return FontFamily(Font(resource, FontWeight.Normal))
     // A variable font: ask for the weight instead of faking it.
     return FontFamily(
         Font(

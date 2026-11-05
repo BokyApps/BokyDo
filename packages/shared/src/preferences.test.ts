@@ -7,6 +7,29 @@ import {
   resolvePreferences,
 } from './preferences.js';
 
+describe('bundled font preferences', () => {
+  it('defaults to Inter and migrates legacy System without resetting appearance choices', () => {
+    expect(DEFAULT_PREFERENCES.appearance.font).toBe('inter');
+    const appearance = {
+      ...DEFAULT_PREFERENCES.appearance,
+      mode: 'dark',
+      darkTheme: 'gruvbox-dark',
+      density: 'compact',
+      font: 'system',
+    };
+    expect(resolvePreferences({ ...DEFAULT_PREFERENCES, appearance }).appearance).toEqual({
+      ...appearance,
+      font: 'inter',
+    });
+    expect(preferencesPatchSchema.parse({ appearance: { font: 'system' } })).toEqual({
+      appearance: { font: 'inter' },
+    });
+    expect(preferencesPatchSchema.parse({ appearance: { mode: 'dark' } })).toEqual({
+      appearance: { mode: 'dark' },
+    });
+  });
+});
+
 describe('notification preferences', () => {
   it('ignores removed goal preferences while preserving stored settings', () => {
     const stored = {

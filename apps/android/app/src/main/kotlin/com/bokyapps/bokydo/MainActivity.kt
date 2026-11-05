@@ -162,7 +162,7 @@ private fun ConnectScreen(message: String?) {
     }
 
     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("BokyDo", style = MaterialTheme.typography.headlineMedium)
+        Text("BokyDo", style = MaterialTheme.typography.headlineMedium.copy(fontFamily = BrandFontFamily))
         Text("Enter the address of your BokyDo server.")
         OutlinedTextField(
             value = input,

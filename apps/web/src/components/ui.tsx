@@ -13,7 +13,7 @@ import {
 
 export function Logo({ className = '' }: { className?: string }) {
   return (
-    <span className={`text-xl font-semibold tracking-tight ${className}`}>
+    <span className={`font-brand text-xl font-semibold tracking-tight ${className}`}>
       <span className="text-accent">Boky</span>Do
     </span>
   );
