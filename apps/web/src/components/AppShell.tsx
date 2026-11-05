@@ -208,12 +208,9 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
       await navigate({ to: '/login' });
     },
   });
-  const go = (
-    to: '/settings' | '/account/security' | '/admin/users' | '/admin/settings' | '/admin/backups',
-    close: () => void,
-  ) => {
+  const goToSettings = (close: () => void) => {
     close();
-    void navigate({ to });
+    void navigate({ to: '/settings' });
   };
   return (
     <Popover
@@ -237,17 +234,9 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
     >
       {(close) => (
         <>
-          <MenuItem icon={<SettingsIcon />} onClick={() => go('/settings', close)}>
+          <MenuItem icon={<SettingsIcon />} onClick={() => goToSettings(close)}>
             Settings
           </MenuItem>
-          <MenuItem onClick={() => go('/account/security', close)}>Account security</MenuItem>
-          {session?.user.isAdmin && (
-            <>
-              <MenuItem onClick={() => go('/admin/users', close)}>Admin: users</MenuItem>
-              <MenuItem onClick={() => go('/admin/settings', close)}>Admin: settings</MenuItem>
-              <MenuItem onClick={() => go('/admin/backups', close)}>Admin: backups</MenuItem>
-            </>
-          )}
           <MenuItem
             onClick={() => {
               close();

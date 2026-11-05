@@ -499,13 +499,14 @@
         "darkVariant": "Dark variant",
         "density": "Density",
         "font": "Font",
-        "fontHint": "Fonts are served by your BokyDo server; only the one you pick is downloaded.",
+        "fontHint": "Fonts are bundled with BokyDo and served locally.",
+        "fontPreview": "The quick brown fox jumps over the lazy dog. 0123456789 — BokyDo keeps your day moving.",
+        "fonts": "Fonts",
         "light": "Light",
         "lightVariant": "Light variant",
         "matchSystem": "Match system",
         "mode": "Mode",
         "pickVariants": "Pick variants separately",
-        "text": "Text",
         "textSize": {
           "default": "Default",
           "label": "Text size",
@@ -594,9 +595,15 @@
         "timeFormat": "Time format",
         "weekStartsOn": "Week starts on"
       },
+      "groups": {
+        "administration": "Administration",
+        "integrations": "Integrations",
+        "personal": "Personal"
+      },
       "language": "Language",
       "languageAuto": "Match the browser",
       "languageHint": "Translations are added over time; anything not yet translated stays in English.",
+      "navigation": "Settings sections",
       "notifications": {
         "at": "at",
         "autoReminder": "Automatic reminder for tasks with a time",
