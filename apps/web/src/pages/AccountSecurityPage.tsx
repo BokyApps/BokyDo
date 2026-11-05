@@ -14,7 +14,7 @@ const securityQuery = {
   queryFn: () => api<AccountSecurity>('GET', '/api/v1/account/security'),
 };
 
-export function AccountSecurityPage() {
+export function AccountSecurityPage({ embedded = false }: { embedded?: boolean }) {
   const { data: security } = useQuery(securityQuery);
   const { data: session } = useQuery(sessionQuery);
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -22,8 +22,8 @@ export function AccountSecurityPage() {
   const enrolling = session.user.mustEnrollMfa;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">Account security</h1>
+    <div className={`mx-auto max-w-2xl space-y-6 ${embedded ? '' : 'px-4 py-8'}`}>
+      {!embedded && <h1 className="text-2xl font-semibold">Account security</h1>}
       {enrolling && (
         <Alert tone="warning">
           Your administrator requires two-factor authentication. Set up an authenticator app or a

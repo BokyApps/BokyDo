@@ -17,7 +17,7 @@ data class Appearance(
     val density: String,
 ) {
     companion object {
-        val DEFAULT = Appearance("system", "bokydo-light", "bokydo-dark", "system", "default", "comfortable")
+        val DEFAULT = Appearance("system", "bokydo-light", "bokydo-dark", "inter", "default", "comfortable")
 
         val MODES = listOf("system", "light", "dark")
         val TEXT_SIZES = listOf("small", "default", "large", "larger")
@@ -33,7 +33,13 @@ data class Appearance(
             val mode = str("mode")?.takeIf { it in MODES } ?: DEFAULT.mode
             val light = str("lightTheme")?.takeIf { Themes.byId(it) != null } ?: DEFAULT.lightTheme
             val dark = str("darkTheme")?.takeIf { Themes.byId(it) != null } ?: DEFAULT.darkTheme
-            val font = str("font")?.takeIf { it in FONTS } ?: DEFAULT.font
+            // Older cached preferences and queued commands may still carry `system`.
+            val storedFont = str("font")
+            val font = when {
+                storedFont == "system" -> DEFAULT.font
+                storedFont != null && storedFont in FONTS -> storedFont
+                else -> DEFAULT.font
+            }
             val size = str("textSize")?.takeIf { it in TEXT_SIZES } ?: DEFAULT.textSize
             val density = str("density")?.takeIf { it in DENSITIES } ?: DEFAULT.density
             return Appearance(mode, light, dark, font, size, density)

@@ -4,9 +4,9 @@ import { FAMILIES, VARIANTS } from './palettes.js';
 import { THEMES, TINTS } from './tokens.js';
 
 describe('theme catalogue', () => {
-  it('has the ten terminal families plus BokyDo, each with a light and a dark default', () => {
+  it('has the ten terminal families plus Doist, each with a light and a dark default', () => {
     expect(FAMILIES.map((f) => f.id)).toEqual([
-      'bokydo',
+      'doist',
       'catppuccin',
       'gruvbox',
       'dracula',

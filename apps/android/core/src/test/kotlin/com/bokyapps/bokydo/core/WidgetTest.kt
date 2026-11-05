@@ -154,6 +154,6 @@ class WidgetTest {
         assertEquals(4, setOf(c.p1, c.p2, c.p3, c.p4).size)
         assertTrue(c.p1 != c.muted)
         // An unknown theme id falls back to BokyDo's own defaults.
-        assertEquals(0xFFFAFAFA, Widgets.tokens(appearance.copy(lightTheme = "neon"), "light", false).bg)
+        assertEquals(Themes.byId("bokydo-light")!!.tokens.bg, Widgets.tokens(appearance.copy(lightTheme = "neon"), "light", false).bg)
     }
 }

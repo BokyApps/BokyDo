@@ -1,6 +1,7 @@
 import type { Appearance, Preferences, PreferencesPatch } from '@bokydo/shared';
 import { FAMILIES, FONTS, getTheme, TEXT_SIZES, THEMES, type Mode } from '@bokydo/themes';
-import { useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { Link } from '@tanstack/react-router';
 import { AccountDataSettings } from '../components/AccountDataSettings.js';
 import { AiSettings } from '../components/AiSettings.js';
 import { ApiAccessSettings } from '../components/ApiAccessSettings.js';
@@ -10,16 +11,21 @@ import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
 import { Page, ViewHeader } from '../components/ViewHeader.js';
 import { AUTO_LANGUAGE, LANGUAGES, rememberLanguage } from '../i18n.js';
-import { usePreferences, useSend } from '../lib/sync.js';
+import { usePreferences, useSend, useSyncState } from '../lib/sync.js';
+import { preloadFonts } from '../lib/appearance.js';
 import { useTranslation } from 'react-i18next';
 import { CalendarSettings } from './CalendarSettings.js';
 import { NotificationSettings } from './NotificationSettings.js';
+import { AccountSecurityPage } from './AccountSecurityPage.js';
+import { AdminUsersPage } from './AdminUsersPage.js';
+import { AdminSettingsPage } from './AdminSettingsPage.js';
+import { AdminBackupsPage } from './AdminBackupsPage.js';
 
 /** How each catalogue calls itself, in its own language. */
 const LANGUAGE_NAMES: Record<(typeof LANGUAGES)[number], string> = { en: 'English' };
 
 type Tab =
-  | 'appearance'
+  | 'themes'
   | 'general'
   | 'notifications'
   | 'calendar'
@@ -28,50 +34,106 @@ type Tab =
   | 'webhooks'
   | 'data'
   | 'device';
-const TAB_LABEL: Record<Tab, string> = {
-  appearance: 'Appearance',
-  general: 'General',
-  notifications: 'Notifications',
-  calendar: 'Calendar',
-  apps: 'Apps & tokens',
-  ai: 'AI',
-  webhooks: 'Webhooks',
-  data: 'Your data',
-  device: 'This device',
-};
-
-export function SettingsPage({ initialTab = 'appearance' }: { initialTab?: Tab }) {
+type SettingsSection = Tab | 'security' | 'admin-users' | 'admin-instance' | 'admin-backups';
+export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsSection }) {
   const { t } = useTranslation();
   const prefs = usePreferences();
   const send = useSend();
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const state = useSyncState();
+  const isAdmin = Boolean(state.user?.isAdmin);
+  const tab = initialTab;
   const update = (patch: PreferencesPatch) => send('user_update_preferences', patch);
+  const personal = [
+    ['themes', t('settings.tabs.themes', { defaultValue: 'Themes' }), '/settings/themes'],
+    ['general', t('settings.tabs.general'), '/settings/general'],
+    ['notifications', t('settings.tabs.notifications'), '/settings/notifications'],
+    [
+      'security',
+      t('settings.tabs.security', { defaultValue: 'Account security' }),
+      '/settings/security',
+    ],
+    ['data', t('settings.tabs.data'), '/settings/data'],
+    ['device', t('settings.tabs.device'), '/settings/device'],
+  ] as const;
+  const integrations = [
+    ['calendar', t('settings.tabs.calendar'), '/settings/calendar'],
+    ['apps', t('settings.tabs.apps'), '/settings/apps'],
+    ['ai', t('settings.tabs.ai'), '/settings/ai'],
+    ['webhooks', t('settings.tabs.webhooks'), '/settings/webhooks'],
+  ] as const;
+  const administration = [
+    [
+      'admin-users',
+      t('settings.tabs.adminUsers', { defaultValue: 'Users' }),
+      '/settings/admin/users',
+    ],
+    [
+      'admin-instance',
+      t('settings.tabs.adminInstance', { defaultValue: 'Instance settings' }),
+      '/settings/admin/instance',
+    ],
+    [
+      'admin-backups',
+      t('settings.tabs.adminBackups', { defaultValue: 'Backups' }),
+      '/settings/admin/backups',
+    ],
+  ] as const;
+  const groups = [
+    [t('settings.groups.personal', { defaultValue: 'Personal' }), personal],
+    [t('settings.groups.integrations', { defaultValue: 'Integrations' }), integrations],
+    ...(isAdmin
+      ? [
+          [
+            t('settings.groups.administration', { defaultValue: 'Administration' }),
+            administration,
+          ] as const,
+        ]
+      : []),
+  ] as const;
   return (
-    <Page>
+    <Page wide>
       <ViewHeader title={t('settings.title')} />
-      <div role="tablist" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
-        {(Object.keys(TAB_LABEL) as Tab[]).map((key) => (
-          <button
-            key={key}
-            role="tab"
-            type="button"
-            aria-selected={tab === key}
-            onClick={() => setTab(key)}
-            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm ${tab === key ? 'border-accent font-medium text-fg' : 'border-transparent text-muted hover:text-fg'}`}
-          >
-            {t(`settings.tabs.${key}`)}
-          </button>
-        ))}
+      <div className="grid min-w-0 gap-6 md:grid-cols-[13rem_minmax(0,1fr)]">
+        <nav
+          aria-label={t('settings.navigation', { defaultValue: 'Settings sections' })}
+          className="grid grid-cols-2 gap-x-4 gap-y-5 md:block md:space-y-5"
+        >
+          {groups.map(([title, items]) => (
+            <section key={title} className="min-w-0">
+              <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                {title}
+              </h2>
+              <div className="space-y-1">
+                {items.map(([key, label, to]) => (
+                  <Link
+                    key={key}
+                    to={to}
+                    aria-current={tab === key ? 'page' : undefined}
+                    className={`block rounded-lg px-3 py-2 text-sm ${tab === key ? 'bg-surface-alt font-medium text-fg' : 'text-muted hover:bg-surface-alt hover:text-fg'}`}
+                  >
+                    {label}
+                  </Link>
+                ))}
+              </div>
+            </section>
+          ))}
+        </nav>
+        <div className="min-w-0">
+          {tab === 'themes' && <ThemesSettings prefs={prefs} update={update} />}
+          {tab === 'general' && <GeneralSettings prefs={prefs} update={update} />}
+          {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
+          {tab === 'calendar' && <CalendarSettings />}
+          {tab === 'apps' && <ApiAccessSettings />}
+          {tab === 'ai' && <AiSettings />}
+          {tab === 'webhooks' && <WebhookSettings />}
+          {tab === 'data' && <AccountDataSettings />}
+          {tab === 'device' && <DeviceSettings />}
+          {tab === 'security' && <AccountSecurityPage embedded />}
+          {tab === 'admin-users' && isAdmin && <AdminUsersPage embedded />}
+          {tab === 'admin-instance' && isAdmin && <AdminSettingsPage embedded />}
+          {tab === 'admin-backups' && isAdmin && <AdminBackupsPage embedded />}
+        </div>
       </div>
-      {tab === 'appearance' && <AppearanceSettings prefs={prefs} update={update} />}
-      {tab === 'general' && <GeneralSettings prefs={prefs} update={update} />}
-      {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
-      {tab === 'calendar' && <CalendarSettings />}
-      {tab === 'apps' && <ApiAccessSettings />}
-      {tab === 'ai' && <AiSettings />}
-      {tab === 'webhooks' && <WebhookSettings />}
-      {tab === 'data' && <AccountDataSettings />}
-      {tab === 'device' && <DeviceSettings />}
     </Page>
   );
 }
@@ -124,7 +186,7 @@ function Segmented<T extends string>({
   );
 }
 
-function AppearanceSettings({
+function ThemesSettings({
   prefs,
   update,
 }: {
@@ -132,6 +194,7 @@ function AppearanceSettings({
   update: (p: PreferencesPatch) => void;
 }) {
   const { t } = useTranslation();
+  useEffect(() => preloadFonts(), []);
   const a = prefs.appearance;
   const set = (patch: Partial<Appearance>) => update({ appearance: patch });
   const activeFamily =
@@ -182,9 +245,9 @@ function AppearanceSettings({
                           className="h-6 flex-1 rounded"
                           style={{ backgroundColor: t.surface, border: `1px solid ${t.border}` }}
                         />
-                        {[t.accent, t.p1, t.p2, t.p3].map((c) => (
+                        {[t.accent, t.p1, t.p2, t.p3].map((c, colorIndex) => (
                           <span
-                            key={c}
+                            key={`${colorIndex}-${c}`}
                             className="size-2.5 rounded-full"
                             style={{ backgroundColor: c }}
                           />
@@ -219,7 +282,7 @@ function AppearanceSettings({
           <p className="text-xs text-muted">{t('settings.appearance.contrastNote')}</p>
         </div>
       </Section>
-      <Section title={t('settings.appearance.text')}>
+      <Section title={t('settings.appearance.fonts', { defaultValue: 'Fonts' })}>
         <div className="space-y-5">
           <SelectField
             label={t('settings.appearance.font')}
@@ -228,6 +291,12 @@ function AppearanceSettings({
             options={FONTS.map((f) => ({ value: f.id, label: f.name }))}
             hint={t('settings.appearance.fontHint')}
           />
+          <p className="rounded-lg border border-line bg-surface-alt p-4 text-sm">
+            {t('settings.appearance.fontPreview', {
+              defaultValue:
+                'The quick brown fox jumps over the lazy dog. 0123456789 — BokyDo keeps your day moving.',
+            })}
+          </p>
           <Segmented
             label={t('settings.appearance.textSize.label')}
             value={a.textSize}

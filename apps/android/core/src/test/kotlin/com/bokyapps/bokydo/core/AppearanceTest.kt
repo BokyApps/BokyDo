@@ -43,6 +43,26 @@ class AppearanceTest {
     }
 
     @Test
+    fun legacySystemFontUsesInterAndKeepsOtherAppearanceChoices() {
+        val legacy = Appearance.from(
+            buildJsonObject {
+                put("mode", "dark")
+                put("lightTheme", "catppuccin-latte")
+                put("darkTheme", "catppuccin-mocha")
+                put("font", "system")
+                put("textSize", "large")
+                put("density", "compact")
+            },
+        )
+        assertEquals("inter", legacy.font)
+        assertEquals("dark", legacy.mode)
+        assertEquals("catppuccin-latte", legacy.lightTheme)
+        assertEquals("catppuccin-mocha", legacy.darkTheme)
+        assertEquals("large", legacy.textSize)
+        assertEquals("compact", legacy.density)
+    }
+
+    @Test
     fun aPatchChangesOnlyWhatItCarries() {
         val base = Appearance.DEFAULT
         val merged = Appearance.merge(base, buildJsonObject { put("font", "lexend") })

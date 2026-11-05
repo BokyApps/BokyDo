@@ -38,7 +38,7 @@ const RESTORE_ERROR_CODES = [
 ] as const;
 
 /** Admin → Backups: schedule, passphrase, the stored backups, upload and restore. */
-export function AdminBackupsPage() {
+export function AdminBackupsPage({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const { data: settings } = useQuery(adminSettingsQuery);
   const backups = useQuery(backupsQuery);
@@ -81,8 +81,8 @@ export function AdminBackupsPage() {
   const list = backups.data?.backups ?? [];
   const errors = [now, remove, download, upload].filter((m) => m.isError);
   return (
-    <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">{t('admin.backups.title')}</h1>
+    <div className={`mx-auto max-w-3xl space-y-6 ${embedded ? '' : 'px-4 py-8'}`}>
+      {!embedded && <h1 className="text-2xl font-semibold">{t('admin.backups.title')}</h1>}
       <Card>
         <ScheduleForm settings={settings} />
       </Card>
