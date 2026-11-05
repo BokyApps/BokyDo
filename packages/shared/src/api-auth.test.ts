@@ -61,5 +61,8 @@ describe('scope strings', () => {
     expect(scopesAllow(['tasks:read'], ['tasks:read'])).toBe(true);
     expect(scopesAllow(['tasks:read'], ['tasks:write'])).toBe(false);
     expect(scopesAllow(['sync'], ['ai:use'])).toBe(false);
+    expect(scopesAllow(['habits:read'], ['habits:read'])).toBe(true);
+    expect(scopesAllow(['habits:read'], ['habits:write'])).toBe(false);
+    expect(scopesAllow(['sync'], ['habits:write'])).toBe(true);
   });
 });

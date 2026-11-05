@@ -5,6 +5,7 @@ import type { Database } from '../db/client.js';
 import type { ApiTokenStore, TokenPrincipal } from '../oauth/token-store.js';
 import type { SettingsService } from '../settings/settings-service.js';
 import type { SyncService } from '../sync/sync-service.js';
+import type { EventBus } from '../sync/events.js';
 import { VERSION } from '../version.js';
 import { ToolError, TOOLS, type ToolContext } from './tools.js';
 
@@ -49,6 +50,7 @@ export interface McpDeps {
   sync: SyncService;
   settings: SettingsService;
   tokens: ApiTokenStore;
+  events: EventBus;
 }
 
 /**
@@ -70,7 +72,9 @@ export function registerMcpServer(app: FastifyInstance, deps: McpDeps): void {
     const base = settings.get('instance.publicUrl') ?? '';
     reply.header(
       'www-authenticate',
-      `Bearer${error ? ` error="${error}",` : ''} resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+      settings.get('api.mcpAuthMode') === 'pat'
+        ? `Bearer realm="BokyDo MCP"${error ? `, error="${error}"` : ''}`
+        : `Bearer${error ? ` error="${error}",` : ''} resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
     );
     return reply.status(401).send(rpcError(null, -32001, 'Authentication required'));
   };
@@ -96,6 +100,14 @@ export function registerMcpServer(app: FastifyInstance, deps: McpDeps): void {
     }
     const token = await tokens.authenticate(match[1], 'mcp');
     if (!token) {
+      await unauthorized(reply, 'invalid_token');
+      return null;
+    }
+    const authMode = settings.get('api.mcpAuthMode');
+    if (
+      (authMode === 'sign-in' && token.kind !== 'access') ||
+      (authMode === 'pat' && token.kind !== 'pat')
+    ) {
       await unauthorized(reply, 'invalid_token');
       return null;
     }
@@ -127,6 +139,10 @@ export function registerMcpServer(app: FastifyInstance, deps: McpDeps): void {
       projectIds: token.projectIds,
       baseUrl: settings.get('instance.publicUrl') ?? '',
       defaultTimeZone: settings.get('instance.defaultTimezone'),
+      publishHabitChange: () =>
+        deps.events
+          .publish({ projectIds: new Set(), userIds: new Set([token.user.id]) })
+          .catch((err: unknown) => app.log.warn({ err }, 'habit event publish failed')),
     };
     const allowed = TOOLS.filter(
       (t) => scopesAllow(token.scopes, t.scopes) && !(t.accountWide && token.projectIds),

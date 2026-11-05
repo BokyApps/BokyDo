@@ -282,6 +282,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       emailEnabled: notifier.canEmail,
       passkeysAvailable: relyingParty(settings) !== null,
       attachmentMaxMb: settings.get('attachments.maxSizeMb'),
+      mcpAuthMode: settings.get('api.mcpAuthMode'),
     }),
   );
 
@@ -313,7 +314,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   registerTaskRoutes(app, db, () => settings.get('instance.defaultTimezone'));
   registerRestRoutes(app, db, sync, () => settings.get('instance.publicUrl') ?? null);
-  registerMcpServer(app, { db, sync, settings, tokens: apiTokens });
+  registerMcpServer(app, { db, sync, settings, tokens: apiTokens, events });
   await ensureFirstPartyClients(db);
   registerAndroidRoutes(app, { settings });
   registerInviteRoutes(app, { db, sync, sessionKey: deps.secrets.sessionKey });
@@ -327,7 +328,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
-  registerHabitRoutes(app, { db, settings });
+  registerHabitRoutes(app, { db, settings, events });
   registerImportRoutes(app, importer);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

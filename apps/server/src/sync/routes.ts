@@ -81,7 +81,7 @@ export function registerSyncRoutes(
     reply.hijack();
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
+      'cache-control': 'no-store, no-transform',
       'x-content-type-options': 'nosniff',
       // Disable proxy buffering (nginx) so events arrive immediately.
       'x-accel-buffering': 'no',
@@ -94,6 +94,7 @@ export function registerSyncRoutes(
         res.write(': heartbeat\n\n');
       })().catch(close);
     }, HEARTBEAT_MS);
-    req.raw.on('close', close);
+    // IncomingMessage.close can fire when the GET request finishes; the response stays open.
+    res.on('close', close);
   });
 }
