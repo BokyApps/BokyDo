@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { scopesAllow } from '@bokydo/shared';
 import { RateLimiter } from '../auth/rate-limiter.js';
 import type { Database } from '../db/client.js';
 import type { ApiTokenStore, TokenPrincipal } from '../oauth/token-store.js';
@@ -128,8 +129,7 @@ export function registerMcpServer(app: FastifyInstance, deps: McpDeps): void {
       defaultTimeZone: settings.get('instance.defaultTimezone'),
     };
     const allowed = TOOLS.filter(
-      (t) =>
-        t.scopes.every((s) => token.scopes.includes(s)) && !(t.accountWide && token.projectIds),
+      (t) => scopesAllow(token.scopes, t.scopes) && !(t.accountWide && token.projectIds),
     );
     switch (msg.method) {
       case 'initialize': {

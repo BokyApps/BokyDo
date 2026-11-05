@@ -2,7 +2,7 @@ import { addDays, localNow } from '@bokydo/nlp';
 import type { ReportResponse } from '@bokydo/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { grantProjectAccess } from '../sync/membership.js';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, testApp, type TestApp } from '../test/ai-app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { fakeModel } from '../test/model.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
@@ -188,10 +188,9 @@ describe.skipIf(!TEST_DATABASE_URL)('Reports', () => {
         headers: { host: 'localhost', authorization: `Bearer ${token}` },
         payload,
       });
-    expect((await call({ kind: 'project', projectId: work })).statusCode).toBe(404);
+    expect((await call({ kind: 'project', projectId: work })).statusCode).toBe(403);
     model.replies.push('Team only.');
-    expect((await call({ kind: 'week' })).statusCode).toBe(200);
-    expect(model.seen[0]!.user).toContain('team milestone');
-    expect(model.seen[0]!.user).not.toContain('late thing');
+    expect((await call({ kind: 'week' })).statusCode).toBe(403);
+    expect(model.seen).toHaveLength(0);
   });
 });

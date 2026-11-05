@@ -27,7 +27,7 @@ describe.skipIf(!TEST_DATABASE_URL)('Android discovery and asset links', () => {
       android: {
         clientId: ANDROID_CLIENT_ID,
         redirectUri: ANDROID_REDIRECT_URI,
-        scope: 'sync ai:use tasks:write',
+        scope: 'sync',
       },
       api: { sync: `${BASE}/api/v1/sync` },
     });
@@ -38,19 +38,21 @@ describe.skipIf(!TEST_DATABASE_URL)('Android discovery and asset links', () => {
       { 'instance.publicUrl': BASE },
       { userId: null, ip: null },
     );
+    const discovery = (await get('/.well-known/bokydo')).json();
     const challenge = createHash('sha256')
       .update(randomBytes(32).toString('base64url'))
       .digest('base64url');
     const res = await get(
       `/oauth/authorize?${new URLSearchParams({
         response_type: 'code',
-        client_id: ANDROID_CLIENT_ID,
-        redirect_uri: ANDROID_REDIRECT_URI,
+        client_id: discovery.android.clientId,
+        redirect_uri: discovery.android.redirectUri,
         code_challenge: challenge,
         code_challenge_method: 'S256',
-        scope: 'sync',
+        scope: discovery.android.scope,
       }).toString()}`,
     );
+    expect(res.statusCode).toBe(302);
     expect(res.headers.location).toMatch(/\/oauth\/consent#/);
   });
 

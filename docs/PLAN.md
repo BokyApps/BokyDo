@@ -9,7 +9,7 @@ Owner: Sarel
 
 ## 0. TL;DR
 
-- **What:** Todoist feature parity (tasks, projects, sections, sub-tasks, labels, filters, natural-language quick add, recurring dates, board/calendar layouts, collaboration, reminders, Ramble voice capture), plus things Todoist doesn't give you: self-hosting, BYOK AI from any provider, a first-class REST API + MCP server, and an Android app that works against *your* server.
+- **What:** Todoist feature parity (tasks, projects, sections, sub-tasks, labels, filters, natural-language quick add, recurring dates, board/calendar layouts, collaboration, reminders), plus things Todoist doesn't give you: self-hosting, a first-class REST API + MCP server, and an Android app that works against *your* server.
 - **Stack (recommended):** TypeScript monorepo. Fastify + PostgreSQL + Drizzle on the server, React + Vite on the web, shared packages for the natural-language parser and filter language so they run identically in the browser and on the server. Phase 2: native Kotlin + Jetpack Compose + Glance widgets.
 - **Zero env config:** `docker compose up`, open the URL, create the initial admin with a username and password of your choice, then configure everything in the app (ADR 0024, owner decision 2026-11-02).
 - **Security:** OWASP ASVS Level 2 as the target. Every deliverable has a *security gate* (threat-model update, automated scans, deliverable-specific abuse-case tests, manual pentest checklist) that must pass before it's done.
@@ -22,7 +22,7 @@ Owner: Sarel
 ### Goals
 1. **Todoist parity** for everything a Pro/Business user touches daily (full matrix in Appendix A).
 2. **Self-hosted, zero pre-config.** No `.env` editing. One compose file.
-3. **BYOK AI** — instance-wide keys (admin) and per-user keys, any provider, including subscription OAuth where the vendor permits it.
+3. **External AI clients** — connect Hermes or another agent through MCP with a personal token; built-in AI is deferred.
 4. **Open integration surface** — REST API, outgoing webhooks, and an MCP server so Claude / ChatGPT / Grok / Hermes / any agent can work with your tasks.
 5. **Android app (Phase 2)** with Todoist-style homescreen widgets and reliable reminders **without depending on Google services**.
 6. **Secure by default** — MFA and passkeys, hardened defaults, continuous pentesting.
@@ -226,7 +226,9 @@ Most people don't know their IANA time-zone name (`Asia/Phnom_Penh`), so nobody 
 - **Travel**: when the device's zone differs from the saved one, offer once: "You're in UTC+2 now. Switch your time zone?" (Todoist does this too).
 - **Delivery**: the shared combobox in **W2** (user preferences), retrofitted into Admin → Settings → default time zone in the same deliverable; Android uses the same search data in **A2**.
 
-## 5. AI layer (BYOK)
+## 5. AI layer (BYOK) — deferred
+
+**2026-11-05:** Built-in AI, Assist, AI reports and Ramble are removed from the active product. Provider credentials and historical implementation notes below are retained for possible future work; no AI routes, provider calls or AI jobs run. External clients use one personal access token for REST (`/api/v1`) and MCP (`/mcp`), configured under Settings → API & MCP. The local natural-language task parser remains active.
 
 ### 5.1 Capability model
 Every provider declares capabilities; features ask for a capability, the router picks the configured model.

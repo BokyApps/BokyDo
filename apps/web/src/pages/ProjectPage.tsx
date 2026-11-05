@@ -25,11 +25,9 @@ import { ActivityList, CommentThread } from '../components/Comments.js';
 import { CalendarView } from '../components/Calendar.js';
 import { CompletedList } from '../components/CompletedList.js';
 import { ProjectDialog } from '../components/ProjectDialog.js';
-import { ReportPanel } from '../components/ReportPanel.js';
 import { Avatar, ShareDialog, useMembers } from '../components/Sharing.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { SortableTaskList, TaskDnd } from '../components/TaskTree.js';
-import { TriageSuggest } from '../components/TriageSuggest.js';
 import { Alert, Button, Dialog, inputClass, MenuItem, Popover } from '../components/ui.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
 import { useConfirm } from '../lib/confirm.js';
@@ -120,16 +118,6 @@ export function ProjectView({ projectId }: { projectId: string }) {
           )
         }
       />
-      {project.isInbox && <TriageSuggest inboxId={projectId} />}
-      {/* Not on the Inbox (no share or menu there either), nor on archived projects (no live tasks). */}
-      {!project.isInbox && !project.isArchived && (
-        <ReportPanel
-          key={projectId}
-          target={{ kind: 'project', projectId }}
-          label={t('project.statusReport')}
-          className="mb-4"
-        />
-      )}
       {project.isArchived && (
         <div className="mb-4">
           <Alert tone="info">{t('project.archived')}</Alert>
