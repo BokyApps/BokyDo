@@ -5,11 +5,11 @@ import {
   type Preferences,
 } from '@bokydo/shared';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Checkbox, inputClass, SelectField } from '../components/ui.js';
 import { api } from '../lib/api.js';
-import { disablePush, enablePush, pushState, type PushState } from '../lib/push.js';
+import { disablePush, enablePush, PushSetupError, pushState, type PushState } from '../lib/push.js';
 import { instanceQuery } from '../lib/queries.js';
 import { relativeLabel } from '../lib/reminders.js';
 
@@ -188,16 +188,45 @@ function PushSection() {
   const [state, setState] = useState<PushState | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const failureMessage = useCallback(
+    (error: unknown) => {
+      if (!(error instanceof PushSetupError)) return t('settings.notifications.pushError');
+      switch (error.problem) {
+        case 'dismissed':
+          return t('settings.notifications.pushDismissed');
+        case 'worker':
+          return t('settings.notifications.pushWorkerError');
+        case 'browser':
+          return t('settings.notifications.pushBrowserError');
+        case 'server':
+          return t('settings.notifications.pushServerError');
+      }
+    },
+    [t],
+  );
   useEffect(() => {
-    void pushState().then(setState);
-  }, []);
+    let disposed = false;
+    void pushState().then(
+      (next) => {
+        if (!disposed) setState(next);
+      },
+      (error: unknown) => {
+        if (disposed) return;
+        setState('off');
+        setMessage(failureMessage(error));
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [failureMessage]);
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setMessage(null);
     try {
       await fn();
-    } catch {
-      setMessage(t('settings.notifications.pushError'));
+    } catch (error) {
+      setMessage(failureMessage(error));
     } finally {
       setBusy(false);
     }
@@ -258,7 +287,11 @@ function PushSection() {
           )}
         </div>
       )}
-      {message && <p className="mt-2 text-sm text-muted">{message}</p>}
+      {message && (
+        <p role="status" className="mt-2 text-sm text-muted">
+          {message}
+        </p>
+      )}
     </Section>
   );
 }
