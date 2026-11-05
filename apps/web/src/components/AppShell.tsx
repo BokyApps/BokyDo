@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { resyncPush } from '../lib/push.js';
+import { LiveDesktopNotifications } from '../lib/desktop-notifications.js';
 import { api, clearCsrfToken } from '../lib/api.js';
 import { wipeDevice } from '../lib/device.js';
 import { ConfirmProvider } from '../lib/confirm.js';
@@ -24,6 +25,7 @@ export function AppShell() {
         <SyncProvider>
           <TaskUIProvider>
             <PreferenceEffects />
+            <LiveDesktopNotifications />
             <Layout />
           </TaskUIProvider>
         </SyncProvider>

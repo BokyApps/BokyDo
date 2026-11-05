@@ -153,6 +153,12 @@ export const settingDefinitions = {
   },
   /** The MCP endpoint (`/mcp`) for AI assistants such as Claude and ChatGPT. */
   'api.mcpEnabled': { schema: z.boolean(), default: true, secret: false },
+  /** Which credentials are accepted by MCP; REST token access is independent. */
+  'api.mcpAuthMode': {
+    schema: z.enum(['both', 'sign-in', 'pat']),
+    default: 'both',
+    secret: false,
+  },
   /**
    * Users may subscribe webhook endpoints to their task/project/comment events. Off stops all
    * deliveries and pauses new subscriptions; events during the outage are not delivered.

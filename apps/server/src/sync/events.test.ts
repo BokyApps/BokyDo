@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Client, createUser, testApp, type TestApp } from '../test/app.js';
+import { Client, createUser, TEST_HOST, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
 import { EventBus } from './events.js';
@@ -12,6 +12,7 @@ let t: TestApp;
 let base: string;
 let alice: SyncUser;
 let bobClient: Client;
+let bobUserId: string;
 let carol: SyncUser;
 let shared: string;
 
@@ -53,6 +54,7 @@ beforeEach(async () => {
   await t.app.services.settings.markSetupComplete({ userId: null, ip: null });
   const aliceId = await createUser(t.db, { username: 'alice', password: PASSWORD });
   const bobId = await createUser(t.db, { username: 'bob', password: PASSWORD });
+  bobUserId = bobId;
   const carolId = await createUser(t.db, { username: 'carol', password: PASSWORD });
   alice = new SyncUser(t.app.services.sync, aliceId);
   carol = new SyncUser(t.app.services.sync, carolId);
@@ -88,6 +90,47 @@ describe.skipIf(!TEST_DATABASE_URL)('sync events (SSE)', () => {
     expect(await waitFor(() => bob.text().includes('event: poke'))).toBe(true);
     // A poke never carries data.
     expect(bob.text()).not.toContain('for bob');
+  });
+
+  it('keeps streaming across separate browser and MCP task writes, then cleans up on disconnect', async () => {
+    const stream = openStream(cookieOf(bobClient));
+    expect(await stream.ready).toBe(200);
+    expect(await waitFor(() => stream.text().includes(': connected'))).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stream.ended).toBe(false);
+    const { token } = await t.app.services.apiTokens.createPat(alice.userId, {
+      name: 'Live task test',
+      scopes: ['tasks:write'],
+      expiresInDays: 1,
+    });
+    await t.app.services.settings.update(
+      { 'instance.publicUrl': 'https://tasks.example.com' },
+      { userId: null, ip: null },
+    );
+    const added = await t.app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        host: TEST_HOST,
+        authorization: `Bearer ${token}`,
+        accept: 'application/json, text/event-stream',
+      },
+      payload: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'add_task', arguments: { projectId: shared, text: 'From MCP' } },
+      },
+    });
+    expect(added.statusCode).toBe(200);
+    expect(added.json().result.isError).toBeFalsy();
+    expect(await waitFor(() => stream.text().includes('event: poke'))).toBe(true);
+    const firstCount = stream.text().split('event: poke').length;
+    await alice.ok(cmd('task_add', { id: id(), projectId: shared, content: 'From another tab' }));
+    expect(await waitFor(() => stream.text().split('event: poke').length > firstCount)).toBe(true);
+    expect(t.app.services.events.streamCount(bobUserId)).toBe(1);
+    streams.at(-1)!.destroy();
+    expect(await waitFor(() => t.app.services.events.streamCount(bobUserId) === 0)).toBe(true);
   });
 
   it('ends the stream when the session logs out', async () => {

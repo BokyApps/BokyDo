@@ -408,16 +408,24 @@ try {
   await reloaded.getByRole('heading', { name: 'API & MCP', exact: true }).waitFor();
   assert.equal(await sections.getByRole('link', { name: 'AI', exact: true }).count(), 0);
   assert.equal(await reloaded.getByRole('checkbox', { name: /AI features/ }).count(), 0);
-  const tokenName = 'Hermes + n8n';
+  const prompt = reloaded.getByLabel('Connection prompt for any agent');
+  const promptText = await prompt.inputValue();
+  assert(promptText.includes(`${base}/mcp`));
+  assert(promptText.includes('OAuth with PKCE'));
+  assert(!promptText.includes('bkd_pat_'));
+  await reloaded.getByRole('button', { name: 'Copy connection prompt', exact: true }).click();
+  const tokenName = 'REST and MCP integration';
   await reloaded.getByRole('textbox', { name: 'New token name', exact: true }).fill(tokenName);
   await reloaded.getByRole('button', { name: 'Full access', exact: true }).click();
   await reloaded.getByRole('button', { name: 'Create token', exact: true }).click();
   const tokenElement = reloaded.getByText(/^bkd_pat_[A-Za-z0-9_-]+$/);
   await tokenElement.waitFor();
   const token = await tokenElement.innerText();
-  const yaml = await reloaded.locator('pre').innerText();
-  assert(yaml.includes('mcp_servers:') && yaml.includes(`${base}/mcp`));
-  assert(yaml.includes(`Bearer ${token}`), 'Hermes configuration contains the newly created token');
+  assert.equal(
+    await reloaded.locator('pre').count(),
+    0,
+    'No client-specific credential config is shown',
+  );
   assert(
     !(await reloaded.evaluate(() => JSON.stringify(globalThis.localStorage))).includes(token),
     'The token is not persisted in localStorage',

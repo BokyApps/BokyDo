@@ -14,6 +14,8 @@ import { errorMessage } from '../lib/messages.js';
 import { useSensitive } from '../lib/reauth.js';
 import { useSyncState } from '../lib/sync.js';
 import { flattenTree, projectTree } from '../lib/views.js';
+import { createMcpConnectionPrompt, type McpAuthMode } from '../lib/mcp-connection.js';
+import { adminSettingsQuery, instanceQuery, sessionQuery } from '../lib/queries.js';
 import { Alert, Button, Card, Checkbox, SecretList, SelectField, TextField } from './ui.js';
 
 const day = (iso: string | null, never: string) =>
@@ -31,15 +33,20 @@ export function ApiAccessSettings() {
 }
 
 function ConnectionDetails() {
+  const { data: instance } = useQuery(instanceQuery);
+  const { data: session } = useQuery(sessionQuery);
+  const authMode: McpAuthMode = instance?.mcpAuthMode ?? 'both';
   const rest = `${window.location.origin}/api/v1`;
   const mcp = `${window.location.origin}/mcp`;
+  const prompt = createMcpConnectionPrompt(window.location.origin, authMode);
+  const [copiedPrompt, setCopiedPrompt] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
   return (
     <Card>
       <h2 className="mb-1 font-semibold">API &amp; MCP</h2>
       <p className="mb-4 text-sm text-muted">
-        Create one personal access token below and use it with the REST API, MCP clients, or n8n.
-        Send it as an <code>Authorization: Bearer</code> header. Keep it private; it is shown only
-        once.
+        Connect an MCP client with browser sign-in, or use a personal access token when the instance
+        policy allows it. Personal access tokens also provide API access.
       </p>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <div>
@@ -51,22 +58,78 @@ function ConnectionDetails() {
           <dd className="break-all font-mono text-muted">{mcp}</dd>
         </div>
       </dl>
-      <div className="mt-4 space-y-2 text-sm text-muted">
+      <div className="mt-4 space-y-3 text-sm text-muted">
         <p>
-          <strong className="text-fg">MCP clients:</strong> use the MCP server URL and set the HTTP
-          header <code>Authorization</code> to <code>Bearer &lt;your token&gt;</code>.
+          <strong className="text-fg">MCP sign-in:</strong>{' '}
+          {authMode === 'pat'
+            ? 'Browser sign-in is unavailable under this instance policy; MCP clients must use a personal access token.'
+            : 'MCP clients that support browser OAuth can sign in and ask you to approve the requested scopes.'}
         </p>
-        <p>
-          <strong className="text-fg">Hermes:</strong> add the MCP server to your Hermes
-          configuration. A ready-to-copy configuration is shown when you create a token.
-        </p>
-        <p>
-          <strong className="text-fg">n8n:</strong> use an HTTP Request node with the REST API base
-          URL and a Header Auth credential named <code>Authorization</code>, value{' '}
-          <code>Bearer &lt;your token&gt;</code>.
-        </p>
+        <label className="block text-sm font-medium text-fg" htmlFor="mcp-connection-prompt">
+          Connection prompt for any agent
+        </label>
+        <textarea
+          id="mcp-connection-prompt"
+          className="min-h-40 w-full rounded-lg border border-line bg-surface p-3 font-mono text-xs text-fg"
+          readOnly
+          value={prompt}
+        />
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setCopyFailed(false);
+            void navigator.clipboard
+              .writeText(prompt)
+              .then(() => setCopiedPrompt(prompt))
+              .catch(() => setCopyFailed(true));
+          }}
+        >
+          {copiedPrompt === prompt ? 'Connection prompt copied' : 'Copy connection prompt'}
+        </Button>
       </div>
+      {copyFailed && (
+        <Alert tone="error">
+          Could not copy. Select the connection prompt and copy it manually.
+        </Alert>
+      )}
+      <p className="mt-4 text-sm text-muted">
+        For API access, use the REST API base URL with an{' '}
+        <code>Authorization: Bearer &lt;your token&gt;</code> header.
+      </p>
+      {session?.user.isAdmin && <McpAuthPolicy />}
     </Card>
+  );
+}
+
+function McpAuthPolicy() {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery(adminSettingsQuery);
+  const policy = useMutation({
+    mutationFn: (mode: McpAuthMode) =>
+      api('PATCH', '/api/v1/admin/settings', { 'api.mcpAuthMode': mode }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin', 'settings'] }),
+        queryClient.invalidateQueries({ queryKey: ['instance'] }),
+      ]);
+    },
+  });
+
+  return (
+    <div className="mt-5 border-t border-line pt-4">
+      <SelectField
+        label="MCP authentication policy"
+        value={settings?.['api.mcpAuthMode'] ?? 'both'}
+        disabled={policy.isPending || !settings}
+        onChange={(event) => policy.mutate(event.target.value as McpAuthMode)}
+        options={[
+          { value: 'sign-in', label: 'Sign-in only' },
+          { value: 'pat', label: 'Personal access token only' },
+          { value: 'both', label: 'Sign-in and personal access token' },
+        ]}
+      />
+      {policy.isError && <Alert tone="error">{errorMessage(policy.error)}</Alert>}
+    </div>
   );
 }
 
@@ -133,14 +196,13 @@ function PersonalTokens() {
   const sensitive = useSensitive();
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Set<ApiScope>>(
-    new Set(['tasks:read', 'projects:read', 'comments:read']),
+    new Set(['tasks:read', 'projects:read', 'comments:read', 'habits:read']),
   );
   const [expires, setExpires] = useState('90');
   // null = every project; otherwise the projects the token is limited to.
   const [limitTo, setLimitTo] = useState<Set<string> | null>(null);
   const [created, setCreated] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState<string | null>(null);
-  const [configCopied, setConfigCopied] = useState(false);
   const state = useSyncState();
   const inbox = state.user ? state.projects.get(state.user.inboxProjectId) : undefined;
   const projects = [
@@ -170,7 +232,6 @@ function PersonalTokens() {
     onSuccess: async ({ token, pat }) => {
       setCreated(token);
       setCreatedId(pat.id);
-      setConfigCopied(false);
       setName('');
       setLimitTo(null);
       await refresh();
@@ -182,7 +243,6 @@ function PersonalTokens() {
       if (id === createdId) {
         setCreated(null);
         setCreatedId(null);
-        setConfigCopied(false);
       }
       await refresh();
     },
@@ -211,22 +271,14 @@ function PersonalTokens() {
   return (
     <Card>
       <h2 className="mb-1 font-semibold">{t('settings.tokens.title')}</h2>
-      <p className="mb-4 text-sm text-muted">{t('settings.tokens.description')}</p>
+      <p className="mb-4 text-sm text-muted">
+        Personal access tokens provide REST API access and MCP authentication when the instance
+        policy allows it. Choose the minimum permissions needed and keep each token private.
+      </p>
       {created && (
         <div className="mb-4 space-y-2">
           <Alert tone="success">{t('settings.tokens.copyNow')}</Alert>
           <SecretList items={[created]} filename="bokydo-token.txt" />
-          <p className="text-sm font-medium">Hermes MCP configuration</p>
-          <pre className="overflow-x-auto rounded-lg bg-surface-alt p-3 text-xs">{`mcp_servers:\n  bokydo:\n    url: ${JSON.stringify(`${window.location.origin}/mcp`)}\n    headers:\n      Authorization: ${JSON.stringify(`Bearer ${created}`)}`}</pre>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              const config = `mcp_servers:\n  bokydo:\n    url: ${JSON.stringify(`${window.location.origin}/mcp`)}\n    headers:\n      Authorization: ${JSON.stringify(`Bearer ${created}`)}`;
-              void navigator.clipboard.writeText(config).then(() => setConfigCopied(true));
-            }}
-          >
-            {configCopied ? 'Hermes configuration copied' : 'Copy Hermes configuration'}
-          </Button>
         </div>
       )}
       <ul className="mb-4 divide-y divide-line">
@@ -279,7 +331,9 @@ function PersonalTokens() {
           <div className="flex flex-wrap gap-2">
             <Button
               variant="secondary"
-              onClick={() => setScopes(new Set(['tasks:read', 'projects:read', 'comments:read']))}
+              onClick={() =>
+                setScopes(new Set(['tasks:read', 'projects:read', 'comments:read', 'habits:read']))
+              }
             >
               Read only
             </Button>
@@ -293,11 +347,13 @@ function PersonalTokens() {
                     'projects:read',
                     'comments:read',
                     'comments:write',
+                    'habits:read',
+                    'habits:write',
                   ]),
                 )
               }
             >
-              Manage tasks
+              Manage tasks and habits
             </Button>
             <Button variant="secondary" onClick={() => setScopes(new Set(['sync']))}>
               Full access
@@ -315,6 +371,12 @@ function PersonalTokens() {
         </fieldset>
         <fieldset className="space-y-2">
           <legend className="mb-1 text-sm font-medium">{t('settings.tokens.whichProjects')}</legend>
+          {limited && (scopes.has('habits:read') || scopes.has('habits:write')) && (
+            <p className="text-sm text-muted">
+              Habits are personal. Project-limited tokens cannot access them; choose all projects
+              for habit access.
+            </p>
+          )}
           {limitable ? (
             <>
               <SelectField
