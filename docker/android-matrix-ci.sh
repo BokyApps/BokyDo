@@ -15,14 +15,48 @@ mkdir -p "$output"
 chmod 700 "$output"
 compose=(docker compose -p bokydo-android-matrix -f compose.yml -f "$task_tmp/compose.yml")
 cleanup() {
+  local status=$?
+  if [ "$status" -ne 0 ] && [ -f "$task_tmp/emulator.log" ]; then
+    echo 'Android emulator diagnostics:'
+    tail -120 "$task_tmp/emulator.log"
+  fi
   "$ADB" -s "$BOKYDO_ANDROID_SERIAL" emu kill >/dev/null 2>&1 || true
   "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+  exit "$status"
 }
 trap cleanup EXIT
 
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
   'platforms;android-36' 'build-tools;36.0.0' 'emulator' \
   "system-images;android-$MATRIX_API;default;x86_64" >/dev/null
+printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+  --name bokydo-matrix --package "system-images;android-$MATRIX_API;default;x86_64"
+"$ANDROID_HOME/emulator/emulator" -avd bokydo-matrix -port 5562 -no-window -no-audio \
+  -no-boot-anim -no-snapshot -accel on -gpu swiftshader_indirect -feature -Vulkan \
+  -cores 2 -memory 2560 > "$task_tmp/emulator.log" 2>&1 &
+emulator_pid=$!
+for attempt in {1..180}; do
+  if ! kill -0 "$emulator_pid" 2>/dev/null; then
+    echo 'Emulator exited before connecting to ADB.'
+    exit 1
+  fi
+  if [ "$("$ADB" -s "$BOKYDO_ANDROID_SERIAL" get-state 2>/dev/null || true)" = device ]; then break; fi
+  sleep 1
+done
+timeout 10 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" wait-for-device
+for attempt in {1..240}; do
+  if [ "$("$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then break; fi
+  sleep 1
+done
+test "$("$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell getprop sys.boot_completed | tr -d '\r')" = 1
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" root
+timeout 180 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" wait-for-device
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global window_animation_scale 0
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global transition_animation_scale 0
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global animator_duration_scale 0
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell input keyevent KEYCODE_WAKEUP
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell wm dismiss-keyguard
+
 apps/android/gradlew -p apps/android --no-daemon --max-workers=2 \
   -Dorg.gradle.jvmargs=-Xmx1600m :app:assembleRelease :app:assembleDebugAndroidTest \
   -PreleaseMatrixSmoke=true
@@ -75,24 +109,6 @@ NODE_PATH="$task_tmp/playwright/node_modules" \
   BOKYDO_WIDGET_FIXTURE_PATH="$task_tmp/fixture.json" \
   node docker/android-widgets-fixture.mjs
 
-printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
-  --name bokydo-matrix --package "system-images;android-$MATRIX_API;default;x86_64"
-"$ANDROID_HOME/emulator/emulator" -avd bokydo-matrix -port 5562 -no-window -no-audio \
-  -no-boot-anim -no-snapshot -accel on -gpu swiftshader_indirect -feature -Vulkan \
-  -cores 2 -memory 2560 > "$task_tmp/emulator.log" 2>&1 &
-timeout 180 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" wait-for-device
-for attempt in {1..240}; do
-  if [ "$("$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then break; fi
-  sleep 1
-done
-test "$("$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell getprop sys.boot_completed | tr -d '\r')" = 1
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" root
-timeout 180 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" wait-for-device
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global window_animation_scale 0
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global transition_animation_scale 0
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global animator_duration_scale 0
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell input keyevent KEYCODE_WAKEUP
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell wm dismiss-keyguard
 if [ -f "$task_tmp/published.apk" ]; then
   "$ADB" -s "$BOKYDO_ANDROID_SERIAL" install --no-incremental "$task_tmp/published.apk"
   python3 docker/android-release-startup.py | tee "$output/published-startup.txt"
