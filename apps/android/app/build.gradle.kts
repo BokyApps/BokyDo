@@ -12,9 +12,13 @@ android {
         applicationId = "com.bokyapps.bokydo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = 3
+        versionName = "0.1.2"
+        testInstrumentationRunner = if (providers.gradleProperty("releaseConstructorSmoke").orNull == "true") {
+            "com.bokyapps.bokydo.ReleaseConstructorInstrumentation"
+        } else {
+            "androidx.test.runner.AndroidJUnitRunner"
+        }
     }
 
     buildTypes {

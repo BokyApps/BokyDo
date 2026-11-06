@@ -107,3 +107,38 @@ isolation. A separate device test upgrades a version-one database with queued ta
 The JVM suite covers network/restart retry, success followed by failed refresh, rapid check-ins,
 permanent refusal, midnight and account week boundaries. Remove the emulator, stack and fixture
 after testing; never use these fixture steps on an owner's installation.
+
+### Signed-release startup gate (0.1.2)
+
+The optimized 0.1.1 APK crashed before `Application.onCreate`: WorkManager's initializer opens
+its Room database by reflection, but R8 removed `WorkDatabase_Impl`'s no-argument constructor.
+The app's release rules now explicitly preserve Room database constructors. Debug widget tests
+could not detect that release-only failure.
+
+After signing, install the exact candidate APK over the preceding signed release on a disposable
+emulator. Put `adb` on PATH (or set `ADB`), then run from the repository root:
+
+```bash
+BOKYDO_ANDROID_SERIAL=emulator-5562 python3 docker/android-release-startup.py
+```
+
+This gate retains app data, force-stops and launches three times, checks that the process stays
+alive, checks the crash buffer, and verifies a usable screen through UI Automator. The default
+expected text is `Server address` for a fresh installation; set `BOKYDO_ANDROID_EXPECT_TEXT` for
+an already-authorized test fixture. It refuses a non-emulator serial and a debuggable target. A successful install or
+`am start` response alone does not pass this gate. Keep the signed APK's R8 mapping with the
+release verification artifacts so a crash can be traced back to the original method.
+
+`ReleaseConstructorInstrumentation` checks the Room database, Glance action callbacks and background
+worker constructors through the installed target's class loader. Build `:app:assembleDebugAndroidTest -PreleaseConstructorSmoke=true`,
+sign that test APK locally with the same certificate as the candidate release, install it with
+`adb install -r -t`, and select the platform-only release harness:
+
+```bash
+adb shell am instrument -w -r \
+  com.bokyapps.bokydo.test/com.bokyapps.bokydo.ReleaseConstructorInstrumentation
+```
+
+The platform-only Java harness avoids AndroidJUnitRunner's dependencies on unshrunk target
+library names. Ordinary debug widget-host tests depend on a debug-only activity and should not
+be selected against a release. The signed test APK is a private verification artifact and is not published.
