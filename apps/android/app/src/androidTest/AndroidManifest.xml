@@ -11,6 +11,7 @@
         android:label="BokyDo matrix helpers"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (private test APK only; release UID launches this emulator-only, loopback/account-checked fixture browser) -->
         <activity
             android:name="com.bokyapps.bokydo.testing.FixtureBrowserActivity"
             android:exported="true"
@@ -27,6 +28,7 @@
                 <category android:name="android.intent.category.APP_BROWSER" />
             </intent-filter>
         </activity>
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (private test APK only; release UID starts this emulator-only host; it has no production credentials) -->
         <activity
             android:name="com.bokyapps.bokydo.testing.MatrixWidgetHostActivity"
             android:exported="true"
