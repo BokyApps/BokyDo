@@ -294,8 +294,14 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
     }
 
     private void describe(AccessibilityNodeInfo node, List<String> lines) {
-        String value = String.valueOf(node.getText());
-        if (!"null".equals(value) && !value.isEmpty() && !node.isPassword()) lines.add(value.substring(0, Math.min(value.length(), 150)));
+        CharSequence label = node.getText() == null ? node.getContentDescription() : node.getText();
+        if (label != null && label.length() > 0 && !node.isPassword()) {
+            android.graphics.Rect bounds = new android.graphics.Rect();
+            node.getBoundsInScreen(bounds);
+            String value = label.toString();
+            lines.add(node.getClassName() + " " + bounds.toShortString() + ": "
+                + value.substring(0, Math.min(value.length(), 150)));
+        }
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) { describe(child, lines); child.recycle(); }

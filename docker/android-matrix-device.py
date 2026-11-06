@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -123,8 +124,16 @@ if startup.returncode:
 print(f"API {args.api}: native sign-in, task creation and real widgets", flush=True)
 scenario = cmd("shell", "am", "instrument", "-w", "-r", "com.bokyapps.bokydo.test/com.bokyapps.bokydo.ReleaseMatrixInstrumentation", timeout=1800)
 save("scenario.txt", scenario)
-save("crashes.txt", cmd("logcat", "-b", "crash", "-d"))
-assert f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" in scenario, scenario
+crashes = cmd("logcat", "-b", "crash", "-d")
+save("crashes.txt", crashes)
+if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in scenario:
+    helpers = cmd("logcat", "-d", "-v", "brief", "-s", "BokyDoMatrixBrowser:I",
+                  "BokyDoMatrixHost:I", "ActivityTaskManager:W", "*:S")
+    # Only disposable fixture logs are read; still omit callback/authorization URLs from CI.
+    diagnostic = "\n".join((crashes + "\n" + helpers).splitlines()[-180:])
+    diagnostic = re.sub(r"(?:https?|com\.bokyapps\.bokydo):[^\s]+", "[fixture URL omitted]", diagnostic)
+    print("Matrix process diagnostics:\n" + diagnostic, flush=True)
+    raise AssertionError(scenario)
 print(f"API {args.api}: signed-in process restart", flush=True)
 restart = subprocess.run([sys.executable, str(script)], env=dict(env, BOKYDO_ANDROID_EXPECT_TEXT="Today"), capture_output=True, text=True)
 save("signed-in-restarts.txt", restart.stdout + restart.stderr)
