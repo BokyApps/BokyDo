@@ -349,14 +349,16 @@ export function TaskCard({
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-6 text-xs text-muted">
         {due && (
-          <span className={`inline-flex items-center gap-1 ${TONE_CLASS[due.tone]}`}>
+          <span
+            className={`inline-flex items-center gap-1 ${task.isCompleted ? 'text-muted' : TONE_CLASS[due.tone]}`}
+          >
             <CalendarIcon /> {due.label}
             {task.due?.recurrence && <span aria-label={t('task.repeats')}>↻</span>}
           </span>
         )}
         {deadline && (
           <span
-            className={`inline-flex items-center gap-1 ${deadline.tone === 'overdue' ? 'text-danger' : ''}`}
+            className={`inline-flex items-center gap-1 ${task.isCompleted ? 'text-muted' : deadline.tone === 'overdue' ? 'text-danger' : ''}`}
           >
             <DeadlineIcon /> {deadline.label}
           </span>
