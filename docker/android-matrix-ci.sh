@@ -10,6 +10,11 @@ export JAVA_HOME="${JAVA_HOME_17_X64:?JDK 17 required}"
 export ADB="$ANDROID_HOME/platform-tools/adb"
 export BOKYDO_ANDROID_SERIAL=emulator-5562
 task_tmp=$(mktemp -d "$RUNNER_TEMP/bokydo-matrix.XXXXXX")
+# Current SDK tools and the emulator can choose different default preference directories.
+# Pin both to this runner's disposable directory rather than relying on HOME/XDG defaults.
+export ANDROID_USER_HOME="$task_tmp/android-user"
+export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+mkdir -p "$ANDROID_AVD_HOME"
 output="$PWD/android-matrix-results/api$MATRIX_API"
 mkdir -p "$output"
 chmod 700 "$output"
@@ -31,6 +36,8 @@ trap cleanup EXIT
   "system-images;android-$MATRIX_API;default;x86_64" >/dev/null
 printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
   --name bokydo-matrix --package "system-images;android-$MATRIX_API;default;x86_64"
+test -f "$ANDROID_AVD_HOME/bokydo-matrix.ini"
+"$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx bokydo-matrix
 "$ANDROID_HOME/emulator/emulator" -avd bokydo-matrix -port 5562 -no-window -no-audio \
   -no-boot-anim -no-snapshot -accel on -gpu swiftshader_indirect -feature -Vulkan \
   -cores 2 -memory 2560 > "$task_tmp/emulator.log" 2>&1 &
