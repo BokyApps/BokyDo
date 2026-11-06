@@ -127,6 +127,8 @@ save("scenario.txt", scenario)
 crashes = cmd("logcat", "-b", "crash", "-d")
 save("crashes.txt", crashes)
 if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in scenario:
+    cmd("pull", "/data/user/0/com.bokyapps.bokydo/cache/matrix-failure.png",
+        str(args.output / "failure-screen.png"), check=False)
     helpers = cmd("logcat", "-d", "-v", "brief", "-s", "BokyDoMatrixBrowser:I",
                   "BokyDoMatrixHost:I", "ActivityTaskManager:W", "*:S")
     # Only disposable fixture logs are read; still omit callback/authorization URLs from CI.

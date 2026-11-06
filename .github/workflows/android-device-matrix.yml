@@ -52,5 +52,6 @@ jobs:
           path: |
             android-matrix-results/**/*.json
             android-matrix-results/**/published-startup.txt
+            android-matrix-results/**/failure-screen.png
           if-no-files-found: ignore
           retention-days: 14

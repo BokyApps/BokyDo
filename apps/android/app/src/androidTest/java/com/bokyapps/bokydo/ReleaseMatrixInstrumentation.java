@@ -66,6 +66,7 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
             result.putString("stream", "PASS Android API " + Build.VERSION.SDK_INT + ": " + String.join(", ", passed));
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
+            captureFailure();
             result.putString("stream", "FAIL Android API " + Build.VERSION.SDK_INT + ": "
                 + android.util.Log.getStackTraceString(error) + "\nVisible: " + visible());
             finish(Activity.RESULT_CANCELED, result);
@@ -129,6 +130,7 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         for (String[] view : views) {
             click("Configure tasks");
             click(view[0]);
+            waitFor(n -> selectedRadio(n, view[0]), "selected widget list " + view[0]).recycle();
             clickScrolled("Save");
             waitFor(n -> text(n, view[2]), "widget header " + view[2]).recycle();
             waitFor(n -> text(n, view[1]), "widget " + view[0]).recycle();
@@ -176,6 +178,32 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         } finally { named.recycle(); }
     }
 
+    private void radioStats(AccessibilityNodeInfo node, int[] stats) {
+        if (String.valueOf(node.getClassName()).contains("RadioButton")) {
+            stats[0]++;
+            if (node.isChecked() || node.isSelected()) stats[1]++;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) { radioStats(child, stats); child.recycle(); }
+        }
+    }
+
+    private boolean selectedRadio(AccessibilityNodeInfo node, String label) {
+        if (!text(node, label)) return false;
+        AccessibilityNodeInfo cursor = AccessibilityNodeInfo.obtain(node);
+        try {
+            for (int depth = 0; cursor != null && depth < 3; depth++) {
+                int[] stats = new int[2];
+                radioStats(cursor, stats);
+                if (stats[0] != 0) return stats[0] == 1 && stats[1] == 1;
+                AccessibilityNodeInfo parent = cursor.getParent();
+                cursor.recycle(); cursor = parent;
+            }
+            return false;
+        } finally { if (cursor != null) cursor.recycle(); }
+    }
+
     private static boolean text(AccessibilityNodeInfo node, String value) {
         return value.contentEquals(node.getText() == null ? "" : node.getText())
             || value.contentEquals(node.getContentDescription() == null ? "" : node.getContentDescription());
@@ -195,6 +223,7 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
     }
 
     private AccessibilityNodeInfo find(Match match) {
+        if (Build.VERSION.SDK_INT >= 33) ui.clearCache();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
         if (root == null) return null;
         try { return search(root, match); } finally { root.recycle(); }
@@ -319,22 +348,44 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         SystemClock.sleep(300);
     }
 
+    private void captureFailure() {
+        if (ui == null) return;
+        try {
+            android.graphics.Bitmap shot = ui.takeScreenshot();
+            if (shot == null) return;
+            java.io.File file = new java.io.File(getTargetContext().getCacheDir(), "matrix-failure.png");
+            try (java.io.FileOutputStream output = new java.io.FileOutputStream(file)) {
+                shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output);
+            } finally { shot.recycle(); }
+        } catch (Throwable ignored) { /* Diagnostics must not replace the original failure. */ }
+    }
+
     private String visible() {
         if (ui == null) return "unavailable";
         List<String> lines = new ArrayList<>();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
         if (root != null) { describe(root, lines); root.recycle(); }
+        for (android.view.accessibility.AccessibilityWindowInfo window : ui.getWindows()) {
+            lines.add("Window type=" + window.getType() + " active=" + window.isActive()
+                + " focused=" + window.isFocused() + " layer=" + window.getLayer());
+            if (lines.size() < 3) {
+                AccessibilityNodeInfo other = window.getRoot();
+                if (other != null) { describe(other, lines); other.recycle(); }
+            }
+            window.recycle();
+        }
         return String.join(" | ", lines);
     }
 
     private void describe(AccessibilityNodeInfo node, List<String> lines) {
         CharSequence label = node.getText() == null ? node.getContentDescription() : node.getText();
-        if (label != null && label.length() > 0 && !node.isPassword()) {
+        if ((label != null && label.length() > 0 || node.isCheckable()) && !node.isPassword()) {
             android.graphics.Rect bounds = new android.graphics.Rect();
             node.getBoundsInScreen(bounds);
-            String value = label.toString();
+            String value = label == null ? "" : label.toString();
             lines.add(node.getClassName() + " " + bounds.toShortString() + ": "
-                + value.substring(0, Math.min(value.length(), 150)));
+                + value.substring(0, Math.min(value.length(), 150))
+                + " checkable=" + node.isCheckable() + " checked=" + node.isChecked());
         }
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo child = node.getChild(i);
