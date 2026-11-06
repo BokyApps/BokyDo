@@ -1,0 +1,56 @@
+name: Android device matrix
+
+on:
+  pull_request:
+    paths: ['apps/android/**', 'docker/android-*', '.github/workflows/android-device-matrix.yml']
+  push:
+    branches: [main]
+    paths: ['apps/android/**', 'docker/android-*', '.github/workflows/android-device-matrix.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-devices-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  device:
+    name: Signed release on Android API ${{ matrix.api }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [34, 35, 36]
+    env:
+      MATRIX_API: ${{ matrix.api }}
+      # Optional: pin a published APK for additional exact-artifact startup/payload checks.
+      BOKYDO_RELEASE_APK_URL: ${{ vars.BOKYDO_RELEASE_APK_URL }}
+      BOKYDO_RELEASE_APK_SHA256: ${{ vars.BOKYDO_RELEASE_APK_SHA256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Enable KVM on the disposable runner
+        run: |
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+      - name: Verify Gradle wrapper
+        run: echo '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  apps/android/gradle/wrapper/gradle-wrapper.jar' | sha256sum -c
+      - name: Published startup, OAuth, tasks and widgets
+        run: bash docker/android-matrix-ci.sh
+      - name: Upload sanitized verification results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-api-${{ matrix.api }}-verification
+          path: |
+            android-matrix-results/**/*.json
+            android-matrix-results/**/published-startup.txt
+          if-no-files-found: ignore
+          retention-days: 14
