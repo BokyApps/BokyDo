@@ -5,6 +5,12 @@ set -euo pipefail
 : "${RUNNER_TEMP:?Run on a disposable CI runner}"
 : "${MATRIX_API:?Set MATRIX_API to 34, 35 or 36}"
 case "$MATRIX_API" in 34|35|36) ;; *) exit 2 ;; esac
+# API36's default image (BE2A.250530.026.D1) crashes its WebView in
+# partition_alloc_support.cc before login. Use the newer official Google APIs image;
+# the functional runner still blocks all non-loopback network traffic.
+image_tag=default
+if [ "$MATRIX_API" = 36 ]; then image_tag=google_apis; fi
+system_image="system-images;android-$MATRIX_API;$image_tag;x86_64"
 test -r /dev/kvm && test -w /dev/kvm
 export JAVA_HOME="${JAVA_HOME_17_X64:?JDK 17 required}"
 export ADB="$ANDROID_HOME/platform-tools/adb"
@@ -33,9 +39,9 @@ trap cleanup EXIT
 
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
   'platforms;android-36' 'build-tools;36.0.0' 'emulator' \
-  "system-images;android-$MATRIX_API;default;x86_64" >/dev/null
+  "$system_image" >/dev/null
 printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
-  --name bokydo-matrix --package "system-images;android-$MATRIX_API;default;x86_64"
+  --name bokydo-matrix --package "$system_image"
 test -f "$ANDROID_AVD_HOME/bokydo-matrix.ini"
 "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx bokydo-matrix
 "$ANDROID_HOME/emulator/emulator" -avd bokydo-matrix -port 5562 -no-window -no-audio \

@@ -209,3 +209,10 @@ functional candidate contains the same app payload despite its temporary signing
 Newer source can legitimately differ: then functional results cover the source candidate only,
 and the published artifact's coverage remains its separate cold-start check. An APK download
 with the wrong pinned SHA always fails. Without both variables, only the source candidate is tested.
+
+The CI matrix uses default AOSP images for API 34/35 and the official Google APIs image for
+API 36. The latter replaces the older default API 36 image whose bundled WebView crashes in
+`partition_alloc_support.cc` inside the private fixture browser before login. Functional tests
+still block all non-loopback traffic, including Google services. The OS fingerprint in each
+result identifies the image actually tested; OEM firmware and default-browser UI remain outside
+this coverage.

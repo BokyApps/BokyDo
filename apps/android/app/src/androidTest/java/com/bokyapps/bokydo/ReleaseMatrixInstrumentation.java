@@ -112,8 +112,7 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         dismissKeyboard();
         click("Add task");
         waitFor(n -> String.valueOf(n.getText()).contains("Added “"), "task creation acknowledgement").recycle();
-        dismissKeyboard();
-        back();
+        click("Close sheet");
         waitFor(n -> text(n, title), "new task row").recycle();
         step("quick add and task rendering");
     }
@@ -130,7 +129,7 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         for (String[] view : views) {
             click("Configure tasks");
             click(view[0]);
-            click("Save");
+            clickScrolled("Save");
             waitFor(n -> text(n, view[2]), "widget header " + view[2]).recycle();
             waitFor(n -> text(n, view[1]), "widget " + view[0]).recycle();
             for (int i = 3; i < view.length; i++) {
@@ -139,15 +138,15 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
             }
         }
         step("Inbox, Today, Upcoming and project widgets");
-        AccessibilityNodeInfo task = waitFor(n -> n.isCheckable() && text(n, "Project fixture"), "task widget checkbox");
+        AccessibilityNodeInfo task = widgetCheckbox("Project fixture");
         clickNode(task);
         waitAbsent(n -> text(n, "Project fixture"), "completed task removal");
         step("task widget completion and redraw");
         click("Habits");
-        AccessibilityNodeInfo habit = waitFor(n -> n.isCheckable() && text(n, "Daily widget habit"), "habit widget checkbox");
+        AccessibilityNodeInfo habit = widgetCheckbox("Daily widget habit");
         boolean previous = habit.isChecked();
         clickNode(habit);
-        waitFor(n -> n.isCheckable() && text(n, "Daily widget habit") && n.isChecked() != previous,
+        waitFor(n -> checkboxMatches(n, "Daily widget habit", !previous),
             "habit checkbox state").recycle();
         String progress = previous ? "0/1 today" : "1/1 today";
         waitFor(n -> text(n, progress), "confirmed habit progress").recycle();
@@ -155,6 +154,26 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
         waitFor(n -> text(n, "Manage habits"), "native Habits screen").recycle();
         step("widget-to-native Habits navigation");
+    }
+
+    // Glance puts the accessible label on a FrameLayout around its native CheckBox.
+    // Resolve the checkable descendant so both the click and state assertion target the control.
+    private boolean checkboxMatches(AccessibilityNodeInfo node, String label, Boolean checked) {
+        if (!text(node, label)) return false;
+        AccessibilityNodeInfo control = search(node, n -> n.isCheckable() && n.isEnabled()
+            && (checked == null || n.isChecked() == checked));
+        if (control == null) return false;
+        control.recycle();
+        return true;
+    }
+
+    private AccessibilityNodeInfo widgetCheckbox(String label) throws Exception {
+        AccessibilityNodeInfo named = waitFor(n -> checkboxMatches(n, label, null), "widget checkbox " + label);
+        try {
+            AccessibilityNodeInfo control = search(named, n -> n.isCheckable() && n.isEnabled());
+            if (control == null) throw new AssertionError("Missing checkable descendant: " + label);
+            return control;
+        } finally { named.recycle(); }
     }
 
     private static boolean text(AccessibilityNodeInfo node, String value) {
@@ -248,6 +267,21 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         try { target = bottomNavigation(root, label); } finally { root.recycle(); }
         if (target == null) throw new AssertionError("Missing navigation " + label);
         clickNode(target);
+    }
+
+    private void clickScrolled(String label) throws Exception {
+        long until = SystemClock.uptimeMillis() + 120_000;
+        while (SystemClock.uptimeMillis() < until) {
+            AccessibilityNodeInfo target = find(n -> text(n, label) && clickable(n));
+            if (target != null) { clickNode(target); return; }
+            AccessibilityNodeInfo scroll = find(AccessibilityNodeInfo::isScrollable);
+            if (scroll != null) {
+                scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                scroll.recycle();
+            }
+            Thread.sleep(300);
+        }
+        throw new AssertionError("Missing scrollable control: " + label);
     }
 
     private void click(String label) throws Exception {
