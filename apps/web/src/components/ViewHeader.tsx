@@ -38,7 +38,7 @@ export function ViewHeader({
   subtitle?: ReactNode;
   options?: ViewOptions;
   setOptions?: (p: Partial<ViewOptions>) => void;
-  allow?: { sort?: boolean; group?: boolean; completed?: boolean };
+  allow?: { sort?: boolean; group?: boolean; completed?: boolean; habits?: boolean };
   /** Offer list / board / calendar. */
   layout?: { value: Layout; onChange: (layout: Layout) => void };
   actions?: ReactNode;
@@ -105,6 +105,17 @@ export function ViewHeader({
                   choices={GROUPS}
                   onChange={(group) => setOptions({ group })}
                 />
+              )}
+              {allow.habits && (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={options.showHabits}
+                    onChange={(event) => setOptions({ showHabits: event.target.checked })}
+                  />
+                  {t('view.showHabits', { defaultValue: 'Show habits' })}
+                </label>
               )}
               {allow.completed && (
                 <label className="flex items-center gap-2">
