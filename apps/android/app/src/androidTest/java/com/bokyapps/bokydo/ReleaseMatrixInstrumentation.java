@@ -100,7 +100,7 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
     }
 
     private void tasks() throws Exception {
-        click("Inbox");
+        clickNavigation("Inbox");
         waitFor(n -> text(n, "Inbox fixture"), "Inbox tasks").recycle();
         click("Add task");
         AccessibilityNodeInfo edit = waitFor(AccessibilityNodeInfo::isEditable, "quick-add field");
@@ -214,6 +214,40 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
             }
             return false;
         } finally { if (cursor != null) cursor.recycle(); }
+    }
+
+    // Project names inside task rows can equal navigation labels. The fixed bottom bar's
+    // matching label is below those rows; choose it rather than the first textual match.
+    private AccessibilityNodeInfo bottomNavigation(AccessibilityNodeInfo node, String label) {
+        if (node == null) return null;
+        AccessibilityNodeInfo best = node.isVisibleToUser() && text(node, label) && clickable(node)
+            ? AccessibilityNodeInfo.obtain(node) : null;
+        android.graphics.Rect bestBounds = new android.graphics.Rect();
+        if (best != null) best.getBoundsInScreen(bestBounds);
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            AccessibilityNodeInfo candidate = bottomNavigation(child, label);
+            child.recycle();
+            if (candidate == null) continue;
+            android.graphics.Rect bounds = new android.graphics.Rect();
+            candidate.getBoundsInScreen(bounds);
+            if (best == null || bounds.bottom > bestBounds.bottom) {
+                if (best != null) best.recycle();
+                best = candidate; bestBounds.set(bounds);
+            } else candidate.recycle();
+        }
+        return best;
+    }
+
+    private void clickNavigation(String label) throws Exception {
+        waitFor(n -> text(n, label) && clickable(n), "navigation " + label).recycle();
+        AccessibilityNodeInfo root = ui.getRootInActiveWindow();
+        if (root == null) throw new AssertionError("No active navigation window");
+        AccessibilityNodeInfo target;
+        try { target = bottomNavigation(root, label); } finally { root.recycle(); }
+        if (target == null) throw new AssertionError("Missing navigation " + label);
+        clickNode(target);
     }
 
     private void click(String label) throws Exception {
