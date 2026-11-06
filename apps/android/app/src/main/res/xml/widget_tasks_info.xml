@@ -8,7 +8,7 @@
     android:maxResizeHeight="360dp"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
-    android:updatePeriodMillis="0"
+    android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:configure="com.bokyapps.bokydo.WidgetConfigActivity"
     android:description="@string/widget_tasks_description" />

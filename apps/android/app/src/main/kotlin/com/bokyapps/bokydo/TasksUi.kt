@@ -102,6 +102,7 @@ sealed interface Route {
     data object Inbox : Route
     data object Today : Route
     data object Upcoming : Route
+    data object Habits : Route
     data object Browse : Route
     data class Project(val id: String) : Route
     data class Board(val id: String) : Route
@@ -120,6 +121,7 @@ sealed interface Route {
 @Composable
 fun AppShell(
     state: AppState,
+    startRoute: Route = Route.Today,
     startWithQuickAdd: Boolean = false,
     quickAddText: String = "",
     quickAddDetails: String = "",
@@ -134,8 +136,10 @@ fun AppShell(
             clock++
         }
     }
-    // Every entry point (launcher, share, tile, shortcut) opens Today.
-    var stack by remember { mutableStateOf(listOf<Route>(Route.Today)) }
+    // Task links need a list beneath them so Back/delete cannot empty the navigation stack.
+    var stack by remember {
+        mutableStateOf(if (startRoute is Route.TaskDetail) listOf(Route.Today, startRoute) else listOf(startRoute))
+    }
     var adding by remember { mutableStateOf(false) }
     // The quick-add widget, tile, shortcut or a share can ask for the add sheet on open.
     LaunchedEffect(startWithQuickAdd) {
@@ -158,6 +162,7 @@ fun AppShell(
         Route.Inbox -> "Inbox"
         Route.Today -> "Today"
         Route.Upcoming -> "Upcoming"
+        Route.Habits -> "Habits"
         Route.Browse -> "Browse"
         Route.Settings -> "Settings"
         Route.TimeZone -> "Time zone"
@@ -231,7 +236,7 @@ fun AppShell(
             }
         },
         floatingActionButton = {
-            if (route != Route.Settings && route !is Route.TaskDetail &&
+            if (route != Route.Settings && route != Route.Habits && route !is Route.TaskDetail &&
                 route != Route.Search && route != Route.Labels && route != Route.Filters && defaults != null
             ) {
                 FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "Add task") }
@@ -243,6 +248,7 @@ fun AppShell(
                 Route.Inbox -> state.user?.let { ProjectList(state, it.inboxProjectId, today) { go(Route.TaskDetail(it)) } }
                 Route.Today -> TodayList(state, today) { go(Route.TaskDetail(it)) }
                 Route.Upcoming -> UpcomingList(state, today) { go(Route.TaskDetail(it)) }
+                Route.Habits -> HabitsScreen(state, today)
                 Route.Browse -> BrowseList(state) { go(it) }
                 is Route.Project -> ProjectList(state, route.id, today) { go(Route.TaskDetail(it)) }
                 is Route.Board -> BoardView(state, route.id, today) { go(Route.TaskDetail(it)) }
@@ -346,6 +352,9 @@ private fun BrowseList(state: AppState, open: (Route) -> Unit) {
         }
         if (tree.isEmpty()) item { Text("No projects yet.", Modifier.padding(16.dp)) }
         item { HorizontalDivider() }
+        item {
+            Text("Habits", Modifier.fillMaxWidth().clickable { open(Route.Habits) }.padding(16.dp))
+        }
         item {
             Text("Filters", Modifier.fillMaxWidth().clickable { open(Route.Filters) }.padding(16.dp))
         }

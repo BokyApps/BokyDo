@@ -17,6 +17,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.bokyapps.bokydo.core.HabitSync
 import com.bokyapps.bokydo.core.AppState
 import com.bokyapps.bokydo.core.BokyDoClient
 import com.bokyapps.bokydo.core.ENTITY_TYPES
@@ -40,6 +41,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -60,6 +63,8 @@ class BokyDoApp : Application() {
     lateinit var pendingAuth: PendingAuthStore
     lateinit var store: SqliteStore
     lateinit var client: BokyDoClient
+    lateinit var habits: HabitSync
+    private val accountMutex = Mutex()
     lateinit var engine: SyncEngine
     lateinit var quickAddParser: QuickAddParser
     lateinit var device: DeviceSettings
@@ -79,6 +84,8 @@ class BokyDoApp : Application() {
         store = SqliteStore(this)
         client = BokyDoClient(sessions)
         engine = SyncEngine(client, store)
+        if (sessions.load() != null) store.ensureAccountEpoch()
+        habits = HabitSync(store, { accountEpoch() }, client::call)
         // One sandbox for the web's own parsers (quick add and saved filters).
         val js = JsRuntime(this)
         quickAddParser = QuickAddParser(js)
@@ -145,12 +152,16 @@ class BokyDoApp : Application() {
             is RedirectResult.Failed -> _screen.value = AppScreen.Connect(result.reason)
             RedirectResult.Denied -> _screen.value = AppScreen.Connect("Sign-in was cancelled.")
             is RedirectResult.Code -> try {
-                client.exchangeCode(pending, result.code)
-                store.clear()
-                _screen.value = AppScreen.Home
-                schedulePeriodicSync()
-                syncNow()
-                WidgetRefresh.updateAll(this@BokyDoApp)
+                accountMutex.withLock {
+                    client.exchangeCode(pending, result.code)
+                    store.clear()
+                    store.ensureAccountEpoch()
+                    lastState = AppState.EMPTY
+                    _screen.value = AppScreen.Home
+                    schedulePeriodicSync()
+                    syncNow()
+                    WidgetRefresh.updateAll(this@BokyDoApp)
+                }
                 liveSync.restart()
             } catch (_: Exception) {
                 _screen.value = AppScreen.Connect("Signing in didn't finish. Try again.")
@@ -163,15 +174,19 @@ class BokyDoApp : Application() {
         _screen.value = AppScreen.Connect()
     }
 
-    suspend fun signOut(message: String? = null) {
+    suspend fun signOut(message: String? = null, expectedAccount: String? = null) {
         // Revoking the grant also ends the push registration on the server.
-        UnifiedPush.unregister(this, tellServer = false)
-        client.signOut()
-        store.clear()
-        ReminderAlarms.clear(this)
-        WidgetRefresh.updateAll(this)
-        WorkManager.getInstance(this).cancelUniqueWork(PERIODIC)
-        _screen.value = AppScreen.Connect(message)
+        accountMutex.withLock {
+            if (expectedAccount != null && store.accountEpoch() != expectedAccount) return
+            UnifiedPush.unregister(this, tellServer = false)
+            client.signOut()
+            store.clear()
+            lastState = AppState.EMPTY
+            ReminderAlarms.clear(this)
+            WidgetRefresh.updateAll(this)
+            WorkManager.getInstance(this).cancelUniqueWork(PERIODIC)
+            _screen.value = AppScreen.Connect(message)
+        }
     }
 
     // ---- data ----
@@ -182,10 +197,22 @@ class BokyDoApp : Application() {
         private set
 
     /** What the screens show: the synced data with queued changes applied. Reads the database. */
-    fun appState(): AppState = Optimistic.apply(
-        AppState.decode(ENTITY_TYPES.associateWith { store.all(it) }, SNAPSHOT_KEYS.associateWith { store.snapshot(it) }),
-        store.pending(Int.MAX_VALUE),
-    ).also { lastState = it }
+    fun appState(): AppState {
+        val account = accountEpoch() ?: return AppState.EMPTY
+        val state = Optimistic.apply(
+            AppState.decode(ENTITY_TYPES.associateWith { store.all(it) }, SNAPSHOT_KEYS.associateWith { store.snapshot(it) }),
+            store.pending(Int.MAX_VALUE),
+        )
+        if (accountEpoch() != account) return AppState.EMPTY
+        lastState = state
+        return state
+    }
+
+    fun sendForAccount(account: String, type: String, id: String) {
+        store.enqueueForAccount(account, com.bokyapps.bokydo.core.Command(type, java.util.UUID.randomUUID().toString(), buildJsonObject { put("id", id) }))
+        syncNow()
+        scope.launch { WidgetRefresh.updateAll(this@BokyDoApp) }
+    }
 
     /** Queue a change on one entity (`{ id }` args) and send it as soon as possible. */
     fun send(type: String, id: String) = sendAll(listOf(type to buildJsonObject { put("id", id) }))
@@ -201,28 +228,44 @@ class BokyDoApp : Application() {
     // ---- sync ----
 
     suspend fun sync() {
+        var syncingAccount: String? = null
         try {
-            engine.sync()
-            syncError.value = null
-            // Due dates and reminders may have changed: re-arm the next alarm.
-            ReminderAlarms.reschedule(this)
-            WidgetRefresh.updateAll(this)
+            accountMutex.withLock {
+                if (sessions.load() == null) return@withLock
+                syncingAccount = store.accountEpoch()
+                engine.sync()
+                habits.sync()
+                syncError.value = null
+                // Due dates and reminders may have changed: re-arm the next alarm.
+                ReminderAlarms.reschedule(this)
+            }
         } catch (_: SignedOutException) {
-            signOut("You were signed out. Sign in again to keep syncing.")
+            signOut("You were signed out. Sign in again to keep syncing.", expectedAccount = syncingAccount)
         } catch (e: ServerException) {
             syncError.value = "Sync failed (${e.status})."
             throw e
         } catch (e: IOException) {
             syncError.value = "Offline. Changes are kept and sent later."
             throw e
+        } finally {
+            WidgetRefresh.updateAll(this)
         }
+    }
+
+    /** Widgets carry this non-secret account generation so old taps cannot affect a new login. */
+    fun accountEpoch(): String? = if (sessions.load() == null) null else store.accountEpoch()
+
+    fun checkInHabit(account: String, id: String, date: String, completed: Boolean) {
+        habits.checkIn(account, id, date, completed)
+        syncNow()
+        scope.launch { WidgetRefresh.updateAll(this@BokyDoApp) }
     }
 
     fun syncNow() {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-        WorkManager.getInstance(this).enqueueUniqueWork(ONE_TIME, ExistingWorkPolicy.REPLACE, request)
+        WorkManager.getInstance(this).enqueueUniqueWork(ONE_TIME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
 
     private fun schedulePeriodicSync() {
