@@ -142,3 +142,70 @@ adb shell am instrument -w -r \
 The platform-only Java harness avoids AndroidJUnitRunner's dependencies on unshrunk target
 library names. Ordinary debug widget-host tests depend on a debug-only activity and should not
 be selected against a release. The signed test APK is a private verification artifact and is not published.
+
+### Signed-release Android version matrix
+
+`docker/android-matrix-device.py` exercises the exact signed APK on disposable stock Android
+14, 15 and 16 emulators (API 34–36). It verifies three fresh cold starts, native OAuth sign-in
+and task creation, Inbox/Today/Upcoming/project widgets, task completion, habit check-ins and
+widget navigation, then three signed-in process restarts. An independent backend read checks
+that the created task and widget actions persisted. It retains application data between starts.
+
+Build the private platform-only controller and sign its test APK with the candidate's certificate:
+
+```bash
+apps/android/gradlew -p apps/android :app:assembleDebugAndroidTest -PreleaseMatrixSmoke=true
+# zipalign and apksigner the test APK with the same certificate as the release.
+# Never publish this helper APK: it contains a browser limited to the local fixture.
+ADB="$ANDROID_HOME/platform-tools/adb" python3 docker/android-matrix-device.py \
+  --api 35 --serial emulator-5562 --apk /private/candidate.apk \
+  --tests /private/matrix-tests.apk --fixture /private/widget-fixture.json \
+  --output /private/matrix-results/api35
+```
+
+Prepare the fresh loopback fixture with `android-widgets-fixture.mjs`, as above. Its account is
+`widget-fixture`, and its credentials are deliberately public test data. Each matrix row resets
+only that fixture's project task and daily habit. Use a fresh AVD per Android version; the runner
+waits for boot and verifies the emulator's API before installing. `--reuse-installed` avoids
+reinstallation on a retry only after comparing both installed APK hashes with the supplied files.
+The runner requires root on the disposable AOSP emulator and restricts both IPv4 and IPv6 egress
+to loopback, including redirected WebView resources. Host API requests reject redirects. It
+verifies the fixture username and project ownership before changing fixture records. The browser
+clears retained cookies and checks the consent page's signed-in username before approving. Keep its output directory private:
+raw instrumentation and system logs are diagnostic artifacts. The runner emits a sanitized
+`result.json` with the APK digest, OS fingerprint and verified outcomes only after every check passes.
+An earlier success marker is removed at the start of a rerun, and the new marker is published
+atomically. Widget checks verify list headers and exclude unrelated fixture tasks; host recreation
+retains widget IDs and configuration. Successful runs explicitly tear down the external widget host.
+
+The helper browser submits the real login/consent pages on `http://127.0.0.1:18090` and forwards
+the real OAuth redirect to the release app. Instrumentation selects this external browser for the
+app's real authorization intent; Android's default-browser selection is outside this test. It does
+not inject a session, bypass PKCE or replace
+token exchange. This covers OAuth integration with a controlled WebView browser, rather than
+Chrome/Brave-specific UI. The widget host runs under the test APK's separate UID and uses real
+framework AppWidgetHost views and PendingIntents. Both activities are absent from the release APK.
+
+Hardware acceleration is recommended. A software-only host may need Android's
+[`ro.hw_timeout_multiplier`](https://android.googlesource.com/platform/frameworks/base/+/android16-qpr2-release/core/java/android/os/Build.java)
+to avoid the OS watchdog killing its own framework during boot. Record any such adjustment with
+results; those runs establish functional compatibility, not startup speed or ANR performance.
+Stock AOSP emulators also do not reproduce Xiaomi HyperOS firmware or launcher behavior.
+
+### Hardware-accelerated CI
+
+`.github/workflows/android-device-matrix.yml` runs this matrix on disposable KVM-enabled Linux
+runners. `docker/android-matrix-ci.sh` builds an optimized release and signs it and the test APK
+with a temporary CI key. The personal release key is never read or uploaded. Each job starts
+its own fresh loopback server, fixture account and emulator; cleanup destroys them afterwards.
+Only sanitized JSON results and published-APK cold-start outcomes are uploaded.
+
+Optional repository variables `BOKYDO_RELEASE_APK_URL` and `BOKYDO_RELEASE_APK_SHA256` pin a public
+HTTPS release artifact. When configured, every version also installs that exact APK and checks
+three fresh cold starts before replacing the disposable emulator's installation with the CI
+candidate. `payload-comparison.json` compares every non-signature ZIP entry, including DEX,
+resources, manifest and AndroidX/Kotlin metadata. `identicalPayload: true` establishes that the
+functional candidate contains the same app payload despite its temporary signing certificate.
+Newer source can legitimately differ: then functional results cover the source candidate only,
+and the published artifact's coverage remains its separate cold-start check. An APK download
+with the wrong pinned SHA always fails. Without both variables, only the source candidate is tested.

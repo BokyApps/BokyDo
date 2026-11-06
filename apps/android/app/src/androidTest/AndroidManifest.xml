@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <package android:name="com.bokyapps.bokydo" />
+    </queries>
+    <!-- These helpers belong to the private test APK, never the published release. -->
+    <application
+        android:name="android.app.Application"
+        android:allowBackup="false"
+        android:label="BokyDo matrix helpers"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity
+            android:name="com.bokyapps.bokydo.testing.FixtureBrowserActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.APP_BROWSER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="com.bokyapps.bokydo.testing.MatrixWidgetHostActivity"
+            android:exported="true"
+            android:launchMode="singleTask" />
+    </application>
+</manifest>

@@ -14,7 +14,9 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "0.1.2"
-        testInstrumentationRunner = if (providers.gradleProperty("releaseConstructorSmoke").orNull == "true") {
+        testInstrumentationRunner = if (providers.gradleProperty("releaseMatrixSmoke").orNull == "true") {
+            "com.bokyapps.bokydo.ReleaseMatrixInstrumentation"
+        } else if (providers.gradleProperty("releaseConstructorSmoke").orNull == "true") {
             "com.bokyapps.bokydo.ReleaseConstructorInstrumentation"
         } else {
             "androidx.test.runner.AndroidJUnitRunner"
