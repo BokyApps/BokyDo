@@ -198,7 +198,7 @@ Stock AOSP emulators also do not reproduce Xiaomi HyperOS firmware or launcher b
 runners. `docker/android-matrix-ci.sh` builds an optimized release and signs it and the test APK
 with a temporary CI key. The personal release key is never read or uploaded. Each job starts
 its own fresh loopback server, fixture account and emulator; cleanup destroys them afterwards.
-Only sanitized JSON results, published-APK cold-start outcomes and failure screenshots of the
+Only sanitized JSON results, cold-start outcomes and failure screenshots of the
 throwaway fixture UI are uploaded.
 
 Optional repository variables `BOKYDO_RELEASE_APK_URL` and `BOKYDO_RELEASE_APK_SHA256` pin a public

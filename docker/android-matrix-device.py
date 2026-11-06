@@ -28,6 +28,7 @@ adb = os.environ.get("ADB", "adb")
 args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
 args.output.chmod(0o700)
 (args.output / "result.json").unlink(missing_ok=True)
+(args.output / "failure-screen.png").unlink(missing_ok=True)
 
 
 def cmd(*parts, timeout=45, check=True):
@@ -39,6 +40,16 @@ def cmd(*parts, timeout=45, check=True):
 
 def save(name, value):
     (args.output / name).write_text(value)
+
+
+def capture_screen():
+    try:
+        shot = subprocess.run([adb, "-s", args.serial, "exec-out", "screencap", "-p"],
+                              capture_output=True, timeout=30)
+        if shot.returncode == 0 and shot.stdout.startswith(b"\x89PNG"):
+            (args.output / "failure-screen.png").write_bytes(shot.stdout)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Preserve the original test failure if diagnostic capture also fails.
 
 
 started = time.time()
@@ -120,6 +131,8 @@ script = Path(__file__).with_name("android-release-startup.py")
 startup = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True)
 save("cold-starts.txt", startup.stdout + startup.stderr)
 if startup.returncode:
+    print(startup.stdout + startup.stderr, flush=True)
+    capture_screen()
     raise RuntimeError("Cold-start failure; see cold-starts.txt")
 print(f"API {args.api}: native sign-in, task creation and real widgets", flush=True)
 scenario = cmd("shell", "am", "instrument", "-w", "-r", "com.bokyapps.bokydo.test/com.bokyapps.bokydo.ReleaseMatrixInstrumentation", timeout=1800)
@@ -142,6 +155,8 @@ print(f"API {args.api}: signed-in process restart", flush=True)
 restart = subprocess.run([sys.executable, str(script)], env=dict(env, BOKYDO_ANDROID_EXPECT_TEXT="Today"), capture_output=True, text=True)
 save("signed-in-restarts.txt", restart.stdout + restart.stderr)
 if restart.returncode:
+    print(restart.stdout + restart.stderr, flush=True)
+    capture_screen()
     raise RuntimeError("Signed-in restart failure")
 for _ in range(30):
     opened = api("/api/v1/tasks")["tasks"]
