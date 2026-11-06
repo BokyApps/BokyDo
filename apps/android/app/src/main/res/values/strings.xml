@@ -11,4 +11,6 @@
     <string name="widget_tasks_description">Your tasks at a glance: tap a checkbox to complete one.</string>
     <string name="widget_quick_add">BokyDo quick add</string>
     <string name="widget_quick_add_description">Add a task in one tap.</string>
+    <string name="widget_habits">BokyDo habits</string>
+    <string name="widget_habits_description">Daily and weekly habits with check-ins that work offline.</string>
 </resources>

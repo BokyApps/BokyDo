@@ -16,6 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -24,7 +27,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,7 +35,6 @@ import com.bokyapps.bokydo.core.AppState
 import com.bokyapps.bokydo.core.Views
 import com.bokyapps.bokydo.core.Widgets
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -49,24 +50,26 @@ class WidgetConfigActivity : ComponentActivity() {
         // Default to cancelled: a host that gets no answer removes the widget.
         setResult(RESULT_CANCELED, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
         val bokyDo = this.app
+        if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID ||
+            AppWidgetManager.getInstance(this).getAppWidgetInfo(appWidgetId)?.provider?.className != TodayWidgetReceiver::class.java.name) {
+            finish()
+            return
+        }
         setContent {
-            MaterialTheme {
+            val version by bokyDo.store.version.collectAsState()
+            val state by produceState(AppState.EMPTY, version) {
+                value = withContext(Dispatchers.Default) { bokyDo.appState() }
+            }
+            BokyDoTheme(state.user?.prefs?.appearance ?: com.bokyapps.bokydo.core.Appearance.DEFAULT) {
                 Surface(Modifier.fillMaxSize()) {
-                    val state by produceState(AppState.EMPTY) {
-                        value = withContext(Dispatchers.Default) { bokyDo.appState() }
-                    }
                     WidgetConfigScreen(
                         state = state,
                         onCancel = { finish() },
                         onSave = { config ->
-                            if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+                            lifecycleScope.launch {
+                                saveWidgetConfig(this@WidgetConfigActivity, appWidgetId, config)
+                                setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
                                 finish()
-                            } else {
-                                MainScope().launch {
-                                    saveWidgetConfig(this@WidgetConfigActivity, appWidgetId, config)
-                                    setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
-                                    finish()
-                                }
                             }
                         },
                     )
@@ -78,12 +81,15 @@ class WidgetConfigActivity : ComponentActivity() {
 
 @Composable
 private fun WidgetConfigScreen(state: AppState, onCancel: () -> Unit, onSave: (Widgets.Config) -> Unit) {
-    var target by remember { mutableStateOf<Widgets.Target>(Widgets.Target.Today) }
-    var theme by remember { mutableStateOf("system") }
+    var encoded by rememberSaveable { mutableStateOf(Widgets.encode(Widgets.default())) }
+    val config = Widgets.decode(encoded)
+    val target = config.target
+    val theme = config.theme
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        if (state.user == null) Text("Sign in to BokyDo before choosing a list.")
         Text("What this widget shows", style = MaterialTheme.typography.titleMedium)
         val options = buildList {
             add(Widgets.Target.Today to "Today (overdue and today)")
@@ -95,25 +101,25 @@ private fun WidgetConfigScreen(state: AppState, onCancel: () -> Unit, onSave: (W
         }
         for ((option, label) in options) {
             Row(
-                Modifier.fillMaxWidth().clickable { target = option }.padding(vertical = 6.dp),
+                Modifier.fillMaxWidth().clickable { encoded = Widgets.encode(config.copy(target = option)) }.padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RadioButton(selected = target == option, onClick = { target = option })
+                RadioButton(selected = target == option, onClick = { encoded = Widgets.encode(config.copy(target = option)) })
                 Text(label)
             }
         }
         Text("Theme", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
-        for ((mode, label) in listOf("system" to "Follow system", "light" to "Light", "dark" to "Dark")) {
+        for ((mode, label) in listOf("system" to "Follow app", "light" to "Light", "dark" to "Dark")) {
             Row(
-                Modifier.fillMaxWidth().clickable { theme = mode }.padding(vertical = 6.dp),
+                Modifier.fillMaxWidth().clickable { encoded = Widgets.encode(config.copy(theme = mode)) }.padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RadioButton(selected = theme == mode, onClick = { theme = mode })
+                RadioButton(selected = theme == mode, onClick = { encoded = Widgets.encode(config.copy(theme = mode)) })
                 Text(label)
             }
         }
         Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = { onSave(Widgets.Config(target, theme, 100)) }) { Text("Save") }
+            Button(enabled = state.user != null, onClick = { onSave(Widgets.Config(target, theme, 100)) }) { Text("Save") }
             OutlinedButton(onClick = onCancel) { Text("Cancel") }
         }
     }

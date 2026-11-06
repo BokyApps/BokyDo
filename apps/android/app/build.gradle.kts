@@ -12,8 +12,9 @@ android {
         applicationId = "com.bokyapps.bokydo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -48,6 +49,7 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    androidTestImplementation("androidx.test:runner:1.5.0")
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

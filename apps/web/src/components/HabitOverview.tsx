@@ -26,7 +26,7 @@ export function HabitOverview({ onHide }: { onHide: () => void }) {
   return (
     <section
       aria-label={t('habits.overviewLabel', { defaultValue: 'Habits overview' })}
-      className="rounded-2xl border border-dashed border-accent/40 bg-accent/5 p-3 sm:p-4"
+      className="mt-8 rounded-2xl border border-dashed border-accent/40 bg-accent/5 p-3 sm:p-4"
     >
       <header className="mb-3 flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 font-semibold text-fg">
@@ -81,7 +81,7 @@ export function HabitOverview({ onHide }: { onHide: () => void }) {
         </div>
       )}
       {list.data && list.data.habits.length > 0 && (
-        <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-3">
           {list.data.habits.map((habit) => (
             <HabitItem
               key={habit.id}
@@ -133,7 +133,7 @@ function HabitItem({
       </button>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-fg">{habit.name}</p>
-        <p className="truncate text-xs text-muted">
+        <p className="text-xs leading-relaxed text-muted">
           {habit.period === 'day'
             ? t('habits.dailyTarget', { defaultValue: 'Every day' })
             : t('habits.weeklyTarget', {
