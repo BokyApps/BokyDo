@@ -272,14 +272,16 @@ export function TaskItem({
           >
             {selected && <span className="sr-only">{t('task.selected')}</span>}
             {due && (
-              <span className={`inline-flex items-center gap-1 ${TONE_CLASS[due.tone]}`}>
+              <span
+                className={`inline-flex items-center gap-1 ${task.isCompleted ? 'text-muted' : TONE_CLASS[due.tone]}`}
+              >
                 <CalendarIcon /> {due.label}
                 {task.due?.recurrence && <span aria-label={t('task.repeats')}>↻</span>}
               </span>
             )}
             {deadline && (
               <span
-                className={`inline-flex items-center gap-1 ${deadline.tone === 'overdue' ? 'text-danger' : ''}`}
+                className={`inline-flex items-center gap-1 ${task.isCompleted ? 'text-muted' : deadline.tone === 'overdue' ? 'text-danger' : ''}`}
                 title={t('task.deadline')}
               >
                 <DeadlineIcon /> {deadline.label}
