@@ -48,6 +48,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         sync: async (request: SyncRequest) => {
           const response = await api<SyncResponse>('POST', '/api/v1/sync', request);
           receivedServerResponse = true;
+          // History is fetched separately from sync (which only retains recent completions).
+          // Refresh every project/page after confirmed writes and live/reconnect catch-up.
+          // Cancel even an initial fetch: its pre-write snapshot must not win this refresh.
+          await queryClient.cancelQueries({ queryKey: ['completed'] });
+          void queryClient.invalidateQueries({ queryKey: ['completed'] });
           return response;
         },
       },
