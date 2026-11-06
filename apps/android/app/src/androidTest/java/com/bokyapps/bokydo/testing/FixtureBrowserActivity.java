@@ -75,6 +75,9 @@ public final class FixtureBrowserActivity extends Activity {
         settings.setSupportMultipleWindows(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                Log.i(TAG, "Loaded a local fixture page.");
+            }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return navigate(request.getUrl(), request.isForMainFrame());
             }
@@ -120,6 +123,7 @@ public final class FixtureBrowserActivity extends Activity {
             forwardCallback(uri);
         } else if (isFixture(uri)) {
             status.setText("Fixture browser: local OAuth flow");
+            Log.i(TAG, "Opened controlled fixture browser.");
             deadline = android.os.SystemClock.uptimeMillis() + 90000;
             webView.loadUrl(uri.toString());
             handler.postDelayed(automate, 400);
@@ -163,8 +167,14 @@ public final class FixtureBrowserActivity extends Activity {
                     fail("Refused automation outside the local fixture account.");
                     return;
                 }
-                if ("\"signing-in\"".equals(result)) status.setText("Fixture browser: submitting fixture sign in");
-                if ("\"allowing\"".equals(result)) status.setText("Fixture browser: approving native OAuth consent");
+                if ("\"signing-in\"".equals(result)) {
+                    status.setText("Fixture browser: submitting fixture sign in");
+                    Log.i(TAG, "Submitting fixture sign in.");
+                }
+                if ("\"allowing\"".equals(result)) {
+                    status.setText("Fixture browser: approving native OAuth consent");
+                    Log.i(TAG, "Approving fixture OAuth consent.");
+                }
                 handler.postDelayed(this, 400);
             });
         }
