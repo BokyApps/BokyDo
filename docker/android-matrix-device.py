@@ -130,7 +130,9 @@ if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in scenari
     helpers = cmd("logcat", "-d", "-v", "brief", "-s", "BokyDoMatrixBrowser:I",
                   "BokyDoMatrixHost:I", "ActivityTaskManager:W", "*:S")
     # Only disposable fixture logs are read; still omit callback/authorization URLs from CI.
-    diagnostic = "\n".join((crashes + "\n" + helpers).splitlines()[-180:])
+    lines = [line for line in (crashes + "\n" + helpers).splitlines()
+             if not re.search(r"\bcrashpad\s*:", line)]
+    diagnostic = "\n".join(lines[-180:])
     diagnostic = re.sub(r"(?:https?|com\.bokyapps\.bokydo):[^\s]+", "[fixture URL omitted]", diagnostic)
     print("Matrix process diagnostics:\n" + diagnostic, flush=True)
     raise AssertionError(scenario)

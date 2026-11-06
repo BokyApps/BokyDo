@@ -52,6 +52,7 @@ public final class MatrixWidgetHostActivity extends Activity {
         addButton(tabs, "Habits", view -> show(habits, "Habits"));
         layout.addView(tabs);
         Button configure = new Button(this);
+        configure.setAllCaps(false);
         configure.setText("Configure tasks");
         configure.setOnClickListener(view -> configureTasks());
         layout.addView(configure);
@@ -84,6 +85,7 @@ public final class MatrixWidgetHostActivity extends Activity {
 
     private void addButton(LinearLayout parent, String text, View.OnClickListener listener) {
         Button button = new Button(this);
+        button.setAllCaps(false);
         button.setText(text);
         button.setOnClickListener(listener);
         parent.addView(button, new LinearLayout.LayoutParams(0, -2, 1));
