@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.core.content.res.ResourcesCompat
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
@@ -29,7 +30,7 @@ import kotlin.math.ceil
  * retaining the full text as its accessibility label. Widget lists are capped to bound bitmap IPC.
  */
 @Composable
-internal fun WidgetText(text: String, modifier: GlanceModifier = GlanceModifier, style: TextStyle = TextStyle(), maxLines: Int = 1) {
+internal fun WidgetText(text: String, modifier: GlanceModifier = GlanceModifier, style: TextStyle = TextStyle(), maxLines: Int = 1, maxWidth: Dp? = null) {
     val context = LocalContext.current
     val metrics = context.resources.displayMetrics
     val font = context.app.lastState.user?.prefs?.appearance?.font ?: "inter"
@@ -44,7 +45,8 @@ internal fun WidgetText(text: String, modifier: GlanceModifier = GlanceModifier,
     }
     val size = (style.fontSize?.value ?: 14f) * metrics.scaledDensity
     val color = style.color.getColor(context).toArgb()
-    val available = ((LocalSize.current.width.value - 72).coerceAtLeast(60f) * metrics.density).toInt()
+    val availableDp = (LocalSize.current.width.value - 72).coerceAtLeast(60f)
+    val available = (minOf(availableDp, maxWidth?.value ?: availableDp).coerceAtLeast(1f) * metrics.density).toInt().coerceAtLeast(1)
     val bold = style.fontWeight == FontWeight.Bold || style.fontWeight == FontWeight.Medium
     val bitmap = remember(text, resource, size, color, available, bold, maxLines) {
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {

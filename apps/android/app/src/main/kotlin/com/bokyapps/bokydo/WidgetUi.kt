@@ -14,6 +14,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
+import androidx.glance.LocalSize
+import androidx.glance.Image
+import androidx.glance.ImageProvider
+import androidx.glance.ColorFilter
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
@@ -35,9 +39,9 @@ import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
-import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.text.FontWeight
@@ -105,9 +109,27 @@ private fun screen(state: AppState, config: Widgets.Config, dark: Boolean, today
 private fun todayIn(state: AppState): String =
     QuickAdd.localNow(state.user?.prefs?.timezone ?: state.user?.timeZone ?: "UTC").first
 
-/** Tapping the widget header or a row opens the app; the checkbox completes the task. */
+/** Opens task entry; nothing is saved until the user submits the sheet. */
 private fun quickAddIntent(context: Context) =
-    Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_QUICK_ADD, true)
+    Intent(context, MainActivity::class.java).setAction("com.bokyapps.bokydo.QUICK_ADD")
+        .putExtra(MainActivity.EXTRA_QUICK_ADD, true)
+
+/** Separate from quick add and list navigation, including when the app is already open. */
+@Composable
+internal fun WidgetOpenAppButton(modifier: GlanceModifier = GlanceModifier) {
+    val intent = Intent(LocalContext.current, MainActivity::class.java)
+        .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    Box(modifier.size(48.dp).clickable(actionStartActivity(intent)), contentAlignment = Alignment.Center) {
+        Image(ImageProvider(R.drawable.ic_launcher_foreground), "Open BokyDo", modifier = GlanceModifier.size(48.dp))
+    }
+}
+
+@Composable
+private fun WidgetAddTaskButton(intent: Intent, color: ColorProvider) {
+    Box(GlanceModifier.size(48.dp).clickable(actionStartActivity(intent)), contentAlignment = Alignment.Center) {
+        Image(ImageProvider(R.drawable.ic_widget_add), "Add task", modifier = GlanceModifier.size(24.dp), colorFilter = ColorFilter.tint(color))
+    }
+}
 
 /** The task-list widget. */
 class TodayWidget : GlanceAppWidget() {
@@ -123,6 +145,7 @@ class TodayWidget : GlanceAppWidget() {
 
 /** The quick-add widget: one tap opens the app with the add sheet already up. */
 class QuickAddWidget : GlanceAppWidget() {
+    override val sizeMode = SizeMode.Exact
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
             val state = widgetSnapshot().state
@@ -130,17 +153,15 @@ class QuickAddWidget : GlanceAppWidget() {
             val appearance = state.user?.prefs?.appearance ?: Appearance.DEFAULT
             val tokens = Widgets.tokens(appearance, "system", dark)
             val context = LocalContext.current
-            Box(
+            Row(
                 modifier = GlanceModifier.fillMaxSize()
-                    .background(provider(tokens.accent, 100))
-                    .clickable(actionStartActivity(quickAddIntent(context))),
-                contentAlignment = Alignment.Center,
+                    .background(provider(tokens.accent, 100)),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "＋ Add task",
-                    style = TextStyle(color = provider(tokens.accentFg, 100), fontWeight = FontWeight.Medium, fontSize = 14.sp),
-                    maxLines = 1,
-                )
+                Box(GlanceModifier.defaultWeight().fillMaxHeight().clickable(actionStartActivity(quickAddIntent(context))), contentAlignment = Alignment.Center) {
+                    Image(ImageProvider(R.drawable.ic_widget_add), "Add task", modifier = GlanceModifier.size(24.dp), colorFilter = ColorFilter.tint(provider(tokens.accentFg, 100)))
+                }
+                WidgetOpenAppButton(GlanceModifier.background(provider(tokens.bg, 100)))
             }
         }
     }
@@ -150,7 +171,12 @@ class QuickAddWidget : GlanceAppWidget() {
 private fun TaskWidgetContent(state: AppState, config: Widgets.Config, dark: Boolean, account: String?) {
     // Signed out: the widget shows nothing (and so no task titles) until the user signs in.
     if (state.user == null || account == null || LocalContext.current.app.accountEpoch() != account) {
-        Text("Sign in to see tasks", modifier = GlanceModifier.padding(12.dp).clickable(actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))))
+        Row(GlanceModifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(GlanceModifier.defaultWeight()) {
+                Text("Sign in to see tasks", modifier = GlanceModifier.clickable(actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))))
+            }
+            WidgetOpenAppButton()
+        }
         return
     }
 
@@ -170,19 +196,17 @@ private fun TaskWidgetContent(state: AppState, config: Widgets.Config, dark: Boo
         modifier = GlanceModifier.fillMaxSize().background(provider(tokens.bg, view.alpha)).padding(12.dp),
     ) {
         Row(modifier = GlanceModifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                view.title,
-                modifier = GlanceModifier.clickable(openApp),
-                style = TextStyle(color = provider(tokens.fg, view.alpha), fontWeight = FontWeight.Bold, fontSize = 16.sp),
-                maxLines = 1,
-            )
-            Spacer(GlanceModifier.size(8.dp))
-            Text(
-                "＋",
-                modifier = GlanceModifier.padding(8.dp).clickable(actionStartActivity(Intent(intent).putExtra(MainActivity.EXTRA_QUICK_ADD, true))),
-                style = TextStyle(color = provider(tokens.accent, view.alpha), fontWeight = FontWeight.Bold, fontSize = 18.sp),
-                maxLines = 1,
-            )
+            Box(GlanceModifier.defaultWeight()) {
+                Text(
+                    view.title,
+                    modifier = GlanceModifier.clickable(openApp),
+                    style = TextStyle(color = provider(tokens.fg, view.alpha), fontWeight = FontWeight.Bold, fontSize = 16.sp),
+                    maxLines = 1,
+                    maxWidth = (LocalSize.current.width - 120.dp).coerceAtLeast(1.dp),
+                )
+            }
+            WidgetAddTaskButton(Intent(intent).setAction("com.bokyapps.bokydo.QUICK_ADD").putExtra(MainActivity.EXTRA_QUICK_ADD, true), provider(tokens.accent, view.alpha))
+            WidgetOpenAppButton()
         }
         Text("Refresh", modifier = GlanceModifier.padding(vertical = 4.dp).clickable(actionRunCallback<RefreshWidgetsAction>()), style = TextStyle(color = provider(tokens.accent, view.alpha), fontSize = 12.sp))
         if (view.rows.isEmpty()) {

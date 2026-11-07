@@ -168,10 +168,26 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         click("Check full width");
         waitFor(n -> text(n, "Task widget fills full width above 360dp"), "unrestricted full-width task widget").recycle();
         step("Inbox, Today, Upcoming and project widgets with full-width rendering");
+        click("Compact layout");
+        waitFor(n -> text(n, "Add task") && withinWidget(n), "add action inside compact widget").recycle();
+        waitFor(n -> text(n, "Open BokyDo") && withinWidget(n), "app icon inside compact widget").recycle();
+        String widgetTask = "Matrix widget task api" + Build.VERSION.SDK_INT;
+        createTaskFromWidget(widgetTask);
+        open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
+        waitFor(n -> text(n, widgetTask), "task created in configured widget project").recycle();
+        step("task widget add opens quick add in the configured project");
         AccessibilityNodeInfo task = widgetCheckbox("Project fixture");
         clickNode(task);
         waitAbsent(n -> text(n, "Project fixture"), "completed task removal");
         step("task widget completion and redraw");
+        verifyWidgetOpenApp("Tasks");
+        clickNavigation("Inbox");
+        verifyWidgetOpenApp("Quick add");
+        open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
+        click("Quick add");
+        createTaskFromWidget("Matrix quick widget task api" + Build.VERSION.SDK_INT);
+        step("quick-add widget task entry stays separate from opening the app");
+        open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
         click("Habits");
         AccessibilityNodeInfo habit = widgetCheckbox("Daily widget habit");
         boolean previous = habit.isChecked();
@@ -184,6 +200,42 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
         waitFor(n -> text(n, "Manage habits"), "native Habits screen").recycle();
         step("widget-to-native Habits navigation");
+        verifyWidgetOpenApp("Habits");
+        step("all three widgets open the main app without opening task entry");
+    }
+
+    private void createTaskFromWidget(String title) throws Exception {
+        click("Add task");
+        AccessibilityNodeInfo edit = waitFor(AccessibilityNodeInfo::isEditable, "widget quick-add field");
+        Bundle value = new Bundle();
+        value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, title);
+        if (!edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, value)) throw new AssertionError("Set widget task name");
+        edit.recycle();
+        dismissKeyboard();
+        click("Add task");
+        waitFor(n -> text(n, "Added “" + title + "”"), "widget task creation acknowledgement").recycle();
+        click("Close sheet");
+    }
+
+    private boolean withinWidget(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo frame = find(n -> text(n, "Matrix widget frame"));
+        if (frame == null) return false;
+        try {
+            android.graphics.Rect bounds = new android.graphics.Rect();
+            android.graphics.Rect container = new android.graphics.Rect();
+            node.getBoundsInScreen(bounds);
+            frame.getBoundsInScreen(container);
+            return !bounds.isEmpty() && container.contains(bounds)
+                && container.width() <= Math.ceil(181 * getContext().getResources().getDisplayMetrics().density);
+        } finally { frame.recycle(); }
+    }
+
+    private void verifyWidgetOpenApp(String tab) throws Exception {
+        open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
+        click(tab);
+        click("Open BokyDo");
+        waitFor(n -> text(n, "Today fixture"), tab + " widget opens main Today view").recycle();
+        waitAbsent(AccessibilityNodeInfo::isEditable, tab + " app-open does not show quick add");
     }
 
     private void prepareUpdate() throws Exception {

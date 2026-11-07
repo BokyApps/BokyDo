@@ -26,6 +26,7 @@ public final class MatrixWidgetHostActivity extends Activity {
     private AppWidgetManager manager;
     private AppWidgetHostView tasks;
     private AppWidgetHostView habits;
+    private AppWidgetHostView quickAdd;
     private int tasksId = AppWidgetManager.INVALID_APPWIDGET_ID;
     private int habitsId = AppWidgetManager.INVALID_APPWIDGET_ID;
     private FrameLayout frame;
@@ -50,17 +51,20 @@ public final class MatrixWidgetHostActivity extends Activity {
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         addButton(tabs, "Tasks", view -> show(tasks, "Tasks"));
         addButton(tabs, "Habits", view -> show(habits, "Habits"));
+        addButton(tabs, "Quick add", view -> show(quickAdd, "Quick add"));
         layout.addView(tabs);
         Button configure = new Button(this);
         configure.setAllCaps(false);
         configure.setText("Configure tasks");
         configure.setOnClickListener(view -> configureTasks());
         layout.addView(configure);
-        Button width = new Button(this);
-        width.setAllCaps(false);
-        width.setText("Check full width");
-        width.setOnClickListener(view -> checkFullWidth());
-        layout.addView(width);
+        LinearLayout sizes = new LinearLayout(this);
+        addButton(sizes, "Check full width", view -> checkFullWidth());
+        addButton(sizes, "Compact layout", view -> {
+            frame.setLayoutParams(new LinearLayout.LayoutParams(dp(180), dp(320)));
+            show(tasks, "Tasks");
+        });
+        layout.addView(sizes);
         status = new TextView(this);
         status.setPadding(0, dp(8), 0, dp(8));
         layout.addView(status);
@@ -79,7 +83,8 @@ public final class MatrixWidgetHostActivity extends Activity {
             habitsId = bind("HabitWidgetReceiver");
             tasks = create(tasksId);
             habits = create(habitsId);
-            show("Habits".equals(selected) ? habits : tasks, selected);
+            quickAdd = create(bind("QuickAddWidgetReceiver"));
+            show("Habits".equals(selected) ? habits : "Quick add".equals(selected) ? quickAdd : tasks, selected);
         } catch (RuntimeException error) {
             fail("Could not initialize widgets (" + error.getClass().getSimpleName()
                 + "). Grant appwidget bind access to com.bokyapps.bokydo.test first.");
