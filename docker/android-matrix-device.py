@@ -217,7 +217,10 @@ if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in updated
                       "AndroidRuntime:E", "*:S")
     diagnostics = re.sub(r"(?:https?|com\.bokyapps\.bokydo):[^\s]+", "[fixture URL omitted]", diagnostics)
     print("Post-update widget diagnostics:\n" + diagnostics[-16000:], flush=True)
-    save("post-update-widgets.txt", cmd("shell", "dumpsys", "appwidget"))
+    save("post-update-widgets.json", json.dumps({
+        "appwidgets": cmd("shell", "dumpsys", "appwidget"),
+        "logs": diagnostics,
+    }, indent=2))
     raise AssertionError(updated)
 print(f"API {args.api}: signed-in process restart", flush=True)
 restart = subprocess.run([sys.executable, str(script)], env=dict(env, BOKYDO_ANDROID_EXPECT_TEXT="Today"), capture_output=True, text=True)
