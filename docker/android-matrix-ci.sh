@@ -62,8 +62,24 @@ for attempt in {1..240}; do
   sleep 1
 done
 test "$("$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell getprop sys.boot_completed | tr -d '\r')" = 1
-"$ADB" -s "$BOKYDO_ANDROID_SERIAL" root
-timeout 180 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" wait-for-device
+# adbd restarts when switching to root; recent images can close the transport before
+# the root command receives its reply. Recover that bounded startup race, then require
+# the actual device UID rather than treating a successful request as proof of root.
+root_ready=false
+for attempt in {1..6}; do
+  timeout 15 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" root || true
+  if timeout 15 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" wait-for-device; then
+    if [ "$(timeout 10 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell id -u 2>/dev/null | tr -d '\r')" = 0 ]; then
+      root_ready=true
+      break
+    fi
+  fi
+  sleep 1
+done
+if [ "$root_ready" != true ]; then
+  echo 'Disposable emulator did not become root after bounded ADB recovery.' >&2
+  exit 1
+fi
 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global window_animation_scale 0
 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global transition_animation_scale 0
 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global animator_duration_scale 0
