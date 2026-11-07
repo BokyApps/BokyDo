@@ -174,7 +174,10 @@ def tap_ui(label, timeout=120):
             cmd("shell", "uiautomator", "dump", "/data/local/tmp/bokydo-update-ui.xml", timeout=20)
             root = ET.fromstring(cmd("shell", "cat", "/data/local/tmp/bokydo-update-ui.xml"))
             for node in root.iter("node"):
-                if label not in (node.get("text"), node.get("content-desc")) or node.get("enabled") != "true":
+                # Native installer buttons may expose all-caps text (UPDATE) while
+                # Compose app controls retain title case. Match the complete label only.
+                labels = (node.get("text", "").casefold(), node.get("content-desc", "").casefold())
+                if label.casefold() not in labels or node.get("enabled") != "true":
                     continue
                 bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
                 if bounds:
