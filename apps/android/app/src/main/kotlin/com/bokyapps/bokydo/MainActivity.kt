@@ -143,6 +143,7 @@ private fun parseLaunch(intent: Intent?): Launch {
         "inbox" -> Route.Inbox
         "upcoming" -> Route.Upcoming
         "habits" -> Route.Habits
+        "settings" -> Route.Settings
         "project" -> intent.getStringExtra(MainActivity.EXTRA_PROJECT_ID)?.let { Route.Project(it) }
         "task" -> intent.getStringExtra(MainActivity.EXTRA_TASK_ID)?.let { Route.TaskDetail(it) }
         else -> null
@@ -272,6 +273,8 @@ fun SettingsScreen(state: AppState, onPickTimeZone: () -> Unit) {
             Button(onClick = { scope.launch { runCatching { app.sync() } } }) { Text("Sync now") }
             OutlinedButton(onClick = { scope.launch { app.signOut() } }) { Text("Sign out") }
         }
+        AppUpdateSettings()
+        HorizontalDivider()
         AppearanceSection(state)
         HorizontalDivider()
         Text("Time zone", style = MaterialTheme.typography.titleMedium)

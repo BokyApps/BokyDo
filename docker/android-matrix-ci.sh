@@ -103,11 +103,40 @@ else
   echo 'No published APK configured: this run covers the minified source candidate only.'
 fi
 
+# Build a newer version from the same source, signed with the same disposable key.
+# The first candidate remains the exact payload compared with the personal release above.
+base_code=$("$tools/aapt" dump badging "$task_tmp/app.apk" | sed -n "s/.*versionCode='\\([0-9]*\\)'.*/\\1/p" | head -1)
+base_version=$("$tools/aapt" dump badging "$task_tmp/app.apk" | sed -n "s/.*versionName='\\([^']*\\)'.*/\\1/p" | head -1)
+update_code=$((base_code + 1))
+update_version="$base_version-update-test"
+apps/android/gradlew -p apps/android --no-daemon --max-workers=2 \
+  -Dorg.gradle.jvmargs=-Xmx1600m -PbokydoVersionCode="$update_code" \
+  -PbokydoVersionName="$update_version" :app:assembleRelease
+"$tools/zipalign" -f -P 16 4 "$unsigned" "$task_tmp/update-aligned.apk"
+"$tools/apksigner" sign --ks "$task_tmp/test.p12" --ks-key-alias matrix \
+  --ks-pass pass:disposable-ci-only --out "$task_tmp/update.apk" "$task_tmp/update-aligned.apk"
+mkdir "$task_tmp/downloads"
+chmod 755 "$task_tmp/downloads"
+cp "$task_tmp/update.apk" "$task_tmp/downloads/bokydo-matrix-update.apk"
+python3 - "$task_tmp/downloads" "$update_code" "$update_version" <<'PYUPDATE'
+import hashlib,json,sys
+from pathlib import Path
+directory=Path(sys.argv[1]);apk=directory/'bokydo-matrix-update.apk'
+metadata={'version':sys.argv[3],'versionCode':int(sys.argv[2]),'url':'/downloads/'+apk.name,
+          'minAndroid':'8.0','minSdk':26,'sizeBytes':apk.stat().st_size,
+          'sha256':hashlib.sha256(apk.read_bytes()).hexdigest()}
+(directory/'android.json').write_text(json.dumps(metadata)+'\n')
+PYUPDATE
+chmod 644 "$task_tmp/downloads/"*
+export BOKYDO_MATRIX_DOWNLOADS="$task_tmp/downloads"
+
 cat > "$task_tmp/compose.yml" <<'YAML'
 services:
   app:
     ports: !override
       - '127.0.0.1:18090:8080'
+    volumes:
+      - '${BOKYDO_MATRIX_DOWNLOADS}:/app/public/downloads:ro'
 YAML
 "${compose[@]}" build app
 "${compose[@]}" up -d
@@ -129,5 +158,5 @@ if [ -f "$task_tmp/published.apk" ]; then
   "$ADB" -s "$BOKYDO_ANDROID_SERIAL" uninstall com.bokyapps.bokydo
 fi
 python3 docker/android-matrix-device.py --api "$MATRIX_API" \
-  --apk "$task_tmp/app.apk" --tests "$task_tmp/tests.apk" \
+  --apk "$task_tmp/app.apk" --tests "$task_tmp/tests.apk" --update-apk "$task_tmp/update.apk" \
   --fixture "$task_tmp/fixture.json" --output "$output"
