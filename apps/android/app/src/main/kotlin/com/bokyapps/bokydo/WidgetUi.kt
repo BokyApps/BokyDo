@@ -1,5 +1,7 @@
 package com.bokyapps.bokydo
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -27,7 +29,6 @@ import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.state.updateAppWidgetState
-import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.currentState
 import androidx.glance.layout.Alignment
@@ -265,8 +266,23 @@ internal suspend fun saveWidgetConfig(context: Context, appWidgetId: Int, config
 /** Redraw every placed instance after a sync or a queued change. */
 object WidgetRefresh {
     suspend fun updateAll(context: Context) {
-        TodayWidget().updateAll(context)
-        QuickAddWidget().updateAll(context)
-        HabitWidget().updateAll(context)
+        val framework = AppWidgetManager.getInstance(context)
+        val glance = GlanceAppWidgetManager(context)
+        // Manifest receiver names survive R8 and upgrades. Glance's cached widget class
+        // names can change between optimized releases and silently hide existing IDs.
+        val providers = listOf(
+            TodayWidgetReceiver::class.java to TodayWidget(),
+            QuickAddWidgetReceiver::class.java to QuickAddWidget(),
+            HabitWidgetReceiver::class.java to HabitWidget(),
+        )
+        for ((receiver, widget) in providers) {
+            for (id in framework.getAppWidgetIds(ComponentName(context, receiver))) {
+                val glanceId = try { glance.getGlanceIdBy(id) } catch (error: IllegalArgumentException) {
+                    // A launcher can remove a widget between enumeration and conversion.
+                    if (framework.getAppWidgetInfo(id) == null) continue else throw error
+                }
+                widget.update(context, glanceId)
+            }
+        }
     }
 }

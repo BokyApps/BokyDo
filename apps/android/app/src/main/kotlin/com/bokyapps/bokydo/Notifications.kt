@@ -10,12 +10,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.bokyapps.bokydo.core.Json
 import com.bokyapps.bokydo.core.Reminders
 import com.bokyapps.bokydo.core.ScheduledReminder
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -156,6 +159,24 @@ class SystemEventsReceiver : BroadcastReceiver() {
             Intent.ACTION_MY_PACKAGE_REPLACED,
             AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED,
             -> ReminderAlarms.reschedule(context, show = false)
+            else -> return
+        }
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED || intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            // Android discards cached RemoteViews when replacing the package. Rebuild the
+            // placed widgets from local data before the user opens the app or gets online.
+            val pending = goAsync()
+            val app = context.app
+            app.scope.launch {
+                try {
+                    withTimeout(8_000) { WidgetRefresh.updateAll(context.applicationContext) }
+                    Log.i("BokyDoWidgets", "Widgets refreshed after package update or boot")
+                } catch (error: Exception) {
+                    Log.w("BokyDoWidgets", "Widget refresh will retry with sync", error)
+                    runCatching { app.syncNow() }
+                } finally {
+                    pending.finish()
+                }
+            }
         }
     }
 }
