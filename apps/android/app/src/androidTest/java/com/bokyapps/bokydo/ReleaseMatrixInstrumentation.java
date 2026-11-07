@@ -123,7 +123,9 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
     }
 
     private void habitOverviews() throws Exception {
-        clickNavigation("Inbox");
+        // tasks() leaves Inbox selected. Compose need not expose a click action for the
+        // selected navigation item; verify its task content before exercising the overview.
+        waitFor(n -> text(n, "Inbox fixture"), "Inbox before habit overview").recycle();
         clickScrolled("Today: Weekly widget habit");
         waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "Inbox habit check-in").recycle();
         clickScrolled("Hide habits");
