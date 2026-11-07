@@ -49,6 +49,9 @@ describe('service worker routing', () => {
       '/.well-known/oauth-authorization-server',
       '/healthz',
       '/readyz',
+      '/downloads',
+      '/downloads/android.json',
+      '/downloads/bokydo-0.1.3.apk',
     ]) {
       expect(shouldIntercept(url(path), 'GET'), path).toBe(false);
     }
@@ -69,7 +72,7 @@ describe('service worker routing', () => {
   });
 
   it('intercepts the shell, hashed assets and navigations', () => {
-    for (const path of ['/', '/index.html', '/assets/index-abc.js', '/favicon.svg', '/today']) {
+    for (const path of ['/', '/index.html', '/assets/index-abc.js', '/favicon.png', '/today']) {
       expect(shouldIntercept(url(path), 'GET'), path).toBe(true);
     }
   });

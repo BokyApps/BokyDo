@@ -13,7 +13,8 @@
 const ASSETS = [
   '/',
   '/index.html',
-  '/favicon.svg',
+  '/favicon.png',
+  '/branding/bokydo-mark-small.png',
   '/manifest.webmanifest',
   '/icon-192.png',
   '/icon-512.png',
@@ -26,8 +27,8 @@ const SHELL = `bokydo-shell-${VERSION}`;
 // don't cache the dev modules or hijack HMR. The built worker replaces both at build time.
 const BUILT = VERSION !== '__BOKYDO_VERSION__';
 
-/** Paths the worker must never answer for: auth, sync, OAuth, discovery and the probes. */
-const NEVER = ['/api', '/mcp', '/oauth', '/.well-known', '/healthz', '/readyz'];
+/** Paths the worker must never answer for: auth, sync, OAuth, discovery, probes and release downloads. */
+const NEVER = ['/api', '/mcp', '/oauth', '/.well-known', '/healthz', '/readyz', '/downloads'];
 
 /** Should this request be served from the shell cache at all? Exposed for tests. */
 function shouldIntercept(url, method) {
@@ -122,7 +123,7 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(title, {
       body: typeof data.body === 'string' ? data.body : '',
       tag: typeof data.tag === 'string' ? data.tag : undefined,
-      icon: '/favicon.svg',
+      icon: '/icon-192.png',
       data: { url: safePath(data.url) },
     }),
   );
