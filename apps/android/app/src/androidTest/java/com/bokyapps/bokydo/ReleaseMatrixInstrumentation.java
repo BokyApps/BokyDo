@@ -130,9 +130,11 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "Inbox habit check-in").recycle();
         clickScrolled("Hide habits");
         waitFor(n -> text(n, "Show habits"), "hidden Inbox habits").recycle();
+        step("Inbox habit check-in and hide");
         clickNavigation("Today");
         clickScrolled("Hide habits");
         waitFor(n -> text(n, "Show habits"), "hidden Today habits").recycle();
+        step("independent Today habit hide");
         clickNavigation("Inbox");
         clickScrolled("Show habits");
         waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "shared Inbox habit state").recycle();
@@ -336,7 +338,22 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         return best;
     }
 
+    private boolean selectedNavigation(AccessibilityNodeInfo node, String label) {
+        if (!text(node, label)) return false;
+        AccessibilityNodeInfo cursor = AccessibilityNodeInfo.obtain(node);
+        try {
+            for (int depth = 0; cursor != null && depth < 5; depth++) {
+                if (cursor.isSelected()) return true;
+                AccessibilityNodeInfo parent = cursor.getParent();
+                cursor.recycle(); cursor = parent;
+            }
+            return false;
+        } finally { if (cursor != null) cursor.recycle(); }
+    }
+
     private void clickNavigation(String label) throws Exception {
+        AccessibilityNodeInfo selected = find(n -> selectedNavigation(n, label));
+        if (selected != null) { selected.recycle(); return; }
         waitFor(n -> text(n, label) && clickable(n), "navigation " + label).recycle();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
         if (root == null) throw new AssertionError("No active navigation window");
@@ -344,6 +361,9 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         try { target = bottomNavigation(root, label); } finally { root.recycle(); }
         if (target == null) throw new AssertionError("Missing navigation " + label);
         clickNode(target);
+        // Compose applies the new route asynchronously. Waiting for its selected tab keeps
+        // identical controls (such as Show habits) from being clicked on the outgoing page.
+        waitFor(n -> selectedNavigation(n, label), "selected navigation " + label).recycle();
     }
 
     private void clickScrolled(String label) throws Exception {
