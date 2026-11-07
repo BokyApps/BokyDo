@@ -75,8 +75,6 @@ public final class MatrixWidgetHostActivity extends Activity {
             host.deleteHost(); finish(); return;
         }
         try {
-            host.startListening();
-            listening = true;
             tasksId = bind("TodayWidgetReceiver");
             habitsId = bind("HabitWidgetReceiver");
             tasks = create(tasksId);
@@ -203,15 +201,27 @@ public final class MatrixWidgetHostActivity extends Activity {
         Log.e(TAG, message);
     }
 
-    @Override public void onDestroy() {
-        if (host != null) {
-            try {
-                if (listening) host.stopListening();
-            } catch (RuntimeException error) {
-                Log.e(TAG, "Could not release the matrix widget host ("
-                    + error.getClass().getSimpleName() + ").");
-            }
+    @Override public void onStart() {
+        super.onStart();
+        // Register views before listening and reconnect whenever this host becomes visible,
+        // like a launcher. This retrieves pending provider/view changes after an APK update.
+        if (host != null && !listening && tasks != null && habits != null) {
+            host.startListening();
+            listening = true;
         }
+    }
+
+    @Override public void onStop() {
+        if (host != null && listening) {
+            host.stopListening();
+            listening = false;
+        }
+        super.onStop();
+    }
+
+    @Override public void onDestroy() {
+        if (host != null && listening) host.stopListening();
+        listening = false;
         super.onDestroy();
     }
 }

@@ -189,6 +189,8 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
     private void prepareUpdate() throws Exception {
         clickNavigation("Browse");
         clickScrolled("Settings");
+        waitFor(n -> String.valueOf(n.getText()).startsWith("Update available: "),
+            "hosted newer release metadata").recycle();
         clickScrolled("Download update");
         waitFor(n -> text(n, "Install update") && clickable(n), "verified update ready to install").recycle();
         step("hosted update discovered, downloaded and verified");
@@ -368,13 +370,19 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
 
     private void clickScrolled(String label) throws Exception {
         long until = SystemClock.uptimeMillis() + 120_000;
+        boolean forward = true;
         while (SystemClock.uptimeMillis() < until) {
             AccessibilityNodeInfo target = find(n -> text(n, label) && clickable(n));
             if (target != null) { clickNode(target); return; }
             AccessibilityNodeInfo scroll = find(AccessibilityNodeInfo::isScrollable);
             if (scroll != null) {
-                scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                boolean moved = scroll.performAction(forward
+                    ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
                 scroll.recycle();
+                // An asynchronously loaded control may appear above our current position.
+                // Reverse at the list boundary rather than getting stuck below that control.
+                if (!moved) forward = !forward;
             }
             Thread.sleep(300);
         }
