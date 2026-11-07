@@ -94,8 +94,8 @@ assert project["name"] == "Widget project" and project["role"] == "owner"
 # Only reset the named records belonging to this disposable fixture, never a phone account.
 # Remove a previous failed attempt's marker so the final oracle cannot accept old data.
 for task in api("/api/v1/tasks")["tasks"]:
-    if (task["content"] == f"Matrix task api{args.api}"
-            and task["projectId"] == identity["user"]["inboxProjectId"]
+    if (task["content"] in {f"Matrix task api{args.api}", f"Matrix quick widget task api{args.api}", f"Matrix widget task api{args.api}"}
+            and task["projectId"] in {identity["user"]["inboxProjectId"], fixture["projectId"]}
             and task["createdById"] == identity["user"]["id"]):
         api("/api/v1/tasks/" + task["id"], "DELETE")
 for task in api("/api/v1/tasks?completed=true")["tasks"]:
@@ -238,6 +238,8 @@ for _ in range(30):
     habits = api("/api/v1/habits")["habits"]
     checks = {
         "createdTaskPersisted": any(t["content"] == f"Matrix task api{args.api}" for t in opened),
+        "taskWidgetCreatedInConfiguredProject": any(t["content"] == f"Matrix widget task api{args.api}" and t["projectId"] == fixture["projectId"] for t in opened),
+        "quickAddWidgetCreatedInInbox": any(t["content"] == f"Matrix quick widget task api{args.api}" and t["projectId"] == identity["user"]["inboxProjectId"] for t in opened),
         "widgetTaskCompletionPersisted": any(t["content"] == "Project fixture" for t in completed),
         "widgetHabitCheckInPersisted": any(h["id"] == fixture["habitId"] and h["todayCompleted"] for h in habits),
         "nativeHabitCheckInPersisted": any(h["name"] == "Weekly widget habit" and h["todayCompleted"] for h in habits),
@@ -260,6 +262,8 @@ result = {
     "nativeOAuth": True,
     "fourTaskWidgetViews": True,
     "unrestrictedFullWidthWidget": True,
+    "allWidgetsOpenMainApp": True,
+    "taskWidgetQuickAdd": True,
     "inboxAndTodayHabitOverviews": True,
     "inAppSystemUpdateRetainsDataAndWidgets": True,
     "updatedApkSha256": update_hash,

@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
+import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
@@ -27,8 +28,8 @@ import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
+import androidx.glance.layout.Box
 import androidx.glance.layout.Row
-import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
@@ -68,9 +69,11 @@ class HabitWidget : GlanceAppWidget() {
             val open = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java).putExtra(MainActivity.EXTRA_DESTINATION, "habits"))
             Column(GlanceModifier.fillMaxSize().background(ColorProvider(Color(tokens.bg))).padding(12.dp)) {
                 Row(GlanceModifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Habits", GlanceModifier.clickable(open), style = TextStyle(color = ColorProvider(Color(tokens.fg)), fontSize = 16.sp, fontWeight = FontWeight.Bold))
-                    Spacer(GlanceModifier.defaultWeight())
+                    Box(GlanceModifier.defaultWeight()) {
+                        Text("Habits", GlanceModifier.clickable(open), style = TextStyle(color = ColorProvider(Color(tokens.fg)), fontSize = 16.sp, fontWeight = FontWeight.Bold), maxWidth = (LocalSize.current.width - 120.dp).coerceAtLeast(1.dp))
+                    }
                     Text("↻", GlanceModifier.padding(8.dp).clickable(actionRunCallback<RefreshWidgetsAction>()), style = TextStyle(color = ColorProvider(Color(tokens.accent)), fontSize = 18.sp))
+                    WidgetOpenAppButton()
                 }
                 if (account == null || state.user == null || app.accountEpoch() != account) {
                     Text("Sign in to track habits.", GlanceModifier.clickable(open), style = TextStyle(color = ColorProvider(Color(tokens.muted))))
