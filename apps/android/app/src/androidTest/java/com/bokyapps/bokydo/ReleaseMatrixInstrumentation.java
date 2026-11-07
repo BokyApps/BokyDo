@@ -17,7 +17,7 @@ import java.util.List;
 /** Black-box matrix controller: framework Java only, against the exact installed release.
  * A privately signed test browser/host runs in the helper package, just like external apps.
  */
-public final class ReleaseMatrixInstrumentation extends Instrumentation {
+public class ReleaseMatrixInstrumentation extends Instrumentation {
     private static final String APP = "com.bokyapps.bokydo";
     private static final String HELPERS = APP + ".test";
     private final List<String> passed = new ArrayList<>();

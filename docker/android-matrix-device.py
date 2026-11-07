@@ -208,8 +208,10 @@ while time.monotonic() < deadline:
 else:
     capture_screen()
     raise AssertionError("The hosted APK was not installed through the system updater")
-updated = cmd("shell", "am", "instrument", "-w", "-r", "-e", "updatedOnly", "true",
-              "com.bokyapps.bokydo.test/com.bokyapps.bokydo.ReleaseMatrixInstrumentation", timeout=600)
+# Instrumenting the product force-stops it and clears widget RemoteViews. Target the
+# external helper package for this observation, leaving the updated provider untouched.
+updated = cmd("shell", "am", "instrument", "-w", "-r",
+              "com.bokyapps.bokydo.test/com.bokyapps.bokydo.WidgetRetentionInstrumentation", timeout=600)
 save("updated-state.txt", updated)
 if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in updated:
     capture_screen()
