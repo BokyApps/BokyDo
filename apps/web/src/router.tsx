@@ -239,6 +239,7 @@ const routeTree = rootRoute.addChildren([
     }),
     appPage('/settings/data', () => <SettingsPage initialTab="data" />),
     appPage('/settings/device', () => <SettingsPage initialTab="device" />),
+    appPage('/settings/mobile', () => <SettingsPage initialTab="mobile" />),
     appPage('/invitations', InvitationsPage),
     appPage('/join', JoinPage),
     projectRoute,

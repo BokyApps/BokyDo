@@ -1,5 +1,39 @@
 # Android release verification (A7a)
 
+## Hosting the Android download
+
+Settings → Mobile app reads `/downloads/android.json` from the same origin. Publish a signed,
+versioned APK there and publish the manifest atomically after verifying the APK. The manifest
+must use a local `/downloads/<filename>.apk` path; external download links are rejected.
+
+```json
+{
+  "version": "0.1.3",
+  "url": "/downloads/bokydo-0.1.3.apk",
+  "minAndroid": "8.0",
+  "sizeBytes": 12345678,
+  "sha256": "replace with the APK's 64-character lowercase SHA-256 hash"
+}
+```
+
+Use the actual file size and `sha256sum` output. Serve JSON as `application/json` with
+`Cache-Control: no-store`, and APKs as `application/vnd.android.package-archive`. For Caddy,
+mount a read-only directory at `/srv/downloads` and put this before the app reverse proxy:
+
+```caddyfile
+handle_path /downloads/* {
+    root * /srv/downloads
+    header /android.json Cache-Control "no-store"
+    file_server
+}
+```
+
+Keep each versioned APK immutable and use the same signing certificate for updates. Do not
+commit private signing keys or APKs to the source tree. Other installations can host their own
+build with this manifest; without one, the settings page explains that no download is available.
+The service worker never intercepts `/downloads`, so metadata stays fresh and APKs aren't cached
+as part of the offline app shell.
+
 How to check that a release APK is really built from the published source: build it twice
 and compare. This is also what `.github/workflows/android-reproducible.yml` does in CI.
 

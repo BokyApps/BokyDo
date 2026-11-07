@@ -8,7 +8,8 @@ const api = 'http://127.0.0.1:8080';
 
 /** Public files that are part of the app shell but aren't emitted by the bundler. */
 const STATIC_FILES = [
-  '/favicon.svg',
+  '/favicon.png',
+  '/branding/bokydo-mark-small.png',
   '/manifest.webmanifest',
   '/icon-192.png',
   '/icon-512.png',
