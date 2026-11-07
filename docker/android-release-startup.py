@@ -58,8 +58,18 @@ for attempt in range(3):
         capture_output=True, text=True, timeout=90,
     )
     if watched.returncode:
-        crash = command("logcat", "-b", "crash", "-d")
-        raise AssertionError(f"Release exited on cold start {attempt + 1}:\n{crash}")
+        def diagnostic(*parts):
+            try:
+                return command(*parts, timeout=15)
+            except (AssertionError, subprocess.TimeoutExpired) as error:
+                return f"Diagnostic unavailable: {error}"
+        crash = diagnostic("logcat", "-b", "crash", "-d")
+        exits = diagnostic("shell", "dumpsys", "activity", "exit-info", package)
+        raise AssertionError(
+            f"Release liveness probe failed on cold start {attempt + 1} "
+            f"(exit {watched.returncode}):\n{watched.stdout}\n{watched.stderr}"
+            f"\nCrash buffer:\n{crash}\nProcess exit history:\n{exits}"
+        )
     expected = os.environ.get("BOKYDO_ANDROID_EXPECT_TEXT", "Server address")
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:

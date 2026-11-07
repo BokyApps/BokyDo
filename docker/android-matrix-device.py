@@ -118,9 +118,10 @@ if args.reuse_installed:
 else:
     save("install.txt", cmd("install", "--no-incremental", "-r", str(args.apk), timeout=240)
          + cmd("install", "--no-incremental", "-r", "-t", str(args.tests), timeout=240))
-# A phone-sized host wider than the former 360dp provider cap exercises real resizing.
-cmd("shell", "wm", "size", "1080x1920")
-cmd("shell", "wm", "density", "400")
+# Display setup belongs to emulator provisioning, before APK installation/startup.
+# Do not trigger asynchronous configuration/process restarts during a cold-start gate.
+assert cmd("shell", "wm", "size").strip().splitlines()[-1].rsplit(":", 1)[-1].strip() == "1080x1920", "Provision a 1080x1920 display first"
+assert cmd("shell", "wm", "density").strip().splitlines()[-1].rsplit(":", 1)[-1].strip() == "400", "Provision density400 first"
 cmd("reverse", "tcp:18090", "tcp:18090")
 # Guard even WebView subresource redirects: the entire disposable device can only use loopback.
 # adb reverse uses the emulator transport and remains available without external IP egress.

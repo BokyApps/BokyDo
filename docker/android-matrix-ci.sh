@@ -85,6 +85,10 @@ fi
 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell settings put global animator_duration_scale 0
 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell input keyevent KEYCODE_WAKEUP
 "$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell wm dismiss-keyguard
+# Configure the phone-sized test display before installing or launching either APK.
+# Changing density immediately before a cold start can asynchronously restart its process.
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell wm size 1080x1920
+"$ADB" -s "$BOKYDO_ANDROID_SERIAL" shell wm density 400
 
 apps/android/gradlew -p apps/android --no-daemon --max-workers=2 \
   -Dorg.gradle.jvmargs=-Xmx1600m :app:assembleRelease :app:assembleDebugAndroidTest \

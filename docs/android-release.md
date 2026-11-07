@@ -202,6 +202,9 @@ Build the private platform-only controller and sign its test APK with the candid
 apps/android/gradlew -p apps/android :app:assembleDebugAndroidTest -PreleaseMatrixSmoke=true
 # zipalign and apksigner the test APK with the same certificate as the release.
 # Never publish this helper APK: it contains a browser limited to the local fixture.
+# Set the display during provisioning, before installing/starting the candidate.
+"$ANDROID_HOME/platform-tools/adb" -s emulator-5562 shell wm size 1080x1920
+"$ANDROID_HOME/platform-tools/adb" -s emulator-5562 shell wm density 400
 ADB="$ANDROID_HOME/platform-tools/adb" python3 docker/android-matrix-device.py \
   --api 35 --serial emulator-5562 --apk /private/candidate.apk \
   --update-apk /private/newer-same-certificate.apk --tests /private/matrix-tests.apk --fixture /private/widget-fixture.json \
