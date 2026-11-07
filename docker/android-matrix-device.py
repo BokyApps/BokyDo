@@ -212,6 +212,12 @@ updated = cmd("shell", "am", "instrument", "-w", "-r", "-e", "updatedOnly", "tru
 save("updated-state.txt", updated)
 if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in updated:
     capture_screen()
+    diagnostics = cmd("logcat", "-d", "-v", "brief", "-s", "BokyDoWidgets:I",
+                      "GlanceAppWidget:E", "GlanceAppWidgetReceiver:E", "WM-WorkerWrapper:E",
+                      "AndroidRuntime:E", "*:S")
+    diagnostics = re.sub(r"(?:https?|com\.bokyapps\.bokydo):[^\s]+", "[fixture URL omitted]", diagnostics)
+    print("Post-update widget diagnostics:\n" + diagnostics[-16000:], flush=True)
+    save("post-update-widgets.txt", cmd("shell", "dumpsys", "appwidget"))
     raise AssertionError(updated)
 print(f"API {args.api}: signed-in process restart", flush=True)
 restart = subprocess.run([sys.executable, str(script)], env=dict(env, BOKYDO_ANDROID_EXPECT_TEXT="Today"), capture_output=True, text=True)

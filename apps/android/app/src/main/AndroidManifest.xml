@@ -115,9 +115,10 @@
 
         <!--
           Boot, clock and time-zone changes, app updates, exact-alarm permission changes: all
-          protected broadcasts that only the system can send. The receiver only re-arms alarms.
+          protected broadcasts that only the system can send. The receiver re-arms alarms and
+          redraws placed widgets after app updates or boot.
         -->
-        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (system broadcasts only; it just re-arms alarms) -->
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (system broadcasts only; it re-arms alarms and refreshes existing widgets) -->
         <receiver android:name=".SystemEventsReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
