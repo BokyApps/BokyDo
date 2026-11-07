@@ -245,8 +245,8 @@ fun AppShell(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (route) {
-                Route.Inbox -> state.user?.let { ProjectList(state, it.inboxProjectId, today) { go(Route.TaskDetail(it)) } }
-                Route.Today -> TodayList(state, today) { go(Route.TaskDetail(it)) }
+                Route.Inbox -> state.user?.let { ProjectList(state, it.inboxProjectId, today, showHabits = true, onOpenHabits = { go(Route.Habits) }) { go(Route.TaskDetail(it)) } }
+                Route.Today -> TodayList(state, today, onOpenHabits = { go(Route.Habits) }) { go(Route.TaskDetail(it)) }
                 Route.Upcoming -> UpcomingList(state, today) { go(Route.TaskDetail(it)) }
                 Route.Habits -> HabitsScreen(state, today)
                 Route.Browse -> BrowseList(state) { go(it) }
@@ -300,12 +300,13 @@ fun AppShell(
 }
 
 @Composable
-private fun TodayList(state: AppState, today: String, onOpen: (String) -> Unit) {
+private fun TodayList(state: AppState, today: String, onOpenHabits: () -> Unit, onOpen: (String) -> Unit) {
     val lists = remember(state, today) { Views.today(state, today) }
-    if (lists.overdue.isEmpty() && lists.today.isEmpty()) return Empty("Nothing due today. Enjoy your day.")
     LazyColumn(contentPadding = PaddingValues(bottom = if (LocalCompact.current) 64.dp else 88.dp)) {
+        if (lists.overdue.isEmpty() && lists.today.isEmpty()) item { Text("Nothing due today. Enjoy your day.", Modifier.padding(24.dp)) }
         group("Overdue", lists.overdue, state, today, showProject = true, onOpen = onOpen)
         group(Dates.describe(today, null, today, state.prefs()).label, lists.today, state, today, showProject = true, onOpen = onOpen)
+        item(key = "habits-overview") { HabitOverview(state, today, "today", onOpenHabits) }
     }
 }
 
@@ -324,14 +325,17 @@ private fun UpcomingList(state: AppState, today: String, onOpen: (String) -> Uni
 }
 
 @Composable
-private fun ProjectList(state: AppState, projectId: String, today: String, onOpen: (String) -> Unit) {
+private fun ProjectList(state: AppState, projectId: String, today: String, showHabits: Boolean = false, onOpenHabits: () -> Unit = {}, onOpen: (String) -> Unit) {
     val groups = remember(state, projectId) { Views.projectTasks(state, projectId) }
-    if (groups.all { it.second.isEmpty() } && groups.size == 1) return Empty("No tasks here yet. Tap + to add one.")
+    val empty = groups.all { it.second.isEmpty() } && groups.size == 1
+    if (empty && !showHabits) return Empty("No tasks here yet. Tap + to add one.")
     LazyColumn(contentPadding = PaddingValues(bottom = if (LocalCompact.current) 64.dp else 88.dp)) {
+        if (empty) item { Text("No tasks here yet. Tap + to add one.", Modifier.padding(24.dp)) }
         for ((section, tasks) in groups) {
             if (section == null && tasks.isEmpty()) continue
             group(section?.name ?: "", tasks, state, today, showProject = false, showEmpty = section != null, onOpen = onOpen)
         }
+        if (showHabits) item(key = "habits-overview") { HabitOverview(state, today, "inbox", onOpenHabits) }
     }
 }
 

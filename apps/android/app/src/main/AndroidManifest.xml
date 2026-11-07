@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Reminders are exact alarms set on the device; the user can deny this, then they may be late. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Alarms don't survive a reboot: re-arm them. -->
@@ -85,6 +86,14 @@
             </intent-filter>
         </activity>
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_file_paths" />
+        </provider>
+
         <receiver android:name=".ReminderAlarmReceiver" android:exported="false" />
         <receiver android:name=".NotificationActionReceiver" android:exported="false" />
 
@@ -106,9 +115,10 @@
 
         <!--
           Boot, clock and time-zone changes, app updates, exact-alarm permission changes: all
-          protected broadcasts that only the system can send. The receiver only re-arms alarms.
+          protected broadcasts that only the system can send. The receiver re-arms alarms and
+          redraws placed widgets after app updates or boot.
         -->
-        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (system broadcasts only; it just re-arms alarms) -->
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity (system broadcasts only; it re-arms alarms and refreshes existing widgets) -->
         <receiver android:name=".SystemEventsReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

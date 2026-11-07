@@ -56,6 +56,11 @@ public final class MatrixWidgetHostActivity extends Activity {
         configure.setText("Configure tasks");
         configure.setOnClickListener(view -> configureTasks());
         layout.addView(configure);
+        Button width = new Button(this);
+        width.setAllCaps(false);
+        width.setText("Check full width");
+        width.setOnClickListener(view -> checkFullWidth());
+        layout.addView(width);
         status = new TextView(this);
         status.setPadding(0, dp(8), 0, dp(8));
         layout.addView(status);
@@ -70,8 +75,6 @@ public final class MatrixWidgetHostActivity extends Activity {
             host.deleteHost(); finish(); return;
         }
         try {
-            host.startListening();
-            listening = true;
             tasksId = bind("TodayWidgetReceiver");
             habitsId = bind("HabitWidgetReceiver");
             tasks = create(tasksId);
@@ -139,6 +142,19 @@ public final class MatrixWidgetHostActivity extends Activity {
         });
     }
 
+    private void checkFullWidth() {
+        AppWidgetProviderInfo info = manager.getAppWidgetInfo(tasksId);
+        if (info == null || (Build.VERSION.SDK_INT >= 31 && info.maxResizeWidth > 0)) {
+            fail("Task provider still limits horizontal resizing."); return;
+        }
+        int available = tasks.getWidth() - tasks.getPaddingLeft() - tasks.getPaddingRight();
+        View content = tasks.getChildCount() == 1 ? tasks.getChildAt(0) : null;
+        if (available <= dp(360) || content == null || Math.abs(content.getWidth() - available) > dp(2)) {
+            fail("Task content did not fill a host wider than 360dp."); return;
+        }
+        status.setText("Task widget fills full width above 360dp");
+    }
+
     private void configureTasks() {
         if (tasksId == AppWidgetManager.INVALID_APPWIDGET_ID || tasks == null) {
             fail("The tasks widget must be bound before configuration.");
@@ -185,15 +201,27 @@ public final class MatrixWidgetHostActivity extends Activity {
         Log.e(TAG, message);
     }
 
-    @Override public void onDestroy() {
-        if (host != null) {
-            try {
-                if (listening) host.stopListening();
-            } catch (RuntimeException error) {
-                Log.e(TAG, "Could not release the matrix widget host ("
-                    + error.getClass().getSimpleName() + ").");
-            }
+    @Override public void onStart() {
+        super.onStart();
+        // Register views before listening and reconnect whenever this host becomes visible,
+        // like a launcher. This retrieves pending provider/view changes after an APK update.
+        if (host != null && !listening && tasks != null && habits != null) {
+            host.startListening();
+            listening = true;
         }
+    }
+
+    @Override public void onStop() {
+        if (host != null && listening) {
+            host.stopListening();
+            listening = false;
+        }
+        super.onStop();
+    }
+
+    @Override public void onDestroy() {
+        if (host != null && listening) host.stopListening();
+        listening = false;
         super.onDestroy();
     }
 }

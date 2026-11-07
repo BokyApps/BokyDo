@@ -32,7 +32,9 @@ public final class FixtureBrowserActivity extends Activity {
     // LoginPage uses React-controlled TextFields. Use the native input setter and bubbled
     // events, then click the real form submit button; ConsentPage's real Allow button follows.
     private static final String AUTOMATE =
-        "(function(){if(location.origin!=='http://127.0.0.1:18090')return 'blocked';"
+        // A newly created WebView remains about:blank until its first navigation commits.
+        // Waiting there performs no form actions; every loaded origin is still checked.
+        "(function(){if(location.href==='about:blank')return 'waiting';if(location.origin!=='http://127.0.0.1:18090')return 'blocked';"
         + "var p=document.querySelector('input[type=password]');"
         + "if(p){var f=p.closest('form');if(!f)return 'waiting';"
         + "var u=f.querySelector('input[autocomplete~=username]');"
@@ -163,8 +165,12 @@ public final class FixtureBrowserActivity extends Activity {
             }
             webView.evaluateJavascript(AUTOMATE, result -> {
                 if (stopped) return;
-                if ("\"blocked\"".equals(result) || "\"wrong-account\"".equals(result)) {
-                    fail("Refused automation outside the local fixture account.");
+                if ("\"blocked\"".equals(result)) {
+                    fail("Refused automation outside the local fixture origin.");
+                    return;
+                }
+                if ("\"wrong-account\"".equals(result)) {
+                    fail("Refused consent for another account.");
                     return;
                 }
                 if ("\"signing-in\"".equals(result)) {

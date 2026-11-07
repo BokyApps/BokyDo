@@ -1,0 +1,1 @@
+Task widgets can expand to full home-screen width. Inbox and Today show a separate habit tracker with check-ins and hide toggles. Check for updates from your BokyDo server in app settings; install newer APKs without losing sign-in or widgets.

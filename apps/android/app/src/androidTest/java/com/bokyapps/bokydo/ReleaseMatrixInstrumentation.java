@@ -17,7 +17,7 @@ import java.util.List;
 /** Black-box matrix controller: framework Java only, against the exact installed release.
  * A privately signed test browser/host runs in the helper package, just like external apps.
  */
-public final class ReleaseMatrixInstrumentation extends Instrumentation {
+public class ReleaseMatrixInstrumentation extends Instrumentation {
     private static final String APP = "com.bokyapps.bokydo";
     private static final String HELPERS = APP + ".test";
     private final List<String> passed = new ArrayList<>();
@@ -56,12 +56,16 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
             service.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             ui.setServiceInfo(service);
-            if ("true".equals(arguments.getString("widgetsOnly"))) {
+            if ("true".equals(arguments.getString("updatedOnly"))) {
+                updatedState();
+            } else if ("true".equals(arguments.getString("widgetsOnly"))) {
                 widgets();
             } else {
                 signIn();
                 tasks();
+                habitOverviews();
                 widgets();
+                prepareUpdate();
             }
             result.putString("stream", "PASS Android API " + Build.VERSION.SDK_INT + ": " + String.join(", ", passed));
             finish(Activity.RESULT_OK, result);
@@ -118,6 +122,28 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         step("quick add and task rendering");
     }
 
+    private void habitOverviews() throws Exception {
+        // tasks() leaves Inbox selected. Compose need not expose a click action for the
+        // selected navigation item; verify its task content before exercising the overview.
+        waitFor(n -> text(n, "Inbox fixture"), "Inbox before habit overview").recycle();
+        clickScrolled("Today: Weekly widget habit");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "Inbox habit check-in").recycle();
+        clickScrolled("Hide habits");
+        waitFor(n -> text(n, "Show habits"), "hidden Inbox habits").recycle();
+        step("Inbox habit check-in and hide");
+        clickNavigation("Today");
+        clickScrolled("Hide habits");
+        waitFor(n -> text(n, "Show habits"), "hidden Today habits").recycle();
+        step("independent Today habit hide");
+        clickNavigation("Inbox");
+        clickScrolled("Show habits");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "shared Inbox habit state").recycle();
+        clickNavigation("Today");
+        clickScrolled("Show habits");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "shared Today habit state").recycle();
+        step("Inbox and Today habit overviews, check-ins and independent hide toggles");
+    }
+
     private void widgets() throws Exception {
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
         waitFor(n -> text(n, "Configure tasks"), "widget host").recycle();
@@ -139,7 +165,9 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
                 waitAbsent(n -> text(n, excluded), "excluded task " + excluded);
             }
         }
-        step("Inbox, Today, Upcoming and project widgets");
+        click("Check full width");
+        waitFor(n -> text(n, "Task widget fills full width above 360dp"), "unrestricted full-width task widget").recycle();
+        step("Inbox, Today, Upcoming and project widgets with full-width rendering");
         AccessibilityNodeInfo task = widgetCheckbox("Project fixture");
         clickNode(task);
         waitAbsent(n -> text(n, "Project fixture"), "completed task removal");
@@ -156,6 +184,30 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
         waitFor(n -> text(n, "Manage habits"), "native Habits screen").recycle();
         step("widget-to-native Habits navigation");
+    }
+
+    private void prepareUpdate() throws Exception {
+        clickNavigation("Browse");
+        clickScrolled("Settings");
+        waitFor(n -> String.valueOf(n.getText()).startsWith("Update available: "),
+            "hosted newer release metadata").recycle();
+        clickScrolled("Download update");
+        waitFor(n -> text(n, "Install update") && clickable(n), "verified update ready to install").recycle();
+        step("hosted update discovered, downloaded and verified");
+    }
+
+    private void updatedState() throws Exception {
+        open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
+        click("Tasks");
+        waitFor(n -> text(n, "Widget project"), "retained project widget configuration").recycle();
+        click("Habits");
+        waitFor(n -> checkboxMatches(n, "Daily widget habit", true), "retained habit widget check-in").recycle();
+        clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
+        waitFor(n -> text(n, "Manage habits"), "retained sign-in").recycle();
+        clickNavigation("Today");
+        clickScrolled("Manage habits");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "retained native habit check-in").recycle();
+        step("updated app retains sign-in, project widget configuration and habit check-ins");
     }
 
     // Glance puts the accessible label on a FrameLayout around its native CheckBox.
@@ -288,7 +340,22 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         return best;
     }
 
+    private boolean selectedNavigation(AccessibilityNodeInfo node, String label) {
+        if (!text(node, label)) return false;
+        AccessibilityNodeInfo cursor = AccessibilityNodeInfo.obtain(node);
+        try {
+            for (int depth = 0; cursor != null && depth < 5; depth++) {
+                if (cursor.isSelected()) return true;
+                AccessibilityNodeInfo parent = cursor.getParent();
+                cursor.recycle(); cursor = parent;
+            }
+            return false;
+        } finally { if (cursor != null) cursor.recycle(); }
+    }
+
     private void clickNavigation(String label) throws Exception {
+        AccessibilityNodeInfo selected = find(n -> selectedNavigation(n, label));
+        if (selected != null) { selected.recycle(); return; }
         waitFor(n -> text(n, label) && clickable(n), "navigation " + label).recycle();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
         if (root == null) throw new AssertionError("No active navigation window");
@@ -296,17 +363,26 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         try { target = bottomNavigation(root, label); } finally { root.recycle(); }
         if (target == null) throw new AssertionError("Missing navigation " + label);
         clickNode(target);
+        // Compose applies the new route asynchronously. Waiting for its selected tab keeps
+        // identical controls (such as Show habits) from being clicked on the outgoing page.
+        waitFor(n -> selectedNavigation(n, label), "selected navigation " + label).recycle();
     }
 
     private void clickScrolled(String label) throws Exception {
         long until = SystemClock.uptimeMillis() + 120_000;
+        boolean forward = true;
         while (SystemClock.uptimeMillis() < until) {
             AccessibilityNodeInfo target = find(n -> text(n, label) && clickable(n));
             if (target != null) { clickNode(target); return; }
             AccessibilityNodeInfo scroll = find(AccessibilityNodeInfo::isScrollable);
             if (scroll != null) {
-                scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                boolean moved = scroll.performAction(forward
+                    ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
                 scroll.recycle();
+                // An asynchronously loaded control may appear above our current position.
+                // Reverse at the list boundary rather than getting stuck below that control.
+                if (!moved) forward = !forward;
             }
             Thread.sleep(300);
         }
