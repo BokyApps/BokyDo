@@ -56,6 +56,11 @@ public final class MatrixWidgetHostActivity extends Activity {
         configure.setText("Configure tasks");
         configure.setOnClickListener(view -> configureTasks());
         layout.addView(configure);
+        Button width = new Button(this);
+        width.setAllCaps(false);
+        width.setText("Check full width");
+        width.setOnClickListener(view -> checkFullWidth());
+        layout.addView(width);
         status = new TextView(this);
         status.setPadding(0, dp(8), 0, dp(8));
         layout.addView(status);
@@ -137,6 +142,19 @@ public final class MatrixWidgetHostActivity extends Activity {
             int width = Math.max(1, (int) (frame.getWidth() / getResources().getDisplayMetrics().density));
             view.updateAppWidgetSize(null, width, 320, width, 320);
         });
+    }
+
+    private void checkFullWidth() {
+        AppWidgetProviderInfo info = manager.getAppWidgetInfo(tasksId);
+        if (info == null || (Build.VERSION.SDK_INT >= 31 && info.maxResizeWidth > 0)) {
+            fail("Task provider still limits horizontal resizing."); return;
+        }
+        int available = tasks.getWidth() - tasks.getPaddingLeft() - tasks.getPaddingRight();
+        View content = tasks.getChildCount() == 1 ? tasks.getChildAt(0) : null;
+        if (available <= dp(360) || content == null || Math.abs(content.getWidth() - available) > dp(2)) {
+            fail("Task content did not fill a host wider than 360dp."); return;
+        }
+        status.setText("Task widget fills full width above 360dp");
     }
 
     private void configureTasks() {

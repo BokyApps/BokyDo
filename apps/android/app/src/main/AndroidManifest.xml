@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Reminders are exact alarms set on the device; the user can deny this, then they may be late. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Alarms don't survive a reboot: re-arm them. -->
@@ -84,6 +85,14 @@
                 <data android:scheme="com.bokyapps.bokydo" />
             </intent-filter>
         </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_file_paths" />
+        </provider>
 
         <receiver android:name=".ReminderAlarmReceiver" android:exported="false" />
         <receiver android:name=".NotificationActionReceiver" android:exported="false" />

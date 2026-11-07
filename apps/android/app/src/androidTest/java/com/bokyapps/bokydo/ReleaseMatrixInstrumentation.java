@@ -56,12 +56,16 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
             service.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             ui.setServiceInfo(service);
-            if ("true".equals(arguments.getString("widgetsOnly"))) {
+            if ("true".equals(arguments.getString("updatedOnly"))) {
+                updatedState();
+            } else if ("true".equals(arguments.getString("widgetsOnly"))) {
                 widgets();
             } else {
                 signIn();
                 tasks();
+                habitOverviews();
                 widgets();
+                prepareUpdate();
             }
             result.putString("stream", "PASS Android API " + Build.VERSION.SDK_INT + ": " + String.join(", ", passed));
             finish(Activity.RESULT_OK, result);
@@ -118,6 +122,24 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         step("quick add and task rendering");
     }
 
+    private void habitOverviews() throws Exception {
+        clickNavigation("Inbox");
+        clickScrolled("Today: Weekly widget habit");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "Inbox habit check-in").recycle();
+        clickScrolled("Hide habits");
+        waitFor(n -> text(n, "Show habits"), "hidden Inbox habits").recycle();
+        clickNavigation("Today");
+        clickScrolled("Hide habits");
+        waitFor(n -> text(n, "Show habits"), "hidden Today habits").recycle();
+        clickNavigation("Inbox");
+        clickScrolled("Show habits");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "shared Inbox habit state").recycle();
+        clickNavigation("Today");
+        clickScrolled("Show habits");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "shared Today habit state").recycle();
+        step("Inbox and Today habit overviews, check-ins and independent hide toggles");
+    }
+
     private void widgets() throws Exception {
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
         waitFor(n -> text(n, "Configure tasks"), "widget host").recycle();
@@ -139,7 +161,9 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
                 waitAbsent(n -> text(n, excluded), "excluded task " + excluded);
             }
         }
-        step("Inbox, Today, Upcoming and project widgets");
+        click("Check full width");
+        waitFor(n -> text(n, "Task widget fills full width above 360dp"), "unrestricted full-width task widget").recycle();
+        step("Inbox, Today, Upcoming and project widgets with full-width rendering");
         AccessibilityNodeInfo task = widgetCheckbox("Project fixture");
         clickNode(task);
         waitAbsent(n -> text(n, "Project fixture"), "completed task removal");
@@ -156,6 +180,28 @@ public final class ReleaseMatrixInstrumentation extends Instrumentation {
         clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
         waitFor(n -> text(n, "Manage habits"), "native Habits screen").recycle();
         step("widget-to-native Habits navigation");
+    }
+
+    private void prepareUpdate() throws Exception {
+        clickNavigation("Browse");
+        clickScrolled("Settings");
+        clickScrolled("Download update");
+        waitFor(n -> text(n, "Install update") && clickable(n), "verified update ready to install").recycle();
+        step("hosted update discovered, downloaded and verified");
+    }
+
+    private void updatedState() throws Exception {
+        open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
+        click("Tasks");
+        waitFor(n -> text(n, "Widget project"), "retained project widget configuration").recycle();
+        click("Habits");
+        waitFor(n -> checkboxMatches(n, "Daily widget habit", true), "retained habit widget check-in").recycle();
+        clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
+        waitFor(n -> text(n, "Manage habits"), "retained sign-in").recycle();
+        clickNavigation("Today");
+        clickScrolled("Manage habits");
+        waitFor(n -> checkboxMatches(n, "Today: Weekly widget habit", true), "retained native habit check-in").recycle();
+        step("updated app retains sign-in, project widget configuration and habit check-ins");
     }
 
     // Glance puts the accessible label on a FrameLayout around its native CheckBox.

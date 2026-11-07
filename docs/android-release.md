@@ -8,15 +8,23 @@ must use a local `/downloads/<filename>.apk` path; external download links are r
 
 ```json
 {
-  "version": "0.1.3",
-  "url": "/downloads/bokydo-0.1.3.apk",
+  "version": "0.1.4",
+  "versionCode": 5,
+  "url": "/downloads/bokydo-0.1.4.apk",
   "minAndroid": "8.0",
+  "minSdk": 26,
   "sizeBytes": 12345678,
   "sha256": "replace with the APK's 64-character lowercase SHA-256 hash"
 }
 ```
 
-Use the actual file size and `sha256sum` output. Serve JSON as `application/json` with
+Use the APK's actual `versionCode` (an increasing integer), `minSdk` API level, file size and
+`sha256sum` output. `minAndroid` is the human-readable Android version. Android Settings → App
+updates checks this same manifest, downloads newer releases without session credentials, verifies
+the checksum, APK package/version and signing certificate, then opens Android's update installer.
+The first update may require allowing installs from BokyDo in Android settings. Installing over
+the existing app keeps its data and widgets. Existing versions before0.1.4 need one manual update
+to gain this updater. All future APKs must keep the same signing certificate. Serve JSON as `application/json` with
 `Cache-Control: no-store`, and APKs as `application/vnd.android.package-archive`. For Caddy,
 mount a read-only directory at `/srv/downloads` and put this before the app reverse proxy:
 
@@ -182,7 +190,10 @@ be selected against a release. The signed test APK is a private verification art
 `docker/android-matrix-device.py` exercises the exact signed APK on disposable stock Android
 14, 15 and 16 emulators (API 34–36). It verifies three fresh cold starts, native OAuth sign-in
 and task creation, Inbox/Today/Upcoming/project widgets, task completion, habit check-ins and
-widget navigation, then three signed-in process restarts. An independent backend read checks
+widget navigation, Inbox/Today habit sections with check-in and hide controls, and full-width
+widget rendering beyond360dp. It also downloads and installs a newer same-certificate APK through
+Android's system installer, checks retained sign-in/check-ins/widget configuration, then verifies
+three signed-in process restarts. An independent backend read checks
 that the created task and widget actions persisted. It retains application data between starts.
 
 Build the private platform-only controller and sign its test APK with the candidate's certificate:
@@ -193,9 +204,16 @@ apps/android/gradlew -p apps/android :app:assembleDebugAndroidTest -PreleaseMatr
 # Never publish this helper APK: it contains a browser limited to the local fixture.
 ADB="$ANDROID_HOME/platform-tools/adb" python3 docker/android-matrix-device.py \
   --api 35 --serial emulator-5562 --apk /private/candidate.apk \
-  --tests /private/matrix-tests.apk --fixture /private/widget-fixture.json \
+  --update-apk /private/newer-same-certificate.apk --tests /private/matrix-tests.apk --fixture /private/widget-fixture.json \
   --output /private/matrix-results/api35
 ```
+
+The fixture must also serve `/downloads/android.json` and a strictly newer same-certificate APK
+matching its version, package, size and checksum. `docker/android-matrix-ci.sh` builds this
+throwaway upgrade using the `bokydoVersionCode`/`bokydoVersionName` Gradle overrides, mounts it
+read-only under the fixture's static downloads directory, and never publishes it. The test uses
+a432dp display and grants install-from-this-app permission on the disposable emulator; Android's
+actual update confirmation remains part of the UI flow.
 
 Prepare the fresh loopback fixture with `android-widgets-fixture.mjs`, as above. Its account is
 `widget-fixture`, and its credentials are deliberately public test data. Each matrix row resets
