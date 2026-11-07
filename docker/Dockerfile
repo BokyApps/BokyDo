@@ -28,9 +28,30 @@ RUN pnpm -r build \
  && chmod 0755 /cli/bokydo \
  && mkdir -m 0700 /skel-data /skel-db-secret
 
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:ec2313763dd43931543bd03830466e0c409ce73a487e8d46f10db72d3b816c1c AS runtime-base
+
+# Distroless has not incorporated DSA-6613-1 yet. Download the exact fixed package
+# through Debian's signed repository and carry its library and inventory together.
+FROM build AS runtime-security
+# The slim build image omits system CAs; reuse the runtime's trust store for HTTPS APT.
+COPY --from=runtime-base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN printf 'deb https://security.debian.org/debian-security trixie-security main\n' > /tmp/security.list \
+ && apt-get update -o Dir::Etc::sourcelist=/tmp/security.list -o Dir::Etc::sourceparts=- -o APT::Update::Error-Mode=any \
+ && mkdir /zlib-download /runtime-security \
+ && cd /zlib-download \
+ && apt-get install --download-only --no-install-recommends -y \
+      -o Dir::Etc::sourcelist=/tmp/security.list -o Dir::Etc::sourceparts=- \
+      -o Dir::Cache::archives=/zlib-download 'zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1' \
+ && dpkg-deb -x ./*.deb /runtime-security \
+ && mkdir -p /runtime-security/var/lib/dpkg/status.d /package-metadata \
+ && dpkg-deb -f ./*.deb > /runtime-security/var/lib/dpkg/status.d/zlib1g \
+ && dpkg-deb -e ./*.deb /package-metadata \
+ && cp /package-metadata/md5sums /runtime-security/var/lib/dpkg/status.d/zlib1g.md5sums
+
 # ---- runtime -------------------------------------------------------------------------------------
 # Distroless: no shell, no package manager, runs as uid 65532.
-FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:ec2313763dd43931543bd03830466e0c409ce73a487e8d46f10db72d3b816c1c
+FROM runtime-base AS runtime
+COPY --from=runtime-security /runtime-security/ /
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /out/package.json ./package.json
