@@ -189,11 +189,11 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         clickNavigation("Inbox");
         verifyWidgetOpenApp("Quick add");
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click("Quick add");
+        selectWidget("Quick add");
         createTaskFromWidget("Matrix quick widget task api" + Build.VERSION.SDK_INT);
         step("quick-add widget task entry stays separate from opening the app");
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click("Habits");
+        selectWidget("Habits");
         AccessibilityNodeInfo habit = widgetCheckbox("Daily widget habit");
         boolean previous = habit.isChecked();
         clickNode(habit);
@@ -238,10 +238,24 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
 
     private void verifyWidgetOpenApp(String tab) throws Exception {
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click(tab);
+        selectWidget(tab);
         click("Open BokyDo");
         waitFor(n -> text(n, "Today fixture"), tab + " widget opens main Today view").recycle();
         waitAbsent(AccessibilityNodeInfo::isEditable, tab + " app-open does not show quick add");
+    }
+
+    private void selectWidget(String tab) throws Exception {
+        String prefix = tab + " widget; tasks ID ";
+        AccessibilityNodeInfo selected = find(n -> String.valueOf(n.getText()).startsWith(prefix));
+        if (selected != null) {
+            selected.recycle();
+        } else {
+            click(tab);
+            waitFor(n -> String.valueOf(n.getText()).startsWith(prefix), "selected widget " + tab).recycle();
+        }
+        // The host attaches a different RemoteViews tree and posts a size update.
+        // Let those events settle before resolving an identical action label again.
+        ui.waitForIdle(500, 10_000);
     }
 
     private void prepareUpdate() throws Exception {
@@ -256,9 +270,9 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
 
     private void updatedState() throws Exception {
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click("Tasks");
+        selectWidget("Tasks");
         waitFor(n -> text(n, "Widget project"), "retained project widget configuration").recycle();
-        click("Habits");
+        selectWidget("Habits");
         waitFor(n -> checkboxMatches(n, "Daily widget habit", true), "retained habit widget check-in").recycle();
         clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
         waitFor(n -> text(n, "Manage habits"), "retained sign-in").recycle();
