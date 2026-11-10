@@ -111,15 +111,20 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         AccessibilityNodeInfo edit = waitFor(AccessibilityNodeInfo::isEditable, "quick-add field");
         Bundle value = new Bundle();
         String title = "Matrix task api" + Build.VERSION.SDK_INT;
-        value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, title);
+        value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, title + " tom 15:00 p1 %phone");
         if (!edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, value)) throw new AssertionError("Set task name");
         edit.recycle();
         dismissKeyboard();
+        waitFor(n -> text(n, "P1. Tap to keep as text"), "parsed priority chip").recycle();
+        waitFor(n -> text(n, "@phone. Tap to keep as text"), "parsed percent label chip").recycle();
+        waitFor(n -> String.valueOf(n.getContentDescription()).startsWith("Tomorrow")
+            && String.valueOf(n.getContentDescription()).endsWith(". Tap to keep as text"), "parsed tomorrow/time chip").recycle();
         click("Add task");
         waitFor(n -> String.valueOf(n.getText()).contains("Added “"), "task creation acknowledgement").recycle();
         click("Close sheet");
+        dismissKeyboard();
         waitFor(n -> text(n, title), "new task row").recycle();
-        step("quick add and task rendering");
+        step("quick add parses tom, time, priority and percent label, then renders the saved task");
     }
 
     private void habitOverviews() throws Exception {
@@ -184,11 +189,11 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         clickNavigation("Inbox");
         verifyWidgetOpenApp("Quick add");
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click("Quick add");
+        selectWidget("Quick add");
         createTaskFromWidget("Matrix quick widget task api" + Build.VERSION.SDK_INT);
         step("quick-add widget task entry stays separate from opening the app");
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click("Habits");
+        selectWidget("Habits");
         AccessibilityNodeInfo habit = widgetCheckbox("Daily widget habit");
         boolean previous = habit.isChecked();
         clickNode(habit);
@@ -215,6 +220,7 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         click("Add task");
         waitFor(n -> text(n, "Added “" + title + "”"), "widget task creation acknowledgement").recycle();
         click("Close sheet");
+        dismissKeyboard();
     }
 
     private boolean withinWidget(AccessibilityNodeInfo node) {
@@ -232,10 +238,24 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
 
     private void verifyWidgetOpenApp(String tab) throws Exception {
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click(tab);
+        selectWidget(tab);
         click("Open BokyDo");
         waitFor(n -> text(n, "Today fixture"), tab + " widget opens main Today view").recycle();
         waitAbsent(AccessibilityNodeInfo::isEditable, tab + " app-open does not show quick add");
+    }
+
+    private void selectWidget(String tab) throws Exception {
+        String prefix = tab + " widget; tasks ID ";
+        AccessibilityNodeInfo selected = find(n -> String.valueOf(n.getText()).startsWith(prefix));
+        if (selected != null) {
+            selected.recycle();
+        } else {
+            click(tab);
+            waitFor(n -> String.valueOf(n.getText()).startsWith(prefix), "selected widget " + tab).recycle();
+        }
+        // The host attaches a different RemoteViews tree and posts a size update.
+        // Let those events settle before resolving an identical action label again.
+        ui.waitForIdle(500, 10_000);
     }
 
     private void prepareUpdate() throws Exception {
@@ -250,9 +270,9 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
 
     private void updatedState() throws Exception {
         open(HELPERS, APP + ".testing.MatrixWidgetHostActivity");
-        click("Tasks");
+        selectWidget("Tasks");
         waitFor(n -> text(n, "Widget project"), "retained project widget configuration").recycle();
-        click("Habits");
+        selectWidget("Habits");
         waitFor(n -> checkboxMatches(n, "Daily widget habit", true), "retained habit widget check-in").recycle();
         clickNode(waitFor(n -> text(n, "Habits") && !String.valueOf(n.getClassName()).contains("Button") && clickable(n), "habit widget header"));
         waitFor(n -> text(n, "Manage habits"), "retained sign-in").recycle();
@@ -329,8 +349,28 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
     private AccessibilityNodeInfo find(Match match) {
         if (Build.VERSION.SDK_INT >= 33) ui.clearCache();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
-        if (root == null) return null;
-        try { return search(root, match); } finally { root.recycle(); }
+        if (root != null) {
+            try {
+                AccessibilityNodeInfo found = search(root, match);
+                if (found != null || root.getChildCount() > 0) return found;
+            } finally { root.recycle(); }
+        }
+        // A dismissed Compose sheet can leave an empty active-window root while the
+        // main app is visible. Only recover from the focused application window:
+        // never match controls in a background screen underneath an open dialog.
+        List<android.view.accessibility.AccessibilityWindowInfo> windows = ui.getWindows();
+        try {
+            for (android.view.accessibility.AccessibilityWindowInfo window : windows) {
+                if (window.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+                    || !window.isFocused()) continue;
+                root = window.getRoot();
+                if (root == null) continue;
+                try { return search(root, match); } finally { root.recycle(); }
+            }
+            return null;
+        } finally {
+            for (android.view.accessibility.AccessibilityWindowInfo window : windows) window.recycle();
+        }
     }
 
     private AccessibilityNodeInfo waitFor(Match match, String label) throws Exception {
@@ -460,13 +500,30 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         } finally { if (cursor != null) cursor.recycle(); }
     }
 
-    private void dismissKeyboard() {
+    private void dismissKeyboard() throws Exception {
+        // ACTION_CLICK returns before Compose finishes its sheet animation. A Back
+        // sent during that animation can reach the closing dialog instead of the
+        // IME; wait for the window transition before inspecting or dismissing it.
+        ui.waitForIdle(500, 10_000);
+        if (!keyboardShown()) return;
+        back();
+        long until = SystemClock.uptimeMillis() + 10_000;
+        while (keyboardShown()) {
+            if (SystemClock.uptimeMillis() >= until) {
+                throw new AssertionError("Keyboard remained open after Back");
+            }
+            Thread.sleep(100);
+        }
+        ui.waitForIdle(500, 10_000);
+    }
+
+    private boolean keyboardShown() {
         boolean shown = false;
         for (android.view.accessibility.AccessibilityWindowInfo window : ui.getWindows()) {
             shown |= window.getType() == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
             window.recycle();
         }
-        if (shown) back();
+        return shown;
     }
 
     private void back() {
@@ -496,10 +553,12 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         for (android.view.accessibility.AccessibilityWindowInfo window : ui.getWindows()) {
             lines.add("Window type=" + window.getType() + " active=" + window.isActive()
                 + " focused=" + window.isFocused() + " layer=" + window.getLayer());
-            if (lines.size() < 3) {
-                AccessibilityNodeInfo other = window.getRoot();
-                if (other != null) { describe(other, lines); other.recycle(); }
-            }
+            AccessibilityNodeInfo other = window.getRoot();
+            if (other != null) {
+                lines.add("Root package=" + other.getPackageName() + " class=" + other.getClassName()
+                    + " visible=" + other.isVisibleToUser() + " children=" + other.getChildCount());
+                describe(other, lines); other.recycle();
+            } else lines.add("Root unavailable");
             window.recycle();
         }
         return String.join(" | ", lines);
