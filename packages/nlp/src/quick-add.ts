@@ -213,7 +213,7 @@ export function parseDate(text: string, options: QuickAddOptions): ParsedDue | n
   return m && m.end === w.length ? toDue(text, w, 0, m) : null;
 }
 
-const TRIGGERS = '#@/+{!';
+const TRIGGERS = '#@%/+{!';
 const isTrigger = (c: string | undefined) => c !== undefined && c !== '' && TRIGGERS.includes(c);
 
 /**
@@ -278,7 +278,7 @@ export function parseQuickAdd(input: string, options: QuickAddOptions): QuickAdd
     const first = input[word.rawStart];
     const t = word.text;
 
-    if (first === '@' && word.start === word.rawStart) {
+    if ((first === '@' || first === '%') && word.start === word.rawStart) {
       const name = input.slice(word.rawStart + 1, word.end);
       if (LABEL.test(name)) {
         const label = knownLabels.get(name.toLowerCase()) ?? name;
@@ -399,6 +399,7 @@ export interface Trigger {
 const TRIGGER_KIND = table<Trigger['kind']>({
   '#': 'project',
   '@': 'label',
+  '%': 'label',
   '/': 'section',
   '+': 'assignee',
 });

@@ -111,15 +111,19 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         AccessibilityNodeInfo edit = waitFor(AccessibilityNodeInfo::isEditable, "quick-add field");
         Bundle value = new Bundle();
         String title = "Matrix task api" + Build.VERSION.SDK_INT;
-        value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, title);
+        value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, title + " tom 15:00 p1 %phone");
         if (!edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, value)) throw new AssertionError("Set task name");
         edit.recycle();
         dismissKeyboard();
+        waitFor(n -> text(n, "P1. Tap to keep as text"), "parsed priority chip").recycle();
+        waitFor(n -> text(n, "@phone. Tap to keep as text"), "parsed percent label chip").recycle();
+        waitFor(n -> String.valueOf(n.getContentDescription()).startsWith("Tomorrow")
+            && String.valueOf(n.getContentDescription()).endsWith(". Tap to keep as text"), "parsed tomorrow/time chip").recycle();
         click("Add task");
         waitFor(n -> String.valueOf(n.getText()).contains("Added “"), "task creation acknowledgement").recycle();
         click("Close sheet");
         waitFor(n -> text(n, title), "new task row").recycle();
-        step("quick add and task rendering");
+        step("quick add parses tom, time, priority and percent label, then renders the saved task");
     }
 
     private void habitOverviews() throws Exception {

@@ -21,7 +21,7 @@ Call the plumber tomorrow at 5pm #Home Reno @phone p1 for 30min {fri}
 | `{…}`          | deadline                                      | `{next friday}`, `{27/10}`                                                                                                                                                                                                                                       |
 | `!…`           | reminder (for you)                            | `!30m` (30 minutes before the due time; also `!1h`, `!1d`), `!tomorrow 9am`, `!fri 8am` (at that time). Reminders before the due time need a task with a time                                                                                                    |
 
-`#`, `@` and `/` open suggestions: use ↑ ↓ and Enter or Tab to pick one. Pasting several lines
+`#`, `@`, `%` and `/` open suggestions: use ↑ ↓ and Enter or Tab to pick one. Pasting several lines
 adds one task per line, after you confirm.
 
 ## How dates are read
@@ -33,7 +33,7 @@ adds one task per line, after you confirm.
   month/day/year.
 - **Bare numbers need `at`**: `at 5` is 05:00 (or 17:00 after `tonight`, `this evening`…),
   while a plain `5` stays text. Use `5pm` or `17:00` to be explicit.
-- **Times of day**: `morning` 09:00, `afternoon` 14:00, `evening` 19:00, `night` 21:00.
+- **Times of day**: `morning` 09:00, `afternoon` 12:00, `evening` 19:00, `night` 22:00.
 - Short words that are also ordinary English (`sat`, `sun`, `wed`) need `on`, `next`, `this`
   or `every` in front. `daily`, `weekly`, `monthly` only count at the end of the name, so
   "Weekly review" stays a title.
@@ -49,3 +49,24 @@ keeps the date and drops the pattern.
 
 Repeat rules are stored as a subset of iCalendar RRULE (`FREQ`, `INTERVAL`, `BYDAY` incl.
 `2MO`/`-1FR`, `BYMONTHDAY`, `BYMONTH`, `UNTIL`, `WKST`), so the API accepts them directly.
+
+## Todoist shorthand
+
+Android and web use the same parser. `tod` means today; `tom`, `tmr` and `tmrw` mean
+tomorrow. Joined forms `tommorning`, `tomafternoon`, `tomevening` and `tomnight` also work.
+Named times match Todoist: morning 09:00, afternoon 12:00, evening 19:00 and night 22:00.
+An explicit time overrides the named time, such as `tomnight at 11pm`.
+
+Use `ev` for `every` and `ev!` for `every!`; both accept the same supported recurrence
+patterns. Labels accept either `%phone` or `@phone`, with suggestions for either prefix.
+Times such as `3p`, `3pm`, `3 p` and `15:00` combine with priorities `p1`–`p4`:
+
+```
+Call Ana tom 3p p1 %phone
+Walk ev! 2 days
+Read tomnight p2
+```
+
+Click a recognized chip to keep a shorthand word as text, for example when `Tom` is a name.
+See Todoist's [date shortcuts](https://www.todoist.com/help/todoist/features/schedule-a-date-and-time-for-your-todoist-tasks-q7VobO)
+and [Quick Add shortcuts](https://www.todoist.com/help/todoist/features/use-keyboard-shortcuts-in-todoist-Wyovn2).
