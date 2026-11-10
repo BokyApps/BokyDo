@@ -122,6 +122,7 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         click("Add task");
         waitFor(n -> String.valueOf(n.getText()).contains("Added “"), "task creation acknowledgement").recycle();
         click("Close sheet");
+        dismissKeyboard();
         waitFor(n -> text(n, title), "new task row").recycle();
         step("quick add parses tom, time, priority and percent label, then renders the saved task");
     }
@@ -219,6 +220,7 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         click("Add task");
         waitFor(n -> text(n, "Added “" + title + "”"), "widget task creation acknowledgement").recycle();
         click("Close sheet");
+        dismissKeyboard();
     }
 
     private boolean withinWidget(AccessibilityNodeInfo node) {
@@ -333,8 +335,28 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
     private AccessibilityNodeInfo find(Match match) {
         if (Build.VERSION.SDK_INT >= 33) ui.clearCache();
         AccessibilityNodeInfo root = ui.getRootInActiveWindow();
-        if (root == null) return null;
-        try { return search(root, match); } finally { root.recycle(); }
+        if (root != null) {
+            try {
+                AccessibilityNodeInfo found = search(root, match);
+                if (found != null || root.getChildCount() > 0) return found;
+            } finally { root.recycle(); }
+        }
+        // A dismissed Compose sheet can leave an empty active-window root while the
+        // main app is visible. Only recover from the focused application window:
+        // never match controls in a background screen underneath an open dialog.
+        List<android.view.accessibility.AccessibilityWindowInfo> windows = ui.getWindows();
+        try {
+            for (android.view.accessibility.AccessibilityWindowInfo window : windows) {
+                if (window.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+                    || !window.isFocused()) continue;
+                root = window.getRoot();
+                if (root == null) continue;
+                try { return search(root, match); } finally { root.recycle(); }
+            }
+            return null;
+        } finally {
+            for (android.view.accessibility.AccessibilityWindowInfo window : windows) window.recycle();
+        }
     }
 
     private AccessibilityNodeInfo waitFor(Match match, String label) throws Exception {
