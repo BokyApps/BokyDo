@@ -133,9 +133,9 @@ export const UNITS: Readonly<Record<string, Unit>> = table({
 /** Named times of day. */
 export const PERIODS: Readonly<Record<string, string>> = table({
   morning: '09:00',
-  afternoon: '14:00',
+  afternoon: '12:00',
   evening: '19:00',
-  night: '21:00',
+  night: '22:00',
 });
 
 /** Hours after which a bare "at 7" means 7pm (after "tonight", "this evening"…). */
@@ -143,12 +143,21 @@ export const PM_PERIODS: ReadonlySet<string> = new Set(['afternoon', 'evening', 
 
 export const TOMORROW: ReadonlySet<string> = new Set([
   'tomorrow',
+  'tom',
   'tmr',
   'tmrw',
   'tomorow',
   'tommorow',
   'tommorrow',
 ]);
+
+/** Joined Todoist shorthand; exact words, never prefixes of ordinary task text. */
+export const TOMORROW_PERIODS: Readonly<Record<string, string>> = table({
+  tommorning: 'morning',
+  tomafternoon: 'afternoon',
+  tomevening: 'evening',
+  tomnight: 'night',
+});
 
 /** A whole number: digits, or a small number word ("a", "two"…). */
 export function countOf(t: string): number | null {

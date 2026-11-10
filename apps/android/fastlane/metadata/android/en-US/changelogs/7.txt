@@ -1,0 +1,1 @@
+Quick add understands tom, joined dates such as tommorning, ev and ev! repeats, and %label alongside @label. Compact times and priorities work together. Named afternoon/night times match Todoist defaults. The same parser powers Android and the web.
