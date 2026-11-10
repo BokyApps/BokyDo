@@ -500,13 +500,30 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         } finally { if (cursor != null) cursor.recycle(); }
     }
 
-    private void dismissKeyboard() {
+    private void dismissKeyboard() throws Exception {
+        // ACTION_CLICK returns before Compose finishes its sheet animation. A Back
+        // sent during that animation can reach the closing dialog instead of the
+        // IME; wait for the window transition before inspecting or dismissing it.
+        ui.waitForIdle(500, 10_000);
+        if (!keyboardShown()) return;
+        back();
+        long until = SystemClock.uptimeMillis() + 10_000;
+        while (keyboardShown()) {
+            if (SystemClock.uptimeMillis() >= until) {
+                throw new AssertionError("Keyboard remained open after Back");
+            }
+            Thread.sleep(100);
+        }
+        ui.waitForIdle(500, 10_000);
+    }
+
+    private boolean keyboardShown() {
         boolean shown = false;
         for (android.view.accessibility.AccessibilityWindowInfo window : ui.getWindows()) {
             shown |= window.getType() == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD;
             window.recycle();
         }
-        if (shown) back();
+        return shown;
     }
 
     private void back() {
@@ -536,10 +553,12 @@ public class ReleaseMatrixInstrumentation extends Instrumentation {
         for (android.view.accessibility.AccessibilityWindowInfo window : ui.getWindows()) {
             lines.add("Window type=" + window.getType() + " active=" + window.isActive()
                 + " focused=" + window.isFocused() + " layer=" + window.getLayer());
-            if (lines.size() < 3) {
-                AccessibilityNodeInfo other = window.getRoot();
-                if (other != null) { describe(other, lines); other.recycle(); }
-            }
+            AccessibilityNodeInfo other = window.getRoot();
+            if (other != null) {
+                lines.add("Root package=" + other.getPackageName() + " class=" + other.getClassName()
+                    + " visible=" + other.isVisibleToUser() + " children=" + other.getChildCount());
+                describe(other, lines); other.recycle();
+            } else lines.add("Root unavailable");
             window.recycle();
         }
         return String.join(" | ", lines);
