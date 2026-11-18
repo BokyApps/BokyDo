@@ -1,5 +1,5 @@
 import { instanceStatusSchema } from '@bokydo/shared';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,13 +7,16 @@ import { TEST_DATABASE_URL } from './test/db.js';
 import { testApp, type TestApp } from './test/app.js';
 
 let t: TestApp | undefined;
+const webRoots: string[] = [];
 afterEach(async () => {
   await t?.close();
   t = undefined;
+  for (const dir of webRoots.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
 async function webRoot(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'bokydo-web-'));
+  webRoots.push(dir);
   await writeFile(path.join(dir, 'index.html'), '<!doctype html><title>BokyDo</title>');
   await writeFile(path.join(dir, '.env'), 'SECRET=1');
   return dir;
