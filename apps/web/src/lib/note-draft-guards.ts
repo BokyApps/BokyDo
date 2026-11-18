@@ -17,6 +17,8 @@ import { pathFor } from './notes.js';
 export interface DraftSaver {
   hasUnsavedWork(): boolean;
   pendingPatch(): NotePatch | null;
+  /** The server revision the draft is based on; the keepalive PATCH must carry it. */
+  baseRevision(): string;
   flush(): Promise<boolean>;
   stop(): void;
 }
@@ -41,8 +43,9 @@ export function installDraftGuards(
     const patch = saver.pendingPatch();
     if (patch === null) return;
     // Also covers "still saving": the draft is newer than the last acknowledged snapshot, so
-    // re-sending it is correct and idempotent.
-    keepalivePatch(pathFor(noteId), patch);
+    // re-sending it is correct and idempotent. The revision premise makes it a no-op (409) if
+    // another tab saved first, instead of overwriting that save.
+    keepalivePatch(pathFor(noteId), patch, saver.baseRevision());
   };
   target.addEventListener('beforeunload', onBeforeUnload);
   target.addEventListener('pagehide', onPageHide);

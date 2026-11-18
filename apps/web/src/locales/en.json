@@ -394,7 +394,19 @@
         "unlockTitle": "Unlock censored text",
         "warning": "Censored text can only be read with this password. A forgotten password cannot be recovered, and there is no way to reset it. Keep it somewhere safe."
       },
-      "conflict": "This note changed elsewhere. Reloading.",
+      "conflict": {
+        "cancel": "Back",
+        "censoredMessage": "The saved version has censored text that your draft does not. Keeping yours would bring back text that was censored elsewhere.",
+        "censoredTitle": "This would bring back censored text",
+        "copyFailed": "Couldn't copy your draft to the clipboard.",
+        "copyMine": "Copy mine",
+        "keepAnyway": "Keep mine anyway",
+        "keepMine": "Keep mine",
+        "loadTheirs": "Load their version",
+        "message": "Saving is paused until you choose. Your edits stay here. Keeping yours replaces the version saved elsewhere.",
+        "status": "Not saved — this note changed elsewhere",
+        "title": "This note changed elsewhere"
+      },
       "delete": "Delete forever",
       "deleteMessage": "This permanently deletes the note and its files. It cannot be undone.",
       "deleteTitle": "Delete forever?",

@@ -4,11 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from './api.js';
 import {
   bodyLinksTask,
+  censorTokensIn,
   isNoteGoneError,
+  isStaleRevisionError,
   noteExportAvailability,
   noteExportPath,
   noteLoadPhase,
   pathFor,
+  restoresCensoredText,
 } from './notes.js';
 
 const TASK = '123e4567-e89b-12d3-a456-426614174000';
@@ -31,6 +34,34 @@ describe('P2: only a 404 means the note is gone', () => {
     expect(isNoteGoneError(new ApiError(404, 'not_found', null))).toBe(true);
     expect(isNoteGoneError(new ApiError(500, 'error', null))).toBe(false);
     expect(isNoteGoneError(new Error('network'))).toBe(false);
+  });
+});
+
+describe('stale revisions', () => {
+  const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
+
+  it('recognises only a 409 stale_revision as a conflict', () => {
+    expect(isStaleRevisionError(new ApiError(409, 'stale_revision', null))).toBe(true);
+    expect(isStaleRevisionError(new ApiError(409, 'id_conflict', null))).toBe(false);
+    expect(isStaleRevisionError(new ApiError(404, 'not_found', null))).toBe(false);
+    expect(isStaleRevisionError(new Error('stale_revision'))).toBe(false);
+  });
+
+  it('finds censor tokens case-insensitively by prefix, exactly by token', () => {
+    expect(censorTokensIn(`a ${TOKEN} b`)).toEqual([TOKEN]);
+    expect(censorTokensIn('{{CENSORED:v1:abc:def:ghi}}')).toEqual(['{{CENSORED:v1:abc:def:ghi}}']);
+    expect(censorTokensIn('{{censored: broken')).toEqual([]);
+    expect(censorTokensIn('no tokens here')).toEqual([]);
+  });
+
+  it('requires a confirmation when the remote censors text this draft does not', () => {
+    expect(restoresCensoredText(`before ${TOKEN} after`, `before plaintext after`)).toBe(true);
+    // The same token in both versions is not a restored span.
+    expect(restoresCensoredText(`a ${TOKEN} b`, `a ${TOKEN} b`)).toBe(false);
+    // A different token is a different span, so it would be restored too.
+    expect(restoresCensoredText(`a ${TOKEN} b`, 'a {{censored:v1:ZZZ:YYY:XXX}} b')).toBe(true);
+    expect(restoresCensoredText('plain', `a ${TOKEN} b`)).toBe(false);
+    expect(restoresCensoredText('', 'plain')).toBe(false);
   });
 });
 

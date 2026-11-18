@@ -1,7 +1,7 @@
 import type { Note, NotePatch } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useBlocker, useNavigate } from '@tanstack/react-router';
-import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Page } from '../../components/ViewHeader.js';
 import {
@@ -20,7 +20,6 @@ import {
   StarIcon,
   TrashIcon,
 } from '../../components/icons.js';
-import { ApiError } from '../../lib/api.js';
 import { useConfirm } from '../../lib/confirm.js';
 import { DraftLeaveGuard, installDraftGuards } from '../../lib/note-draft-guards.js';
 import {
@@ -35,6 +34,7 @@ import {
   noteQuery,
   notesKeys,
   patchNote,
+  restoresCensoredText,
   searchLocalTasks,
   searchNoteOptions,
   toNoteDraft,
@@ -60,6 +60,7 @@ import { useSyncState } from '../../lib/sync.js';
 import { useToast } from '../../lib/toasts.js';
 import { liveTasks } from '../../lib/views.js';
 import { usePasswordPrompt } from './PasswordDialog.js';
+import { NoteConflictBanner } from './NoteConflictBanner.js';
 import { ResourcePicker, type PickerItem } from './ResourcePicker.js';
 import { TagEditor } from './TagEditor.js';
 
@@ -114,8 +115,19 @@ function NoteDetailInner({ note }: { note: Note }) {
   const [draft, setDraft] = useState<NoteDraft>(() => toNoteDraft(note));
   const [status, setStatus] = useState<SaveStatus>('saved');
   const [gone, setGone] = useState(false);
+  /** The latest server version after a 409, while the user chooses which side to keep. */
+  const [conflict, setConflict] = useState<Note | null>(null);
+  const [conflictBusy, setConflictBusy] = useState(false);
+  // Dirty is tracked as state so the Export menu (and the router blocker) re-render when the
+  // controller's view of the draft changes; reading the controller during render alone would be
+  // one render behind.
+  const [dirty, setDirty] = useState(false);
   const [lockKey, setLockKey] = useState(0);
   const [linkTaskOpen, setLinkTaskOpen] = useState(false);
+  /** The `updatedAt` last seen through the query, so a live refetch is adopted exactly once. */
+  const seenRevision = useRef(note.updatedAt);
+  /** Identifies the newest conflict refresh; a late answer for an older one is dropped. */
+  const conflictRequest = useRef(0);
 
   // --- censor flow: prompts are stable callbacks, held once for the life of the note -------------
   const confirmRemove = useCallback(
@@ -164,39 +176,89 @@ function NoteDetailInner({ note }: { note: Note }) {
       new NoteAutosave(
         {
           delayMs: 800,
-          save: async (patch) => {
-            await patchNote(note.id, patch);
+          save: async (patch, expectedUpdatedAt) => {
+            // Every PATCH names the revision this draft is based on. A 409 stops the queue and
+            // reaches the conflict listener below; a write-only token could not answer with the
+            // note, but the app always holds notes:read.
+            const saved = await patchNote(note.id, { ...patch, expectedUpdatedAt });
+            client.setQueryData(notesKeys.detail(note.id), saved.note);
             void client.invalidateQueries({ queryKey: notesKeys.lists() });
             void client.invalidateQueries({ queryKey: notesKeys.tags() });
+            return saved.note.updatedAt;
           },
           onStatus: setStatus,
           onError: (err) => {
             if (isNoteGoneError(err)) {
               // The effect on `gone` stops the queue; the draft stays visible for copying.
               setGone(true);
-            } else if (err instanceof ApiError && err.status === 409) {
-              void client.invalidateQueries({ queryKey: notesKeys.detail(note.id) });
-              toast({
-                message: t('notes.conflict', {
-                  defaultValue: 'This note changed elsewhere. Reloading.',
-                }),
-              });
             } else {
               toast({ tone: 'error', message: noteErrorMessage(err) });
             }
           },
         },
         toNoteDraft(note),
+        note.updatedAt,
       ),
   );
   // A 404 stops the queue for good; the draft (and the editor) stay on screen.
   useEffect(() => {
     if (gone) autosave.stop();
   }, [gone, autosave]);
-  // Dirty is tracked as state so the Export menu (and the router blocker) re-render when the
-  // controller's view of the draft changes; reading the controller during render alone would be
-  // one render behind.
-  const [dirty, setDirty] = useState(false);
+
+  /** GET the newest note, bypassing any fresh cached copy: a revision premise needs the truth. */
+  const refreshRemote = useCallback(async (): Promise<Note | null> => {
+    try {
+      return await client.fetchQuery({ ...noteQuery(note.id), staleTime: 0 });
+    } catch (err) {
+      if (isNoteGoneError(err)) {
+        setGone(true);
+        setConflict(null);
+        autosave.stop();
+      } else {
+        toast({ tone: 'error', message: noteErrorMessage(err) });
+      }
+      return null;
+    }
+  }, [autosave, client, note.id, toast]);
+
+  /** Adopt the server note everywhere: draft, controller premise and the query cache. */
+  const adoptRemote = useCallback(
+    (remote: Note) => {
+      const next = toNoteDraft(remote);
+      autosave.reset(next, remote.updatedAt);
+      seenRevision.current = remote.updatedAt;
+      conflictRequest.current += 1;
+      setDraft(next);
+      setConflict(null);
+      setGone(false);
+      setDirty(false);
+      setStatus('saved');
+      reveal.close();
+      client.setQueryData(notesKeys.detail(note.id), remote);
+    },
+    [autosave, client, note.id, reveal],
+  );
+
+  /**
+   * After a 409: with nothing local to lose, adopt the remote note silently; otherwise keep the
+   * draft (still editable) and let the banner ask which version wins. Never resend on its own.
+   */
+  const resolveConflict = useCallback(async () => {
+    const request = ++conflictRequest.current;
+    const remote = await refreshRemote();
+    if (!remote || request !== conflictRequest.current) return;
+    client.setQueryData(notesKeys.detail(note.id), remote);
+    if (autosave.isDirty()) {
+      setConflict(remote);
+      return;
+    }
+    adoptRemote(remote);
+  }, [adoptRemote, autosave, client, note.id, refreshRemote]);
+
+  useEffect(() => {
+    autosave.setConflictListener(() => void resolveConflict());
+    return () => autosave.setConflictListener(undefined);
+  }, [autosave, resolveConflict]);
   useEffect(() => {
     if (gone) return;
     autosave.update(draft);
@@ -207,6 +269,20 @@ function NoteDetailInner({ note }: { note: Note }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the controller's state
     setDirty(autosave.isDirty());
   }, [status, autosave]);
+  // Live user events invalidate the open note. Adopt the refetched server version only when the
+  // draft has nothing unsaved (the editor accepts the external Markdown); a dirty draft stays put,
+  // and its next save will hit 409 and go through the conflict banner instead.
+  useEffect(() => {
+    if (note.updatedAt === seenRevision.current) return;
+    seenRevision.current = note.updatedAt;
+    // Never adopt a snapshot at or behind the revision the draft is already based on: the query
+    // cache can still hold the pre-save note while the autosave has moved on.
+    if (note.updatedAt <= autosave.baseRevision()) return;
+    if (gone || conflict) return;
+    if (autosave.isDirty() || autosave.isSaving()) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- adopting a refetched server note
+    adoptRemote(note);
+  }, [note, gone, conflict, autosave, adoptRemote]);
   useEffect(() => () => void autosave.flush(), [autosave]);
 
   // Navigation: flush first, block only when saving failed (Retry / explicit discard below).
@@ -342,11 +418,15 @@ function NoteDetailInner({ note }: { note: Note }) {
   const trashed = note.state === 'trashed';
   const saveLabel = gone
     ? t('notes.gone', { defaultValue: 'This note was deleted — copy your text' })
-    : status === 'saving'
-      ? t('notes.saving', { defaultValue: 'Saving…' })
-      : status === 'error'
-        ? t('notes.saveError', { defaultValue: 'Save failed — retrying on next edit' })
-        : t('notes.saved', { defaultValue: 'Saved' });
+    : status === 'conflict'
+      ? t('notes.conflict.status', {
+          defaultValue: 'Not saved — this note changed elsewhere',
+        })
+      : status === 'saving'
+        ? t('notes.saving', { defaultValue: 'Saving…' })
+        : status === 'error'
+          ? t('notes.saveError', { defaultValue: 'Save failed — retrying on next edit' })
+          : t('notes.saved', { defaultValue: 'Saved' });
   const retrySave = async () => {
     setRetrying(true);
     try {
@@ -359,6 +439,54 @@ function NoteDetailInner({ note }: { note: Note }) {
     }
   };
 
+  /** "Load their version": discard the draft and adopt the newest server note. */
+  const loadTheirs = useCallback(async () => {
+    setConflictBusy(true);
+    try {
+      const remote = (await refreshRemote()) ?? conflict;
+      if (remote) adoptRemote(remote);
+    } finally {
+      setConflictBusy(false);
+    }
+  }, [adoptRemote, conflict, refreshRemote]);
+
+  /**
+   * "Keep mine": the remote revision becomes the premise, and the whole draft replaces the saved
+   * version. The banner only calls this after the censor-safety confirmation when needed.
+   */
+  const keepMine = useCallback(async () => {
+    if (!conflict) return;
+    setConflictBusy(true);
+    try {
+      const kept = await autosave.keepMine(conflict.updatedAt);
+      setDirty(autosave.isDirty());
+      // A new 409 re-opens the banner through onConflict with a fresher remote note.
+      if (kept) setConflict(null);
+    } finally {
+      setConflictBusy(false);
+    }
+  }, [autosave, conflict]);
+
+  /** "Copy mine": put the draft Markdown on the clipboard, then adopt their version. */
+  const copyMine = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(draft.body);
+    } catch {
+      toast({
+        tone: 'error',
+        message: t('notes.conflict.copyFailed', {
+          defaultValue: "Couldn't copy your draft to the clipboard.",
+        }),
+      });
+      return;
+    }
+    await loadTheirs();
+  }, [draft.body, loadTheirs, t, toast]);
+
+  // Censor safety: the remote body has a token this draft lacks, so keeping mine would bring back
+  // text that was censored elsewhere. The banner then requires an explicit confirmation.
+  const conflictCensorWarning = conflict ? restoresCensoredText(conflict.body, draft.body) : false;
+
   return (
     <Page wide>
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -368,7 +496,7 @@ function NoteDetailInner({ note }: { note: Note }) {
         <span className="ml-auto text-xs text-muted" aria-live="polite" role="status">
           {saveLabel}
         </span>
-        {status === 'error' && !gone && (
+        {status === 'error' && !gone && !conflict && (
           <Button variant="secondary" onClick={() => void retrySave()} busy={retrying}>
             {t('notes.retrySave', { defaultValue: 'Retry save' })}
           </Button>
@@ -382,6 +510,16 @@ function NoteDetailInner({ note }: { note: Note }) {
             {t('notes.back', { defaultValue: 'Back to notes' })}
           </Button>
         </Alert>
+      )}
+
+      {conflict && (
+        <NoteConflictBanner
+          censorWarning={conflictCensorWarning}
+          busy={conflictBusy}
+          onLoadTheirs={() => void loadTheirs()}
+          onKeepMine={() => void keepMine()}
+          onCopyMine={() => void copyMine()}
+        />
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
