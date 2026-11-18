@@ -124,6 +124,17 @@ The server never sees censored plaintext or the password.
 - Passwords exist only in memory. During a session the tab may keep derived keys, keyed by salt,
   so other spans under the same password unlock together. "Lock" and sign-out clear them. A
   forgotten password cannot be recovered, and the UI says so before the user censors anything.
+- Unlocking is only ever triggered by an explicit Reveal or Remove action, never on render or
+  in bulk. Each attempt is a full PBKDF2, and a planted note can contain thousands of tokens.
+  Concurrent requests for one token are merged. Remembered passwords are tried at most three at
+  a time, then the user is asked for one.
+- Cached keys are keyed by a digest of the whole token, not its salt. An explicit unlock always
+  derives from the password the user typed. Lock, sign-out and `pagehide` clear the cache,
+  password inputs and any open overlay. A cache generation stops results that were still in
+  flight from coming back.
+- Remove censor asks for confirmation, because a token can be moved between notes (the AAD is a
+  constant). The overlay is tested with copy while it is open, since `user-select` alone
+  guarantees nothing about the clipboard.
 
 ### Export
 
