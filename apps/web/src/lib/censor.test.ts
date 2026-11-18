@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   CENSOR_PLACEHOLDER,
@@ -26,6 +27,31 @@ function flip(bytes: Uint8Array, index: number): Uint8Array {
   const copy = Uint8Array.from(bytes);
   copy[index] = (copy[index] ?? 0) ^ 1;
   return copy;
+}
+
+/**
+ * An independent v1 implementation (Node's crypto, not WebCrypto): pins PBKDF2-SHA-256 at
+ * 600,000 iterations, AES-256-GCM with a 128-bit tag and the `bokydo-censor-v1` AAD.
+ */
+const V1 = { iterations: 600_000, aad: Buffer.from('bokydo-censor-v1') };
+const nodeKey = (pw: string, salt: Uint8Array) => pbkdf2Sync(pw, salt, V1.iterations, 32, 'sha256');
+function nodeEncrypt(text: string, pw: string, opts: { aad?: Buffer; key?: Buffer } = {}) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', opts.key ?? nodeKey(pw, salt), iv);
+  cipher.setAAD(opts.aad ?? V1.aad);
+  const ct = Buffer.concat([cipher.update(text, 'utf8'), cipher.final(), cipher.getAuthTag()]);
+  return { salt, iv, ct, token: makeToken(salt, iv, ct) };
+}
+function nodeDecrypt(token: string, pw: string): string {
+  const { salt, iv, ct } = parseToken(token)!;
+  const decipher = createDecipheriv('aes-256-gcm', nodeKey(pw, salt), iv);
+  decipher.setAAD(V1.aad);
+  decipher.setAuthTag(ct.subarray(ct.length - 16));
+  return Buffer.concat([
+    decipher.update(ct.subarray(0, ct.length - 16)),
+    decipher.final(),
+  ]).toString('utf8');
 }
 
 const SALT = new Uint8Array(16).fill(0x11);
@@ -119,6 +145,7 @@ describe('censor / uncensor', () => {
   }, 30_000);
 
   it('throws typed errors for empty password, oversized text and malformed tokens', async () => {
+    await expect(censor('x', '')).rejects.toBeInstanceOf(CensorError);
     await expect(censor('x', '')).rejects.toMatchObject({ code: 'empty_password' });
     await expect(censor('', 'pw')).rejects.toMatchObject({ code: 'empty_text' });
     await expect(censor('a'.repeat(48 * 1024 + 1), 'pw')).rejects.toMatchObject({
@@ -137,44 +164,50 @@ describe('censor / uncensor', () => {
     expect(b64(parseToken(a)!.salt)).not.toBe(b64(parseToken(b)!.salt));
   }, 30_000);
 
+  it('matches an independent v1 implementation in both directions', async () => {
+    const text = '\uFEFFstarts with a BOM — and ünïcödé';
+    const token = await censor(text, 'pw');
+    expect(nodeDecrypt(token, 'pw')).toBe(text);
+    expect(await uncensor(nodeEncrypt(text, 'pw').token, 'pw')).toBe(text);
+  }, 30_000);
+
+  it('draws a fresh salt and IV for every token', async () => {
+    const a = parseToken(await censor('same', 'pw'))!;
+    const b = parseToken(await censor('same', 'pw'))!;
+    expect(b64(a.salt)).not.toBe(b64(b.salt));
+    expect(b64(a.iv)).not.toBe(b64(b.iv));
+  }, 30_000);
+
   it('never reveals plaintext when salt/iv/ct/AAD are tampered', async () => {
-    const cache = new CensorKeyCache();
     const text = 'top secret';
     const pw = 'pw';
-    const token = await censor(text, pw); // derivation 1
-    // A successful reveal populates the cache with the derived key for this salt.
-    expect(await uncensor(token, pw, cache)).toBe(text); // derivation 2
-    const parts = parseToken(token)!;
-    const key = cache.get(b64(parts.salt))!;
-
-    // Ciphertext authenticated against a flipped AAD, using the cached key (no extra derivation).
-    const badAad = new TextEncoder().encode('bokydo-censor-v0');
-    const ctBadAad = new Uint8Array(
-      await globalThis.crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv: parts.iv, additionalData: badAad, tagLength: 128 },
-        key,
-        new TextEncoder().encode(text),
-      ),
-    );
+    const { salt, iv, ct } = nodeEncrypt(text, pw);
+    const key = nodeKey(pw, salt);
     const candidates = [
-      makeToken(flip(parts.salt, 0), parts.iv, parts.ct), // flipped salt (cache miss -> 1 deriv)
-      makeToken(parts.salt, flip(parts.iv, 0), parts.ct), // flipped iv
-      makeToken(parts.salt, parts.iv, flip(parts.ct, 0)), // flipped ct
-      makeToken(parts.salt, parts.iv, ctBadAad), // flipped AAD
+      makeToken(flip(salt, 0), iv, ct),
+      makeToken(salt, flip(iv, 0), ct),
+      makeToken(salt, iv, flip(ct, 0)),
+      makeToken(salt, iv, flip(ct, ct.length - 1)), // the tag
+      nodeEncrypt(text, pw, { key, aad: Buffer.from('bokydo-censor-v0') }).token, // other AAD
     ];
-    for (const candidate of candidates) {
-      let resolved: string | undefined;
-      let error: unknown;
-      try {
-        resolved = await uncensor(candidate, pw, cache);
-      } catch (err) {
-        error = err;
-      }
-      expect(resolved).toBeUndefined(); // never returns plaintext, wrong or otherwise
-      expect(error).toBeInstanceOf(CensorError);
-      expect(['bad_password', 'malformed']).toContain((error as CensorError).code);
-    }
-  }, 30_000);
+    for (const candidate of candidates)
+      await expect(uncensor(candidate, pw)).rejects.toMatchObject({ code: 'bad_password' });
+  }, 60_000);
+
+  it('rejects non-canonical base64url tail bits and oversized fields before decoding', () => {
+    const s = b64(SALT); // 22 chars: the last one carries 4 unused bits
+    const last = s.at(-1)!;
+    const sibling =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.indexOf(last) ^ 1;
+    const nonCanonical =
+      s.slice(0, -1) + 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[sibling];
+    expect(parseToken(`{{censored:v1:${nonCanonical}:${b64(IV)}:${b64(CT)}}}`)).toBeNull();
+    const huge = 'A'.repeat(4_000_000);
+    const start = performance.now();
+    expect(parseToken(`{{censored:v1:${huge}:${b64(IV)}:${b64(CT)}}}`)).toBeNull();
+    expect(parseToken(`{{censored:v1:${b64(SALT)}:${b64(IV)}:${huge}}}`)).toBeNull();
+    expect(performance.now() - start).toBeLessThan(200);
+  });
 });
 
 describe('CensorKeyCache', () => {
@@ -196,5 +229,67 @@ describe('CensorKeyCache', () => {
     cache.clear();
     expect(await cache.tryUnlock(token1)).toBeNull();
     expect(await cache.tryUnlock(token2)).toBeNull();
+  }, 30_000);
+
+  it('never lets a warm cache accept a wrong password', async () => {
+    const cache = new CensorKeyCache();
+    const token = await censor('span', 'right');
+    expect(await uncensor(token, 'right', cache)).toBe('span');
+    await expect(uncensor(token, 'wrong', cache)).rejects.toMatchObject({ code: 'bad_password' });
+  }, 30_000);
+
+  it('keeps a planted token that reuses a real salt from taking over that span', async () => {
+    const cache = new CensorKeyCache();
+    const real = nodeEncrypt('real secret', 'real pw');
+    // Same salt, encrypted under the attacker's password.
+    const planted = (() => {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', nodeKey('attacker pw', real.salt), iv);
+      cipher.setAAD(V1.aad);
+      const ct = Buffer.concat([cipher.update('decoy'), cipher.final(), cipher.getAuthTag()]);
+      return makeToken(real.salt, iv, ct);
+    })();
+    expect(await uncensor(planted, 'attacker pw', cache)).toBe('decoy');
+    // The real span still opens with its own password, and its cache entry is its own.
+    expect(await uncensor(real.token, 'real pw', cache)).toBe('real secret');
+    expect(await cache.tryUnlock(real.token)).toBe('real secret');
+    expect(await cache.tryUnlock(planted)).toBe('decoy');
+  }, 60_000);
+
+  it('voids an explicit unlock that was in flight when the cache was cleared', async () => {
+    const cache = new CensorKeyCache();
+    const token = await censor('span', 'pw');
+    const pending = uncensor(token, 'pw', cache);
+    cache.clear();
+    await expect(pending).rejects.toMatchObject({ code: 'locked' });
+    expect(await cache.tryUnlock(token)).toBeNull(); // nothing was repopulated
+  }, 30_000);
+
+  it('ignores a remember() that finishes after the cache was cleared', async () => {
+    const cache = new CensorKeyCache();
+    const { salt, token } = nodeEncrypt('span', 'pw');
+    const key = await globalThis.crypto.subtle.importKey(
+      'raw',
+      nodeKey('pw', salt),
+      'AES-GCM',
+      false,
+      ['decrypt'],
+    );
+    const generation = cache.generation;
+    cache.clear();
+    await cache.remember(token, key, 'pw', generation);
+    expect(await cache.tryUnlock(token)).toBeNull();
+  }, 30_000);
+
+  it('voids a remembered-password unlock that was in flight when the cache was cleared', async () => {
+    const cache = new CensorKeyCache();
+    const first = await censor('first', 'pw');
+    const second = await censor('second', 'pw');
+    expect(await uncensor(first, 'pw', cache)).toBe('first');
+    const pending = cache.tryUnlock(second);
+    expect(cache.tryUnlock(second)).toBe(pending); // concurrent requests are shared
+    cache.clear();
+    expect(await pending).toBeNull();
+    expect(await cache.tryUnlock(first)).toBeNull();
   }, 30_000);
 });
