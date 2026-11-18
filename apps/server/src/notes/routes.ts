@@ -142,8 +142,19 @@ export async function registerNoteRoutes(
       if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
       const userId = requireUser(req).id;
       const result = await updateNote(db, userId, params.data.id, req.body, readOptions(req));
-      if (!result.ok)
+      if (!result.ok) {
+        // A stale save names the current revision, but only to a caller that may read notes: a
+        // write-only token must not learn anything about a note it cannot read.
+        if (result.error === 'stale_revision')
+          return reply
+            .status(409)
+            .send(
+              seesNotes(req) && result.updatedAt !== undefined
+                ? { error: 'stale_revision', updatedAt: result.updatedAt }
+                : { error: 'stale_revision' },
+            );
         return reply.status(result.error === 'not_found' ? 404 : 400).send({ error: result.error });
+      }
       await publish(userId);
       return presentNote(req, result.value);
     },

@@ -46,9 +46,21 @@ export type NoteFailure =
   | 'not_found'
   | 'id_conflict'
   | 'too_many_links'
+  /** The caller's `expectedUpdatedAt` is not the note's current revision; nothing was written. */
+  | 'stale_revision'
   /** MCP only: the note's current body contains censored text a client cannot re-create. */
   | 'censored_content';
-export type NoteResult<T> = { ok: true; value: T } | { ok: false; error: NoteFailure };
+export type NoteResult<T> =
+  | { ok: true; value: T }
+  | {
+      ok: false;
+      error: NoteFailure;
+      /**
+       * `stale_revision` only: the note's current `updated_at`, exactly as the API returns it, so
+       * a caller with `notes:read` can show what to reload or merge against.
+       */
+      updatedAt?: string;
+    };
 
 export const NOTE_PENDING_TTL_MS = 24 * 3600 * 1000;
 export const NOTE_TRASH_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -62,9 +74,13 @@ type NoteRow = typeof notes.$inferSelect;
 /** A body named more distinct notes/tasks than the table will hold. */
 class TooManyLinksError extends Error {}
 
-/** A caller-supplied guard refused the update after the row was locked; nothing was written. */
+/** A precondition or caller-supplied guard refused the update after the row was locked. */
 class NoteGuardError extends Error {
-  constructor(readonly code: NoteFailure) {
+  constructor(
+    readonly code: NoteFailure,
+    /** For `stale_revision`: the locked row's current revision. */
+    readonly updatedAt?: string,
+  ) {
     super(code);
   }
 }
@@ -383,6 +399,17 @@ export async function updateNote(
         .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)))
         .for('update');
       if (!current) return null;
+      // Optimistic concurrency, decided under the lock and in the same transaction as the write:
+      // two callers that send the same revision can never both write, because the second one
+      // locks the row only after the first commits and then sees that revision has moved.
+      // `notes.updated_at` is `timestamptz(3)`, so the row value has millisecond precision — the
+      // exact precision of a JS `Date` and of the `toISOString` value `GET` returns — and integer
+      // millisecond instants can be compared exactly, with no truncation on either side.
+      if (
+        patch.data.expectedUpdatedAt !== undefined &&
+        new Date(patch.data.expectedUpdatedAt).getTime() !== current.updatedAt.getTime()
+      )
+        throw new NoteGuardError('stale_revision', current.updatedAt.toISOString());
       // The guard sees the body as it is now, under the lock: not a pre-read that another
       // committed save could have made stale.
       const refusal = options.guard?.({ body: current.body });
@@ -400,12 +427,15 @@ export async function updateNote(
               ? (current.trashedAt ?? new Date())
               : null,
       };
+      // Every accepted write must move the revision forward, even when it lands in the same
+      // millisecond as the save it replaces: otherwise a stale premise could still match it.
+      const nextRevision = new Date(Math.max(Date.now(), current.updatedAt.getTime() + 1));
       const [row] = await tx
         .update(notes)
         .set({
           ...merged,
           searchText: toSearchText(merged.title, merged.tags, merged.body),
-          updatedAt: new Date(),
+          updatedAt: nextRevision,
         })
         .where(and(eq(notes.id, current.id), eq(notes.ownerUserId, userId)))
         .returning();
@@ -417,7 +447,10 @@ export async function updateNote(
     });
   } catch (err) {
     if (err instanceof TooManyLinksError) return { ok: false, error: 'too_many_links' };
-    if (err instanceof NoteGuardError) return { ok: false, error: err.code };
+    if (err instanceof NoteGuardError)
+      return err.updatedAt === undefined
+        ? { ok: false, error: err.code }
+        : { ok: false, error: err.code, updatedAt: err.updatedAt };
     throw err;
   }
   if (!updated) return { ok: false, error: 'not_found' };

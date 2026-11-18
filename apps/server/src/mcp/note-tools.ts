@@ -2,6 +2,7 @@ import {
   noteCreateRequestSchema,
   noteListQuerySchema,
   notePatchSchema,
+  notePatchWrites,
   redactCensored,
   scopesAllow,
   type Note,
@@ -139,6 +140,10 @@ async function apply(
   if (!result.ok) {
     if (result.error === 'not_found') throw new ToolError('Note not found');
     if (result.error === 'censored_content') fail(CENSORED_MCP_ERROR);
+    if (result.error === 'stale_revision')
+      fail(
+        'Note not updated: it changed after the expectedUpdatedAt you sent (stale revision). Read the note again and retry with its new updatedAt.',
+      );
     throw new ToolError(`Note not updated: ${result.error}`);
   }
   await ctx.publishNoteChange?.(ctx.userId);
@@ -151,10 +156,7 @@ const listArgs = noteListQuerySchema.omit({ cursor: true });
 const updateArgs = z
   .object({ id: uuid, ...notePatchSchema.shape })
   .strict()
-  .refine(
-    ({ id: _id, ...patch }) => Object.keys(patch).length > 0,
-    'At least one field is required',
-  );
+  .refine(({ id: _id, ...patch }) => notePatchWrites(patch), 'At least one field is required');
 const linkArgs = z.object({ noteId: uuid, taskId: uuid }).strict();
 
 export const NOTE_TOOLS: ToolDefinition[] = [
@@ -227,7 +229,7 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     name: 'update_note',
     title: 'Update a note',
     description:
-      'Change a note’s title, body, tags, pin, archived state or trashed state. Only the fields you send change. MCP refuses a body change or a move to the trash when the note’s current body contains censored text, because a client cannot see or re-create it; change the body or trash it in the BokyDo app instead. REST clients with notes:write are not limited this way. Censored spans in the answer appear as █████.',
+      'Change a note’s title, body, tags, pin, archived state or trashed state. Only the fields you send change. Send `expectedUpdatedAt` (the `updatedAt` you last saw) to make the write conditional: if the note has changed since, nothing is written and the call fails with a stale-revision error, so read it again and merge. MCP refuses a body change or a move to the trash when the note’s current body contains censored text, because a client cannot see or re-create it; change the body or trash it in the BokyDo app instead. REST clients with notes:write are not limited this way. Censored spans in the answer appear as █████.',
     scopes: ['notes:write'],
     accountWide: true,
     inputSchema: schema(
@@ -239,6 +241,12 @@ export const NOTE_TOOLS: ToolDefinition[] = [
         pinned: { type: 'boolean' },
         state: { type: 'string', enum: ['active', 'archived'] },
         trashed: { type: 'boolean', description: 'true moves it to the trash, false restores it' },
+        expectedUpdatedAt: {
+          type: 'string',
+          format: 'date-time',
+          description:
+            'The `updatedAt` you last saw. The update is refused if the note has changed since.',
+        },
       },
       ['id'],
     ),

@@ -79,6 +79,22 @@ export const noteCreateRequestSchema = z
   .strict();
 export type NoteCreateRequest = z.infer<typeof noteCreateRequestSchema>;
 
+/**
+ * A canonical ISO-8601 instant: exactly what `Date#toISOString` writes, so it is the only way to
+ * name an instant unambiguously on the wire. A lenient parse such as `Date.parse` would accept
+ * several strings for one instant; a revision precondition must mean precisely the one the client
+ * saw, so a value that does not round-trip is rejected.
+ */
+const canonicalInstant = z.string().refine((value) => {
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.toISOString() === value;
+}, 'Must be a canonical ISO-8601 instant');
+
+/** Whether a patch changes a stored field; the revision precondition on its own changes nothing. */
+export function notePatchWrites(patch: object): boolean {
+  return Object.keys(patch).some((key) => key !== 'expectedUpdatedAt');
+}
+
 export const notePatchSchema = z
   .object({
     title: z.string().max(NOTE_TITLE_MAX).optional(),
@@ -88,9 +104,16 @@ export const notePatchSchema = z
     state: noteStateSchema.optional(),
     /** true moves it to the trash, false restores it. */
     trashed: z.boolean().optional(),
+    /**
+     * Optimistic concurrency: the `updatedAt` the caller last saw. It is compared to the locked
+     * row's `updated_at` in the same transaction as the write; a mismatch is `stale_revision` and
+     * nothing is written. It is never stored. Omitting it keeps the pre-existing last-write-wins
+     * behaviour, for clients that do not track revisions.
+     */
+    expectedUpdatedAt: canonicalInstant.optional(),
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+  .refine(notePatchWrites, 'At least one field is required');
 export type NotePatch = z.infer<typeof notePatchSchema>;
 
 export const noteListQuerySchema = z
