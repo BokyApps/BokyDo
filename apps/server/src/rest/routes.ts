@@ -8,6 +8,10 @@ import {
   habitCreateRequestSchema,
   habitPatchSchema,
   habitCheckInSchema,
+  noteCreateRequestSchema,
+  noteDisplayStateSchema,
+  noteListQuerySchema,
+  notePatchSchema,
   orderKeySchema,
   prioritySchema,
   projectVisibilitySchema,
@@ -88,8 +92,63 @@ const taskSingle = z.object({ task: taskResource });
 const projectList = z.object({ projects: z.array(projectResource) });
 const projectSingle = z.object({ project: projectResource });
 
+// Notes (ADR 0025). The response shapes mirror `packages/shared/src/notes.ts`; the request
+// schemas are shared, so REST cannot accept a body the notes service would reject.
+const noteSummaryResource = z.object({
+  id: idSchema,
+  title: z.string(),
+  /** Plain text from the body, censored spans replaced, at most 200 characters. */
+  snippet: z.string(),
+  tags: z.array(z.string()),
+  state: noteDisplayStateSchema,
+  pinned: z.boolean(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+const noteResource = noteSummaryResource.extend({
+  body: z.string(),
+  trashedAt: z.iso.datetime().nullable(),
+  backlinks: z.array(z.object({ id: idSchema, title: z.string() })),
+  linkedTasks: z.array(
+    z.object({ id: idSchema, content: z.string(), projectId: idSchema, completed: z.boolean() }),
+  ),
+  files: z.array(
+    z.object({
+      id: idSchema,
+      filename: z.string(),
+      contentType: z.string(),
+      size: z.number().int(),
+    }),
+  ),
+});
+const noteList = z.object({
+  notes: z.array(noteSummaryResource),
+  nextCursor: z.string().nullable(),
+});
+const noteSingle = z.object({ note: noteResource });
+const noteTags = z.object({
+  tags: z.array(z.object({ tag: z.string(), count: z.number().int() })),
+});
+const taskNotes = z.object({ notes: z.array(noteSummaryResource) });
+const noteFile = z.object({
+  id: idSchema,
+  filename: z.string(),
+  contentType: z.string(),
+  size: z.number().int(),
+});
+
 /** For tests: real responses must match what the OpenAPI document promises. */
-export const RESPONSE_SCHEMAS = { taskList, taskSingle, projectList, projectSingle };
+export const RESPONSE_SCHEMAS = {
+  taskList,
+  taskSingle,
+  projectList,
+  projectSingle,
+  noteList,
+  noteSingle,
+  noteTags,
+  taskNotes,
+  noteFile,
+};
 
 /**
  * Write bodies are the sync command schemas minus the id the route supplies itself. Deriving them
@@ -123,9 +182,17 @@ interface RestOperation {
   summary: string;
   tag: string;
   scopes: readonly ApiScope[];
+  /** Overrides the default success status (204 for a DELETE, 201 for a POST). */
+  status?: number;
   query?: z.ZodType;
   body?: z.ZodType;
+  /** The body is raw bytes (an upload), not JSON. */
+  rawBody?: true;
+  /** Extra string header parameters, such as an upload's display filename. */
+  headers?: Record<string, { description: string; required?: boolean }>;
   response?: z.ZodType;
+  /** The success response is raw bytes (a download), not JSON. */
+  rawResponse?: true;
 }
 
 const habitResource = z.object({
@@ -289,6 +356,105 @@ export const REST_OPERATIONS: RestOperation[] = [
     body: habitCheckInSchema,
     response: habitSingle,
   },
+  {
+    method: 'get',
+    path: '/api/v1/notes',
+    summary: 'List your notes, pinned first; search, tag and state filters',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    query: noteListQuerySchema,
+    response: noteList,
+  },
+  {
+    method: 'get',
+    path: '/api/v1/notes/tags',
+    summary: 'Your distinct note tags with counts (trashed notes excluded)',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    response: noteTags,
+  },
+  {
+    method: 'post',
+    path: '/api/v1/notes',
+    summary: 'Create a note (a stable id makes retries safe)',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    body: noteCreateRequestSchema,
+    response: noteSingle,
+  },
+  {
+    method: 'get',
+    path: '/api/v1/notes/:id',
+    summary: 'One note with its body, backlinks, linked tasks and files',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    response: noteSingle,
+  },
+  {
+    method: 'patch',
+    path: '/api/v1/notes/:id',
+    summary: 'Update a note (title, body, tags, pin, archive or trash)',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    body: notePatchSchema,
+    response: noteSingle,
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/notes/:id',
+    summary: 'Delete a note forever, with its files and links',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    status: 204,
+  },
+  {
+    method: 'put',
+    path: '/api/v1/notes/:id/tasks/:taskId',
+    summary: 'Link a note to a task you can see (also needs tasks:read)',
+    tag: 'Notes',
+    scopes: ['notes:write', 'tasks:read'],
+    status: 204,
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/notes/:id/tasks/:taskId',
+    summary: 'Remove a manual note-to-task link',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    status: 204,
+  },
+  {
+    method: 'get',
+    path: '/api/v1/tasks/:taskId/notes',
+    summary: 'Your own notes linked to a task you can see',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    response: taskNotes,
+  },
+  {
+    method: 'post',
+    path: '/api/v1/notes/:id/files',
+    summary: 'Upload a file to a note (raw bytes; filename in X-Filename)',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    status: 201,
+    rawBody: true,
+    headers: {
+      'X-Filename': {
+        description: 'Display filename, URL-encoded; defaults to “file”. It never touches disk.',
+      },
+    },
+    response: noteFile,
+  },
+  {
+    method: 'get',
+    path: '/api/v1/note-files/:id',
+    summary: 'Download a note file (?inline=1 renders PNG, JPEG, GIF and WebP inline)',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    query: z.object({ inline: z.enum(['1']).optional() }).strict(),
+    rawResponse: true,
+  },
 ];
 
 /** Zod → JSON Schema 2020-12, which is the dialect OpenAPI 3.1 uses. */
@@ -314,6 +480,8 @@ function queryParameters(schema: z.ZodType): unknown[] {
 const successStatus = (method: RestOperation['method']) =>
   method === 'post' ? '201' : method === 'delete' ? '204' : '200';
 
+const binarySchema = { type: 'string', format: 'binary' };
+
 export function buildOpenApiDocument(publicUrl: string | null): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const op of REST_OPERATIONS) {
@@ -327,28 +495,39 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
       });
     }
     if (op.query) parameters.push(...queryParameters(op.query));
+    for (const [name, header] of Object.entries(op.headers ?? {}))
+      parameters.push({
+        name,
+        in: 'header',
+        required: header.required ?? false,
+        description: header.description,
+        schema: { type: 'string' },
+      });
     const path = op.path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-    const ok = successStatus(op.method);
+    const ok = String(op.status ?? successStatus(op.method));
+    const requestContent = op.rawBody
+      ? { 'application/octet-stream': { schema: binarySchema } }
+      : op.body
+        ? { 'application/json': { schema: toJsonSchema(op.body, 'input') } }
+        : null;
+    const responseContent = op.rawResponse
+      ? { 'application/octet-stream': { schema: binarySchema } }
+      : op.response
+        ? { 'application/json': { schema: toJsonSchema(op.response, 'output') } }
+        : null;
     paths[path] ??= {};
     paths[path][op.method] = {
       summary: op.summary,
       tags: [op.tag],
       security: [{ bearerAuth: [...op.scopes] }],
       ...(parameters.length ? { parameters } : {}),
-      ...(op.body && op.method !== 'get'
-        ? {
-            requestBody: {
-              required: true,
-              content: { 'application/json': { schema: toJsonSchema(op.body, 'input') } },
-            },
-          }
+      ...(op.method !== 'get' && requestContent
+        ? { requestBody: { required: true, content: requestContent } }
         : {}),
       responses: {
         [ok]: {
           description: ok === '204' ? 'Deleted' : 'Success',
-          ...(op.response && ok !== '204'
-            ? { content: { 'application/json': { schema: toJsonSchema(op.response, 'output') } } }
-            : {}),
+          ...(ok !== '204' && responseContent ? { content: responseContent } : {}),
         },
         '400': { description: 'Invalid body, query or path parameters' },
         '401': { description: 'Missing, malformed or unknown bearer token' },
@@ -363,7 +542,7 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
       title: 'BokyDo REST API',
       version: '1.0.0',
       description:
-        'Resource-oriented access to tasks, projects and personal habits for integrations. Authenticate with a personal access token or an OAuth 2.1 access token as a bearer token; each operation needs the scope listed on it. Everything is scoped to what the token’s owner can see.',
+        'Resource-oriented access to tasks, projects, personal habits and notes for integrations. Authenticate with a personal access token or an OAuth 2.1 access token as a bearer token; each operation needs the scope listed on it. Everything is scoped to what the token’s owner can see.',
     },
     ...(publicUrl ? { servers: [{ url: publicUrl }] } : {}),
     components: {

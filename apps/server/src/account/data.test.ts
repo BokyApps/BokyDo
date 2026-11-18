@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,10 @@ import {
   comments,
   habits,
   habitCheckIns,
+  noteFiles,
+  noteLinks,
+  notes,
+  noteTaskLinks,
   projects,
   tasks,
   users,
@@ -114,6 +119,54 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       { id: id(), ownerUserId: bob.id, name: 'Bob private habit', period: 'day', target: 1 },
     ]);
     await t.db.db.insert(habitCheckIns).values({ habitId, date: '2026-11-01' });
+
+    // Notes, in every state. The censored span stays ciphertext in the body, as stored.
+    const censorToken = `{{censored:v1:${'A'.repeat(22)}:${'B'.repeat(16)}:c2VjcmV0cGhyYXNl}}`;
+    const activeNote = newId();
+    const archivedNote = newId();
+    const trashedNote = newId();
+    await t.db.db.insert(notes).values([
+      {
+        id: activeNote,
+        ownerUserId: alice.id,
+        title: 'Alice note',
+        body: `Hello ${censorToken}`,
+        tags: ['secret'],
+      },
+      {
+        id: archivedNote,
+        ownerUserId: alice.id,
+        title: 'Archived note',
+        body: 'Old but kept',
+        state: 'archived',
+      },
+      {
+        id: trashedNote,
+        ownerUserId: alice.id,
+        title: 'Trashed note',
+        body: 'Gone but exported',
+        trashedAt: new Date('2026-11-02T00:00:00Z'),
+      },
+      { id: newId(), ownerUserId: bob.id, title: 'Bob private note', body: 'bob-only note' },
+    ]);
+    await t.db.db.insert(noteLinks).values({ fromNoteId: activeNote, toNoteId: archivedNote });
+    await t.db.db
+      .insert(noteTaskLinks)
+      .values({ noteId: activeNote, taskId: done, source: 'manual' });
+    const noteFileId = newId();
+    const noteFileStore = new AttachmentStore(t.dataDir, 'note-files');
+    await noteFileStore.write(noteFileId, Readable.from([Buffer.from('note file bytes')]), 1024);
+    await t.db.db.insert(noteFiles).values({
+      id: noteFileId,
+      noteId: activeNote,
+      ownerUserId: alice.id,
+      filename: '../../secret.txt',
+      contentType: 'text/plain',
+      size: 15,
+      sha256: 'x'.repeat(64),
+      referenced: true,
+    });
+
     const res = await alice.http.request({ method: 'GET', url: '/api/v1/account/export' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/zip');
@@ -128,10 +181,13 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
         'export.json',
         'tasks.csv',
         `attachments/${attachmentId}/etc_passwd`,
+        `notes/files/${noteFileId}/secret.txt`,
       ]),
     );
     expect(names.every((n) => !n.includes('..') && !n.startsWith('/'))).toBe(true);
     expect(files[`attachments/${attachmentId}/etc_passwd`]).toBe('hello file');
+    expect(files[`notes/files/${noteFileId}/secret.txt`]).toBe('note file bytes');
+    expect(files['README.txt']).toContain('notes/files/');
 
     const data = JSON.parse(files['export.json'] ?? '{}') as {
       account: { username: string };
@@ -140,6 +196,10 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       tasks: { content: string; isCompleted: boolean }[];
       projects: { name: string }[];
       personalAccessTokens: { name: string }[];
+      notes: { id: string; title: string; body: string; state: string }[];
+      noteLinks: { fromNoteId: string; toNoteId: string }[];
+      noteTaskLinks: { noteId: string; taskId: string; source: string }[];
+      noteFiles: { id: string; noteId: string; file: string }[];
     };
     expect(data.account.username).toBe('alice');
     expect(data.habits.map((h) => h.name)).toEqual(['Alice daily reading']);
@@ -149,10 +209,29 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
     );
     expect(data.projects.map((p) => p.name)).not.toContain('Bob private');
     expect(data.personalAccessTokens.map((p) => p.name)).toEqual(['n8n']);
+    // Notes: all three states, the trashed one included, and the body exactly as stored — the
+    // user's own censored ciphertext is theirs, so it stays verbatim.
+    expect(data.notes.map((n) => n.title).sort()).toEqual([
+      'Alice note',
+      'Archived note',
+      'Trashed note',
+    ]);
+    expect(data.notes.find((n) => n.id === activeNote)?.body).toBe(`Hello ${censorToken}`);
+    expect(data.notes.find((n) => n.id === trashedNote)?.state).toBe('trashed');
+    expect(data.noteLinks).toEqual([{ fromNoteId: activeNote, toNoteId: archivedNote }]);
+    expect(data.noteTaskLinks).toEqual([{ noteId: activeNote, taskId: done, source: 'manual' }]);
+    expect(data.noteFiles).toEqual([
+      expect.objectContaining({
+        id: noteFileId,
+        noteId: activeNote,
+        file: `notes/files/${noteFileId}/secret.txt`,
+      }),
+    ]);
     const everything = JSON.stringify(files);
     for (const leak of [
       'bob-only secret',
       'Bob private habit',
+      'bob-only note',
       '$argon2',
       'passwordHash',
       'bkd_pat_',
@@ -244,6 +323,38 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
       target: 1,
     });
     await t.db.db.insert(habitCheckIns).values({ habitId, date: '2026-11-01' });
+    // Note files are the user's own bytes outside the database; deletion must remove them now.
+    const noteFileStore = new AttachmentStore(t.dataDir, 'note-files');
+    const aliceNote = id();
+    const aliceNoteFile = newId();
+    await noteFileStore.write(aliceNoteFile, Readable.from([Buffer.from('alice note')]), 1024);
+    await t.db.db
+      .insert(notes)
+      .values({ id: aliceNote, ownerUserId: alice.id, title: 'Private note' });
+    await t.db.db.insert(noteFiles).values({
+      id: aliceNoteFile,
+      noteId: aliceNote,
+      ownerUserId: alice.id,
+      filename: 'private.txt',
+      contentType: 'text/plain',
+      size: 10,
+      sha256: 'x'.repeat(64),
+      referenced: true,
+    });
+    const bobNote = id();
+    const bobNoteFile = newId();
+    await noteFileStore.write(bobNoteFile, Readable.from([Buffer.from('bob note')]), 1024);
+    await t.db.db.insert(notes).values({ id: bobNote, ownerUserId: bob.id, title: 'Bob note' });
+    await t.db.db.insert(noteFiles).values({
+      id: bobNoteFile,
+      noteId: bobNote,
+      ownerUserId: bob.id,
+      filename: 'bob.txt',
+      contentType: 'text/plain',
+      size: 8,
+      sha256: 'x'.repeat(64),
+      referenced: true,
+    });
     const bobCursor = (await bob.sync.run()).cursor;
 
     const res = await alice.http.post('/api/v1/account/delete', { confirm: 'alice' });
@@ -254,6 +365,13 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
     expect(
       await t.db.db.select().from(habitCheckIns).where(eq(habitCheckIns.habitId, habitId)),
     ).toEqual([]);
+    // Notes and their files go at once, not with the hourly stray-file purge; Bob's stay.
+    expect(await t.db.db.select().from(notes).where(eq(notes.id, aliceNote))).toEqual([]);
+    expect(await t.db.db.select().from(noteFiles).where(eq(noteFiles.id, aliceNoteFile))).toEqual(
+      [],
+    );
+    expect(existsSync(path.join(t.dataDir, 'note-files', aliceNoteFile))).toBe(false);
+    expect(existsSync(path.join(t.dataDir, 'note-files', bobNoteFile))).toBe(true);
     expect(await t.db.db.select().from(projects).where(eq(projects.id, own))).toEqual([]);
     expect(await t.db.db.select().from(tasks).where(eq(tasks.id, ownTask))).toEqual([]);
     const [kept] = await t.db.db.select().from(tasks).where(eq(tasks.id, aliceInShared));
