@@ -176,6 +176,125 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect(await t.db.db.select().from(notes)).toEqual([]);
   });
 
+  it('accepts a save only against the revision the client last saw', async () => {
+    const alice = await person('alice');
+    const created = await createNote(alice, { title: 'Revision', body: 'one' });
+    const noteId = created.note.id as string;
+    const createdRevision = created.note.updatedAt as string;
+    // Millisecond precision, the exact form `toISOString` writes.
+    expect(createdRevision).toMatch(/\.\d{3}Z$/);
+
+    // GET → PATCH with the returned updatedAt succeeds and answers the new revision.
+    const fetched = await alice.http.get(`/api/v1/notes/${noteId}`);
+    expect(fetched.json().note.updatedAt).toBe(createdRevision);
+    const saved = await alice.http.patch(`/api/v1/notes/${noteId}`, {
+      body: 'two',
+      expectedUpdatedAt: createdRevision,
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().note.body).toBe('two');
+    const revision = saved.json().note.updatedAt as string;
+    expect(revision).toMatch(/\.\d{3}Z$/);
+    expect(revision).not.toBe(createdRevision);
+
+    // The same revision again is stale: 409 with the current revision, and nothing written.
+    const stale = await alice.http.patch(`/api/v1/notes/${noteId}`, {
+      body: 'three',
+      expectedUpdatedAt: createdRevision,
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({ error: 'stale_revision', updatedAt: revision });
+    const after = await alice.http.get(`/api/v1/notes/${noteId}`);
+    expect(after.json().note.body).toBe('two');
+    expect(after.json().note.updatedAt).toBe(revision);
+
+    // Without the precondition the old unconditional behaviour is unchanged.
+    const unconditional = await alice.http.patch(`/api/v1/notes/${noteId}`, { body: 'four' });
+    expect(unconditional.statusCode).toBe(200);
+    expect(unconditional.json().note.body).toBe('four');
+
+    // A revision is only accepted in the canonical spelling the API returns.
+    for (const value of [
+      '2026-11-18T12:00:00Z',
+      '2026-11-18T12:00:00.000+00:00',
+      '2026-11-18 12:00:00.000Z',
+      '2026-11-18',
+      'now',
+      '',
+    ]) {
+      const bad = await alice.http.patch(`/api/v1/notes/${noteId}`, {
+        title: 'changed',
+        expectedUpdatedAt: value,
+      });
+      expect(bad.statusCode, value).toBe(400);
+      expect(bad.json(), value).toEqual({ error: 'validation_failed' });
+    }
+    // A precondition alone is not a change, so it is the same validation error as an empty patch.
+    const onlyPrecondition = await alice.http.patch(`/api/v1/notes/${noteId}`, {
+      expectedUpdatedAt: revision,
+    });
+    expect(onlyPrecondition.statusCode).toBe(400);
+    expect(onlyPrecondition.json()).toEqual({ error: 'validation_failed' });
+    expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.title).toBe('Revision');
+  });
+
+  it('lets exactly one of two concurrent saves with the same revision win', async () => {
+    const alice = await person('alice');
+    const created = await createNote(alice, { title: 'Race', body: 'base' });
+    const noteId = created.note.id as string;
+    const revision = created.note.updatedAt as string;
+
+    const [a, b] = await Promise.all([
+      alice.http.patch(`/api/v1/notes/${noteId}`, {
+        body: 'first',
+        expectedUpdatedAt: revision,
+      }),
+      alice.http.patch(`/api/v1/notes/${noteId}`, {
+        body: 'second',
+        expectedUpdatedAt: revision,
+      }),
+    ]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+    const winner = a.statusCode === 200 ? a : b;
+    const loser = a.statusCode === 200 ? b : a;
+    expect(loser.json()).toEqual({
+      error: 'stale_revision',
+      updatedAt: winner.json().note.updatedAt,
+    });
+    const after = await alice.http.get(`/api/v1/notes/${noteId}`);
+    expect(after.json().note.body).toBe(winner.json().note.body);
+    expect(after.json().note.updatedAt).toBe(winner.json().note.updatedAt);
+  });
+
+  it('gives a write-only token the stale error without the current revision', async () => {
+    const alice = await person('alice');
+    const writeOnly = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'write',
+      scopes: ['notes:write'],
+      expiresInDays: 1,
+    });
+    const created = await bearer(writeOnly.token).post('/api/v1/notes', {
+      title: 'Secret',
+      body: 'secret body',
+    });
+    expect(created.statusCode).toBe(201);
+    const noteId = created.json().note.id as string;
+    const revision = created.json().note.updatedAt as string;
+    const bumped = await bearer(writeOnly.token).patch(`/api/v1/notes/${noteId}`, {
+      body: 'newer secret',
+    });
+    expect(bumped.statusCode).toBe(200);
+
+    const stale = await bearer(writeOnly.token).patch(`/api/v1/notes/${noteId}`, {
+      body: 'stale secret',
+      expectedUpdatedAt: revision,
+    });
+    expect(stale.statusCode).toBe(409);
+    // No revision, no body: a write-only token learns nothing it may not read.
+    expect(stale.json()).toEqual({ error: 'stale_revision' });
+    expect((await bearer(writeOnly.token).get(`/api/v1/notes/${noteId}`)).statusCode).toBe(403);
+  });
+
   it('makes stable-ID creates idempotent and rejects conflicting retries', async () => {
     const alice = await person('alice');
     const bob = await person('bob');

@@ -173,6 +173,45 @@ describe.skipIf(!TEST_DATABASE_URL)('MCP notes', () => {
     expect(await t.db.db.select().from(notes)).toHaveLength(1);
   });
 
+  it('passes expectedUpdatedAt through and reports a stale revision clearly', async () => {
+    const rw = await token(alice, ['notes:read', 'notes:write']);
+    const created = await call(rw, 'create_note', { title: 'Rev', body: 'one' });
+    const note = (created.structuredContent as { note: { id: string; updatedAt: string } }).note;
+
+    const saved = await call(rw, 'update_note', {
+      id: note.id,
+      body: 'two',
+      expectedUpdatedAt: note.updatedAt,
+    });
+    expect(saved.isError).toBeFalsy();
+    const revision = (saved.structuredContent as { note: { updatedAt: string } }).note.updatedAt;
+    expect(revision).not.toBe(note.updatedAt);
+
+    const stale = await call(rw, 'update_note', {
+      id: note.id,
+      body: 'three',
+      expectedUpdatedAt: note.updatedAt,
+    });
+    expect(stale.isError).toBe(true);
+    expect(text(stale)).toContain('stale revision');
+    expect(text(await call(rw, 'get_note', { id: note.id }))).toContain('"body": "two"');
+
+    // The same canonical-instant rule as REST, and a precondition alone is not a change.
+    const bad = await call(rw, 'update_note', {
+      id: note.id,
+      body: 'three',
+      expectedUpdatedAt: '2026-11-18T12:00:00Z',
+    });
+    expect(bad.isError).toBe(true);
+    expect(text(bad)).toContain('canonical ISO-8601');
+    expect(
+      (await call(rw, 'update_note', { id: note.id, expectedUpdatedAt: revision })).isError,
+    ).toBe(true);
+
+    // Omitting the precondition keeps the old unconditional behaviour.
+    expect((await call(rw, 'update_note', { id: note.id, body: 'four' })).isError).toBeFalsy();
+  });
+
   it('requires note scopes and never exposes account-wide tools to project-limited tokens', async () => {
     const readOnly = await token(alice, ['notes:read']);
     const names = await toolNames(readOnly);

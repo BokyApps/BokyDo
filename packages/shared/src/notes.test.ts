@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CENSOR_PLACEHOLDER,
+  notePatchSchema,
+  notePatchWrites,
   noteSnippet,
   normaliseNoteTags,
   parseCensorToken,
@@ -35,6 +37,33 @@ describe('note tags', () => {
     // Exactly at the limits is fine.
     expect(normaliseNoteTags(['x'.repeat(50)])).toEqual(['x'.repeat(50)]);
     expect(normaliseNoteTags(Array.from({ length: 20 }, (_, i) => `tag-${i}`))).toHaveLength(20);
+  });
+});
+
+describe('note patch revisions', () => {
+  it('takes only a canonical instant as expectedUpdatedAt, and never as the only field', () => {
+    const canonical = '2026-11-18T12:00:00.000Z';
+    expect(notePatchSchema.safeParse({ title: 'x', expectedUpdatedAt: canonical }).success).toBe(
+      true,
+    );
+    for (const value of [
+      '2026-11-18T12:00:00Z',
+      '2026-11-18T12:00:00.000+00:00',
+      '2026-11-18T12:00:00.000+01:00',
+      '2026-11-18 12:00:00.000Z',
+      '2026-11-18',
+      'now',
+      '',
+      '2026-13-18T12:00:00.000Z',
+    ])
+      expect(
+        notePatchSchema.safeParse({ title: 'x', expectedUpdatedAt: value }).success,
+        value,
+      ).toBe(false);
+    // The precondition alone changes nothing, so it is not a patch.
+    expect(notePatchSchema.safeParse({ expectedUpdatedAt: canonical }).success).toBe(false);
+    expect(notePatchWrites({ expectedUpdatedAt: canonical })).toBe(false);
+    expect(notePatchWrites({ expectedUpdatedAt: canonical, body: '' })).toBe(true);
   });
 });
 

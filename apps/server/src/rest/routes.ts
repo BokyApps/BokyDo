@@ -435,7 +435,13 @@ export const REST_OPERATIONS: RestOperation[] = [
     body: notePatchSchema,
     // A token without notes:read may write, but only gets the identity back.
     responseOneOf: [noteSingle, noteReceipt],
-    responses: { '403': notesForbidden },
+    responses: {
+      '403': notesForbidden,
+      '409': {
+        description:
+          '`stale_revision`: `expectedUpdatedAt` is not the current revision of the note, so nothing was written. The body is `{"error":"stale_revision"}` and, for a token with `notes:read`, the current `updatedAt` to reload and merge against.',
+      },
+    },
   },
   {
     method: 'delete',

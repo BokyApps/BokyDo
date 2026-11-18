@@ -218,6 +218,10 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
       spec.body.paths['/api/v1/notes/{id}'].patch.responses['200'].content['application/json']
         .schema.oneOf,
     ).toHaveLength(2);
+    // A conditional PATCH documents the stale-revision conflict.
+    expect(spec.body.paths['/api/v1/notes/{id}'].patch.responses['409'].description).toContain(
+      'stale_revision',
+    );
     const upload = spec.body.paths['/api/v1/notes/{id}/files'].post;
     expect(upload.requestBody.content['application/octet-stream'].schema.format).toBe('binary');
     expect(upload.parameters.map((p: { name: string }) => p.name)).toContain('X-Filename');

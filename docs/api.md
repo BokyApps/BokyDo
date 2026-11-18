@@ -182,19 +182,19 @@ never re-create it; title, tags, pin and archive/unarchive remain allowed. That 
 `link_note_to_task` also needs `tasks:read`, and a write-only token gets only a changed note's id
 and timestamp back, not its body.
 
-| Method | Path                                | Scope         | Notes                                                                                           |
-| ------ | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/notes`                     | `notes:read`  | `q`, `tag`, `state=active\|archived\|trashed` (default `active`), `limit` (≤ 100), `cursor`.    |
-| GET    | `/api/v1/notes/tags`                | `notes:read`  | Distinct tags and counts of your non-trashed notes.                                             |
-| GET    | `/api/v1/notes/{id}`                | `notes:read`  | One note with its body, backlinks, visible linked tasks and files.                              |
-| POST   | `/api/v1/notes`                     | `notes:write` | `{ "title": "…", "body": "…", "tags": [], "pinned": false }` (optional stable UUID `id`).       |
-| PATCH  | `/api/v1/notes/{id}`                | `notes:write` | Any of `title`, `body`, `tags`, `pinned`, `state` (`active`/`archived`), `trashed`.             |
-| DELETE | `/api/v1/notes/{id}`                | `notes:write` | Deletes it and its files forever; answers `204`.                                                |
-| PUT    | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Links the task manually; idempotent, answers `204`.                                             |
-| DELETE | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Removes the manual link; answers `204`.                                                         |
-| GET    | `/api/v1/tasks/{taskId}/notes`      | `notes:read`  | Your own notes linked to a task you can see.                                                    |
-| POST   | `/api/v1/notes/{id}/files`          | `notes:write` | Raw `application/octet-stream` body, filename in `X-Filename`; answers the stored file.         |
-| GET    | `/api/v1/note-files/{id}`           | `notes:read`  | Downloads a file; `?inline=1` renders PNG, JPEG, GIF and WebP inline, everything else is saved. |
+| Method | Path                                | Scope         | Notes                                                                                                             |
+| ------ | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/notes`                     | `notes:read`  | `q`, `tag`, `state=active\|archived\|trashed` (default `active`), `limit` (≤ 100), `cursor`.                      |
+| GET    | `/api/v1/notes/tags`                | `notes:read`  | Distinct tags and counts of your non-trashed notes.                                                               |
+| GET    | `/api/v1/notes/{id}`                | `notes:read`  | One note with its body, backlinks, visible linked tasks and files.                                                |
+| POST   | `/api/v1/notes`                     | `notes:write` | `{ "title": "…", "body": "…", "tags": [], "pinned": false }` (optional stable UUID `id`).                         |
+| PATCH  | `/api/v1/notes/{id}`                | `notes:write` | Any of `title`, `body`, `tags`, `pinned`, `state` (`active`/`archived`), `trashed`; optional `expectedUpdatedAt`. |
+| DELETE | `/api/v1/notes/{id}`                | `notes:write` | Deletes it and its files forever; answers `204`.                                                                  |
+| PUT    | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Links the task manually; idempotent, answers `204`.                                                               |
+| DELETE | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Removes the manual link; answers `204`.                                                                           |
+| GET    | `/api/v1/tasks/{taskId}/notes`      | `notes:read`  | Your own notes linked to a task you can see.                                                                      |
+| POST   | `/api/v1/notes/{id}/files`          | `notes:write` | Raw `application/octet-stream` body, filename in `X-Filename`; answers the stored file.                           |
+| GET    | `/api/v1/note-files/{id}`           | `notes:read`  | Downloads a file; `?inline=1` renders PNG, JPEG, GIF and WebP inline, everything else is saved.                   |
 
 A body is at most 512 KiB of UTF-8. A title is at most 200 characters. Tags are trimmed,
 lower-cased and de-duplicated on save: each is 1–50 characters with no `#`, `,` or whitespace, and
@@ -213,6 +213,16 @@ account or different content answers `409 {"error":"id_conflict"}`. A file downl
 `application/octet-stream` otherwise. An upload answers `413 too_large` past the size limit or
 quota, `429 rate_limited` past 120 an hour, and `403 uploads_disabled` when the instance disables
 uploads.
+
+To protect a save from a stale tab, PATCH accepts `expectedUpdatedAt`: send the `updatedAt` you last
+saw, exactly as the API returned it (a canonical ISO-8601 instant such as
+`2026-11-18T12:00:00.000Z`; any other spelling is `400 validation_failed`). If the note has changed
+since that revision, nothing is written and the answer is `409 {"error":"stale_revision"}`. A token
+with `notes:read` also gets the note's current `updatedAt` in that body, so the client can reload
+and merge; a write-only token gets only the error. Without `expectedUpdatedAt` a PATCH stays
+unconditional, as before. `updatedAt` is the note's revision at millisecond precision; every
+accepted write moves it forward. MCP's `update_note` takes the same `expectedUpdatedAt` and fails
+the call with a stale-revision error instead of a `409`.
 
 ## Live updates and browser notifications
 
