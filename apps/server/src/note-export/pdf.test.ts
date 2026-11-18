@@ -3,10 +3,26 @@ import { parseNoteBody } from './ast.js';
 import type { LoadedImage } from './images.js';
 import { ExportDeadline, ExportTimeoutError } from './limits.js';
 import { buildPdf, pdfSafe } from './pdf.js';
-import { PNG_1X1, PNG_RGB, collect } from './test-support.js';
+import { PNG_1X1, PNG_RGB, collect, makeJpeg, makePng } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
 const ALPHA_ID = '66666666-6666-4666-8666-666666666666';
+const TEXT_ID = '77777777-7777-4777-8777-777777777777';
+const MOTION_ID = '88888888-8888-4888-8888-888888888888';
+const TEXT_PNG = makePng({
+  colorType: 2,
+  extra: [
+    {
+      type: 'tEXt',
+      data: Buffer.from(`Comment\0${'x'.repeat(256 * 1024)}`, 'latin1'),
+    },
+  ],
+});
+const MOTION_JPEG = makeJpeg({
+  width: 2,
+  height: 2,
+  append: Buffer.from('ftypmp42-appended-video', 'latin1'),
+});
 const SALT = 'A'.repeat(22);
 const IV = 'B'.repeat(16);
 
@@ -17,11 +33,28 @@ const images = new Map<string, LoadedImage>([
     ALPHA_ID,
     { id: ALPHA_ID, filename: 'alpha.png', type: 'png', width: 1, height: 1, bytes: PNG_1X1 },
   ],
+  [
+    TEXT_ID,
+    { id: TEXT_ID, filename: 'meta.png', type: 'png', width: 1, height: 1, bytes: TEXT_PNG },
+  ],
+  [
+    MOTION_ID,
+    {
+      id: MOTION_ID,
+      filename: 'motion.jpg',
+      type: 'jpeg',
+      width: 2,
+      height: 2,
+      bytes: MOTION_JPEG,
+    },
+  ],
 ]);
 
 const fileNames = new Map([
   [PNG_ID, 'shot.png'],
   [ALPHA_ID, 'alpha.png'],
+  [TEXT_ID, 'meta.png'],
+  [MOTION_ID, 'motion.jpg'],
 ]);
 
 const BODY = [
@@ -215,6 +248,24 @@ describe('note export PDF', () => {
     expect(text).toContain('missing');
   });
 
+  it('rebuilds a PNG with a 256 KiB tEXt chunk before pdfkit sees it', async () => {
+    const body = `![metadata](/api/v1/note-files/${TEXT_ID}?inline=1)\n`;
+    const { pdf } = await render(body);
+    const raw = pdf.toString('latin1');
+    expect(raw).toContain('/Subtype /Image');
+    // The ancillary chunk is dropped, so no metadata text (or tEXt parser path) reaches pdfkit.
+    expect(raw).not.toContain('tEXt');
+    expect(raw).not.toContain('xxxxx');
+  });
+
+  it('embeds a motion-photo JPEG only through its first EOI', async () => {
+    const body = `![motion](/api/v1/note-files/${MOTION_ID}?inline=1)\n`;
+    const { pdf } = await render(body);
+    const raw = pdf.toString('latin1');
+    expect(raw).toContain('/Subtype /Image');
+    expect(raw).not.toContain('ftypmp42');
+  });
+
   it('renders an alpha PNG as text even when a caller hands it over unvalidated', async () => {
     const body = `![alpha](/api/v1/note-files/${ALPHA_ID}?inline=1)\n`;
     const { pdf, text } = await render(body);
@@ -247,6 +298,39 @@ describe('note export PDF', () => {
     // The header row is repeated on the later pages.
     expect(text.split('second').length - 1).toBeGreaterThan(1);
     expect(text).toContain('row 59');
+  });
+
+  it('renders a table too wide for its minimum columns as header: value lines', async () => {
+    const columns = 40;
+    const header = Array.from({ length: columns }, (_, index) => `head${index}`);
+    const values = Array.from({ length: columns }, (_, index) => `value${index}`);
+    const body = [
+      `| ${header.join(' | ')} |`,
+      `| ${header.map(() => '---').join(' | ')} |`,
+      `| ${values.join(' | ')} |`,
+    ].join('\n');
+    const { pdf, text } = await render(body, 'Wide table');
+    expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    // No grid is drawn; every cell is a readable line instead of running off the page.
+    expect(text).toContain('head0: value0');
+    expect(text).toContain('head39: value39');
+  });
+
+  it('truncates a header taller than a page with an ellipsis instead of looping', async () => {
+    const columns = 19;
+    const header = Array.from({ length: columns }, (_, index) =>
+      index === 0 ? Array.from({ length: 1200 }, () => 'word').join(' ') : `h${index}`,
+    );
+    const values = Array.from({ length: columns }, (_, index) => `v${index}`);
+    const body = [
+      `| ${header.join(' | ')} |`,
+      `| ${header.map(() => '---').join(' | ')} |`,
+      `| ${values.join(' | ')} |`,
+    ].join('\n');
+    const { pdf, text } = await render(body, 'Tall header');
+    expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    expect(text).toContain('…');
+    expect(text).toContain('v0');
   });
 
   it('replaces characters the built-in fonts cannot draw', async () => {

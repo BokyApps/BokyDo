@@ -17,6 +17,7 @@ import {
   TooLargeError,
   type ExportLimits,
 } from './limits.js';
+import type { NoteExportInternal } from './runner.js';
 
 /**
  * Per-note export (ADR 0025): Markdown (zipped when the note has files), DOCX and PDF, rendered
@@ -33,6 +34,8 @@ export interface NoteExportRouteDeps {
   /** `<dataDir>/note-files`: note files live apart from comment attachments. */
   store: AttachmentStore;
   limits?: Partial<ExportLimits>;
+  /** Test-only worker hooks; the production app never sets this. */
+  internal?: NoteExportInternal;
 }
 
 const idParams = z.object({ id: z.uuid() }).strict();
@@ -54,21 +57,46 @@ export function registerNoteExportRoutes(app: FastifyInstance, deps: NoteExportR
     const format: NoteExportFormat = query.data.format;
     const userId = requireUser(req).id;
 
+    // A disconnect before the first byte (a slow parse, a slow image set) must kill the
+    // worker immediately rather than at the 30 s deadline; `sendStream` covers a disconnect
+    // after the headers are out.
+    const abort = new AbortController();
+    const onClose = () => {
+      if (!reply.raw.writableEnded) abort.abort();
+    };
+    reply.raw.once('close', onClose);
+
     let output: Awaited<ReturnType<typeof runNoteExport>>;
     try {
       output = await runNoteExport(
-        { db: deps.db, store: deps.store, ...(deps.limits ? { limits: deps.limits } : {}) },
-        { noteId: params.data.id, userId, format },
+        {
+          db: deps.db,
+          store: deps.store,
+          ...(deps.limits ? { limits: deps.limits } : {}),
+          ...(deps.internal ? { internal: deps.internal } : {}),
+        },
+        { noteId: params.data.id, userId, format, signal: abort.signal },
       );
     } catch (err) {
+      reply.raw.off('close', onClose);
+      if (abort.signal.aborted) {
+        // The socket is gone; there is nobody to answer and the worker already released its slot.
+        return reply;
+      }
       if (err instanceof ExportNotFoundError) return reply.status(404).send({ error: 'not_found' });
       if (err instanceof ExportBusyError) return reply.status(429).send({ error: 'export_busy' });
       if (err instanceof ExportTimeoutError)
         return reply.status(503).send({ error: 'export_timeout' });
       if (err instanceof TooLargeError) return reply.status(413).send({ error: 'too_large' });
-      throw err;
+      // A worker that died for any other reason (a bug, a corrupted image, a non-OOM crash) is
+      // an internal failure. It is answered before any header is committed, never rethrown into
+      // Fastify's default error path where a streamed body could already be half-written.
+      req.log.error({ err }, 'note export failed');
+      return reply.status(500).send({ error: 'internal_error' });
     }
 
+    // The worker path has produced its output; from here `sendStream` owns the close listener.
+    reply.raw.off('close', onClose);
     const maxBytes = deps.limits?.maxOutputBytes ?? DEFAULT_EXPORT_LIMITS.maxOutputBytes;
     // A buffered body can still be refused with a status, before any header is committed.
     if (typeof output.body === 'string') {

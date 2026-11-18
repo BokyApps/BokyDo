@@ -1,5 +1,6 @@
 import { open, type FileHandle } from 'node:fs/promises';
-import { PassThrough, type Readable } from 'node:stream';
+import { PassThrough, Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createDeflateRaw, crc32 } from 'node:zlib';
 
 /**
@@ -14,6 +15,12 @@ export class ZipWriter {
   private readonly central: Buffer[] = [];
   private count = 0;
   private finished = false;
+
+  constructor() {
+    // A producer may fail before the response is attached (a hostile note is parsed first). An
+    // unobserved `'error'` event would otherwise be uncaught; the route's own listener still runs.
+    this.stream.on('error', () => undefined);
+  }
 
   /** Add a file from a buffer, string or stream. Resolves when it has been fully written. */
   async add(
@@ -41,36 +48,37 @@ export class ZipWriter {
     let crc = 0;
     let size = 0;
     let compressed = 0;
-    const deflate = createDeflateRaw({ level: 6 });
-    const done = new Promise<void>((resolve, reject) => {
-      deflate.on('data', (chunk: Buffer) => {
-        compressed += chunk.length;
-        if (!this.stream.write(chunk)) {
-          deflate.pause();
-          // A disconnected reader never drains: fail the producer instead of parking it.
-          waitFor(this.stream, 'drain').then(
-            () => deflate.resume(),
-            (err: Error) => deflate.destroy(err),
-          );
-        }
-      });
-      deflate.on('end', resolve);
-      deflate.on('error', reject);
-      deflate.on('close', () => reject(new Error('zip entry closed before it finished')));
+    /** Counts uncompressed bytes and their CRC before the compressor sees them. */
+    const digest = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        crc = crc32(chunk, crc);
+        size += chunk.length;
+        callback(null, chunk);
+      },
     });
-    const feed = async (chunk: Buffer) => {
-      crc = crc32(chunk, crc);
-      size += chunk.length;
-      if (!deflate.write(chunk)) await waitFor(deflate, 'drain');
-    };
-    if (typeof data === 'string' || Buffer.isBuffer(data)) {
-      await feed(Buffer.from(data));
-    } else {
-      for await (const chunk of data)
-        await feed(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+    /** Counts compressed bytes; the deflate stream's own output is not buffered here. */
+    const count = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        compressed += chunk.length;
+        callback(null, chunk);
+      },
+    });
+    const input: Readable =
+      typeof data === 'string' || Buffer.isBuffer(data)
+        ? Readable.from([typeof data === 'string' ? Buffer.from(data) : data])
+        : data;
+    const deflate = createDeflateRaw({ level: 6 });
+    // One pipeline, one promise per entry. `pipeline` observes every error — a reader that goes
+    // away (backpressure, then `destroy`) rejects this promise once — so there is no second,
+    // unobserved rejection. Both ends are destroyed explicitly in `finally`: the compressor can
+    // still hold buffered input when the destination dies, and the caller's stream must not be
+    // left open.
+    try {
+      await pipeline(input, digest, deflate, count, this.stream, { end: false });
+    } finally {
+      if (!input.destroyed) input.destroy();
+      if (!deflate.destroyed) deflate.destroy();
     }
-    deflate.end();
-    await done;
     this.offset += compressed;
     if (size > 0xfffffffe || this.offset > 0xfffffffe) throw new ZipLimitError('archive too large');
 
@@ -188,8 +196,8 @@ export class ZipLimitError extends Error {}
 
 /** One path component may not exceed this many UTF-8 bytes (Windows' own practical limit). */
 const MAX_COMPONENT_BYTES = 200;
-/** Windows refuses these device names, with or without an extension. */
-const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+/** Windows refuses these device names, with or without an extension. `¹²³` count as digits. */
+const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/i;
 /** Characters Windows refuses in a name, plus the archive's own separator (handled apart). */
 const FORBIDDEN_CHARS = /[:*?"<>|]/g;
 
@@ -232,7 +240,7 @@ function safeComponent(part: string): string | null {
       .trim(),
   );
   if (clean === '' || clean === '.' || clean === '..') return null;
-  const dot = clean.lastIndexOf('.');
+  const dot = clean.indexOf('.');
   const stem = dot > 0 ? clean.slice(0, dot) : clean;
   if (RESERVED_NAME.test(stem)) clean = `_${clean}`;
   clean = trimTrailing(trimToBytes(clean, MAX_COMPONENT_BYTES).trim());

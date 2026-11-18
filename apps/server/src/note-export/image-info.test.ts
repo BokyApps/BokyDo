@@ -4,11 +4,13 @@ import {
   MAX_IMAGE_BYTES,
   MAX_IMAGE_PIXELS,
   crc32,
+  jpegEnd,
   readAll,
   readImageInfo,
   readJpegStructure,
   readPngStructure,
   readPrefix,
+  rebuildPngForPdf,
   validateImage,
 } from './image-info.js';
 import { makeJpeg, makePng } from './test-support.js';
@@ -150,6 +152,41 @@ describe('PNG structure', () => {
     expect(readPngStructure(Buffer.alloc(0))).toBeNull();
   });
 
+  it('rejects a non-empty IEND and an IDAT larger than the scanlines it claims', () => {
+    expect(readPngStructure(makePng({ iendData: Buffer.from('x') }))).toBeNull();
+    // A 1x1 RGB image has 4 raw bytes; a 20 KB IDAT is a decompression bomb, not zlib overhead.
+    expect(readPngStructure(makePng({ colorType: 2, idat: Buffer.alloc(20_000, 7) }))).toBeNull();
+    // A valid zlib stream may be a few bytes larger than the raw data (the 1x1 case).
+    expect(readPngStructure(makePng({ colorType: 2 }))).not.toBeNull();
+  });
+
+  it('rejects bit depth / colour type combinations the PNG spec does not define', () => {
+    expect(readPngStructure(makePng({ colorType: 2, bitDepth: 4 }))).toBeNull();
+    expect(readPngStructure(makePng({ colorType: 6, bitDepth: 4 }))).toBeNull();
+    expect(readPngStructure(makePng({ colorType: 3, bitDepth: 16 }))).toBeNull();
+    expect(readPngStructure(makePng({ colorType: 0, bitDepth: 4 }))).not.toBeNull();
+  });
+
+  it('accepts ancillary chunks but rebuilds a PDF PNG from IHDR/IDAT/IEND only', () => {
+    const text = Buffer.from(`Comment\0${'x'.repeat(256 * 1024)}`, 'latin1');
+    const file = makePng({ colorType: 2, extra: [{ type: 'tEXt', data: text }] });
+    expect(readPngStructure(file)).toEqual({ width: 1, height: 1, pdfSafe: true });
+    expect(validateImage(file, 'pdf')).toEqual({ type: 'png', width: 1, height: 1 });
+    const rebuilt = rebuildPngForPdf(file);
+    expect(rebuilt).not.toBeNull();
+    expect(rebuilt?.length).toBeLessThan(file.length);
+    expect(rebuilt?.toString('latin1')).not.toContain('tEXt');
+    expect(rebuilt?.toString('latin1')).not.toContain('xxxx');
+    // The rebuilt file is itself a valid, pdfkit-safe PNG.
+    expect(validateImage(rebuilt ?? Buffer.alloc(0), 'pdf')).toEqual({
+      type: 'png',
+      width: 1,
+      height: 1,
+    });
+    // An alpha PNG is never rebuilt for PDF.
+    expect(rebuildPngForPdf(makePng({ colorType: 6 }))).toBeNull();
+  });
+
   it('computes the CRC the way PNG does', () => {
     // CRC-32 of "IEND" is the well-known 0xae426082.
     expect(crc32(Buffer.from('IEND', 'latin1'))).toBe(0xae426082);
@@ -158,7 +195,7 @@ describe('PNG structure', () => {
 
 describe('JPEG structure', () => {
   it('accepts a JPEG whose markers are inside the file and which ends in EOI', () => {
-    expect(readJpegStructure(makeJpeg({ width: 4, height: 3 }))).toEqual({
+    expect(readJpegStructure(makeJpeg({ width: 4, height: 3 }))).toMatchObject({
       type: 'jpeg',
       width: 4,
       height: 3,
@@ -168,6 +205,33 @@ describe('JPEG structure', () => {
       width: 4,
       height: 3,
     });
+  });
+
+  it('finds the first EOI through entropy-coded data and ignores an appended video', () => {
+    const plain = makeJpeg({ width: 4, height: 3 });
+    // Android Motion Photos append an MP4 after the JPEG. The JPEG part is still the image.
+    const motion = makeJpeg({
+      width: 4,
+      height: 3,
+      append: Buffer.from('ftypmp42video', 'latin1'),
+    });
+    expect(readJpegStructure(motion)).toMatchObject({ type: 'jpeg', width: 4, height: 3 });
+    expect(jpegEnd(motion)).toBe(plain.length);
+    expect(validateImage(motion, 'docx')).toEqual({ type: 'jpeg', width: 4, height: 3 });
+  });
+
+  it('walks stuffed FF00 bytes and restart markers without ending the scan early', () => {
+    // SOI, APP0, SOF, SOS, then entropy data with a stuffed 0xFF, an RST0, and EOI.
+    const scan = Buffer.from([
+      0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0xff, 0x00, 0x12, 0xff, 0xd0,
+      0x34, 0xff, 0xd9,
+    ]);
+    const base = makeJpeg({ omitEoi: true });
+    const file = Buffer.concat([base, scan]);
+    const end = jpegEnd(file);
+    expect(end).not.toBeNull();
+    expect(file.readUInt16BE((end ?? 0) - 2)).toBe(0xffd9);
+    expect(validateImage(file, 'pdf')).toMatchObject({ type: 'jpeg', width: 2, height: 2 });
   });
 
   it('rejects a segment length that runs past the end of the file', () => {

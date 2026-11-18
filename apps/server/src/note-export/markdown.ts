@@ -88,7 +88,6 @@ function codeSpan(text: string): string {
     text.startsWith('`') || text.endsWith('`') || text.startsWith(' ') || text.endsWith(' ');
   return pad ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
 }
-
 function fileName(fileId: string, opts: MarkdownOptions): string | null {
   return opts.fileNames?.get(fileId) ?? null;
 }
@@ -147,7 +146,9 @@ function runMarkdown(run: Run, opts: MarkdownOptions): string {
   }
 
   if (run.fileId) {
-    if (run.code) return text;
+    // Keep the link wrapper even when the label is inline code: dropping it would put two code
+    // spans side by side, and their backtick runs can then merge into a delimiter that never
+    // closes (the following text would parse as HTML in an `html: true` reader).
     const name = fileName(run.fileId, opts) ?? text;
     if (opts.fileUnavailable?.has(run.fileId)) return unavailableMarkdown(name);
     const url = fileUrl(run.fileId, opts);
@@ -155,12 +156,28 @@ function runMarkdown(run: Run, opts: MarkdownOptions): string {
     if (run.href) return `[${text}](${markdownUrl(run.href)})`;
     return text;
   }
-  if (run.appLink || !run.href || run.code) return text;
+  if (run.appLink || !run.href) return text;
   return `[${text}](${markdownUrl(run.href)})`;
 }
 
+/**
+ * Inline runs, kept from merging delimiters: a code span's closing backticks and the next run's
+ * opening backticks must never form one longer run. CommonMark matches a closing delimiter by
+ * exact length, so a merged run can leave a span unterminated and release the rest of the line
+ * (including `<b>`) into raw HTML for a lenient reader. A literal space is the cheapest
+ * separator and changes only the whitespace between two spans, never their content.
+ */
 function inlineMarkdown(runs: readonly Run[], opts: MarkdownOptions): string {
-  return runs.map((run) => runMarkdown(run, opts)).join('');
+  const parts: string[] = [];
+  let previous = '';
+  for (const run of runs) {
+    let piece = runMarkdown(run, opts);
+    if (piece === '') continue;
+    if (previous.endsWith('`') && piece.startsWith('`')) piece = ` ${piece}`;
+    parts.push(piece);
+    previous = piece;
+  }
+  return parts.join('');
 }
 
 /** `1. text` or `- text` at the very start of a paragraph would become a list without this. */

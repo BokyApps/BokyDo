@@ -32,9 +32,38 @@ export const DEFAULT_EXPORT_LIMITS: ExportLimits = {
   maxInlineRuns: 500_000,
   maxImagePlacements: 500,
   maxLinkAnnotations: 20_000,
-  maxOutputBytes: 200 * 1024 * 1024,
+  maxOutputBytes: 100 * 1024 * 1024,
   deadlineMs: 30_000,
 };
+
+/** More lines than this is never a note a person wrote, and a parser would walk each one. */
+export const MAX_BODY_LINES = 20_000;
+/** A sparse table can be one row with tens of thousands of empty cells; refuse it early. */
+export const MAX_BODY_PIPES = 50_000;
+
+/**
+ * The cheap shape check that runs before `md.parse`, on both threads: line count and `|` count
+ * in one linear pass. A sparse-table bomb is refused here after ~50,000 characters instead of
+ * letting markdown-it allocate tokens for every empty cell, and a body with a huge number of
+ * one-line blocks is refused before the parser sees it. The worker's heap limit is the backstop
+ * for anything this cannot predict.
+ */
+export function checkBodyShape(body: string): void {
+  let lines = body === '' ? 0 : 1;
+  let pipes = 0;
+  for (let index = 0; index < body.length; index++) {
+    const code = body.charCodeAt(index);
+    if (code === 0x0a) {
+      lines++;
+      if (lines > MAX_BODY_LINES)
+        throw new TooLargeError(`note body has more than ${MAX_BODY_LINES} lines`);
+    } else if (code === 0x7c) {
+      pipes++;
+      if (pipes > MAX_BODY_PIPES)
+        throw new TooLargeError(`note body has more than ${MAX_BODY_PIPES} table separators`);
+    }
+  }
+}
 
 /** A document-level limit was exceeded: the route answers `413 too_large`. */
 export class TooLargeError extends Error {
@@ -126,9 +155,9 @@ export function checkDocumentLimits(size: DocumentSize, limits: ExportLimits): v
 }
 
 /**
- * A wall-clock deadline, checked between blocks (and between zip entries) so a pathological
- * document is abandoned instead of holding a render slot for minutes. Rendering is synchronous
- * per block, so this is as fine-grained as it can be without worker threads.
+ * A wall-clock deadline. The renderer checks it between blocks (and between zip entries), and
+ * the worker supervisor checks it on a timer and terminates the worker: rendering happens off the
+ * request thread, so a synchronous loop can no longer keep the clock from firing.
  */
 export class ExportDeadline {
   private readonly endsAt: number;
@@ -142,6 +171,11 @@ export class ExportDeadline {
 
   check(): void {
     if (this.now() >= this.endsAt) throw new ExportTimeoutError();
+  }
+
+  /** Milliseconds left on the clock, never negative. */
+  remaining(): number {
+    return Math.max(0, this.endsAt - this.now());
   }
 }
 

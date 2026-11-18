@@ -168,6 +168,11 @@ describe('note export DOCX', () => {
     expect(media).toHaveLength(1);
     // `<w:drawing>` occurrences: two blocks and one run inside a paragraph.
     expect((xml.match(/<w:drawing>/g) ?? []).length).toBe(3);
+    // Every placement is its own ImageRun, so Word sees three distinct drawing ids even though
+    // the media is stored once (docx hashes the bytes for the file name).
+    const drawingIds = [...xml.matchAll(/<wp:docPr id="(\d+)"/g)].map((match) => match[1]);
+    expect(drawingIds).toHaveLength(3);
+    expect(new Set(drawingIds).size).toBe(3);
   });
 
   it('abandons a render that has run past its deadline', () => {

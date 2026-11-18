@@ -28,8 +28,8 @@ export type EmbedFormat = 'pdf' | 'docx';
 
 /** Per image, before it is embedded in a DOCX or PDF. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-/** Total embedded image bytes in one export. */
-export const MAX_IMAGE_TOTAL_BYTES = 100 * 1024 * 1024;
+/** Total embedded image bytes in one export. These are external buffers, not worker heap. */
+export const MAX_IMAGE_TOTAL_BYTES = 50 * 1024 * 1024;
 /** A decompression-bomb guard, checked from the header. */
 export const MAX_IMAGE_PIXELS = 40_000_000;
 /** Enough for a PNG IHDR or a JPEG SOF even behind a large EXIF block. */
@@ -38,6 +38,53 @@ export const HEAD_BYTES = 64 * 1024;
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 /** A chunk is a length, a type, its data and a CRC; a file with fewer bytes is malformed. */
 const PNG_CHUNK_OVERHEAD = 12;
+/**
+ * zlib framing costs a few bytes per 16 KiB block, so a valid IDAT may be a whisker larger
+ * than the raw scanlines it holds (a 1×1 RGB image is 4 raw bytes and a 13-byte zlib stream).
+ * Anything past this is a decompression bomb, not a compressor's overhead.
+ */
+const MAX_IDAT_OVERHEAD = 8 * 1024;
+
+/** Channels per pixel, from the PNG colour type. */
+function pngChannels(colorType: number): number | null {
+  switch (colorType) {
+    case 0:
+      return 1;
+    case 2:
+      return 3;
+    case 3:
+      return 1;
+    case 4:
+      return 2;
+    case 6:
+      return 4;
+    default:
+      return null;
+  }
+}
+
+/** The bit depths PNG allows for each colour type (table 11.1 of the spec). */
+function validPngDepth(colorType: number, bitDepth: number): boolean {
+  switch (colorType) {
+    case 0:
+      return [1, 2, 4, 8, 16].includes(bitDepth);
+    case 2:
+    case 4:
+    case 6:
+      return bitDepth === 8 || bitDepth === 16;
+    case 3:
+      return [1, 2, 4, 8].includes(bitDepth);
+    default:
+      return false;
+  }
+}
+
+/** The raw size of a PNG's scanlines, the bound every IDAT stream is measured against. */
+function pngRawBytes(width: number, height: number, colorType: number, bitDepth: number): number {
+  const channels = pngChannels(colorType) ?? 1;
+  const row = Math.ceil((width * channels * bitDepth) / 8);
+  return height * (1 + row); // one filter byte per scanline
+}
 
 function startsWith(head: Buffer, bytes: readonly number[], at = 0): boolean {
   for (let i = 0; i < bytes.length; i++) if (head[at + i] !== bytes[i]) return false;
@@ -53,7 +100,6 @@ function isSof(marker: number): boolean {
 const JPEG_SOI = 0xd8;
 const JPEG_EOI = 0xd9;
 const JPEG_SOS = 0xda;
-const JPEG_EOI_BYTES = 0xffd9;
 
 /** CRC-32 as PNG defines it; `zlib.crc32` exists from Node 22.2, with a table fallback. */
 const CRC_TABLE = (() => {
@@ -107,6 +153,8 @@ export function readPngStructure(bytes: Buffer): PngStructure | null {
   let pdfSafe = true;
   let sawIdat = false;
   let sawIend = false;
+  let idatTotal = 0;
+  let idatBound = 0;
   while (offset + PNG_CHUNK_OVERHEAD <= bytes.length) {
     const length = bytes.readUInt32BE(offset);
     const type = bytes.toString('latin1', offset + 4, offset + 8);
@@ -127,12 +175,14 @@ export function readPngStructure(bytes: Buffer): PngStructure | null {
       const interlace = bytes[dataStart + 12] ?? 0xff;
       // A PNG with dimensions outside the budget is not worth walking further.
       if (!checked({ type: 'png', width, height })) return null;
-      pdfSafe =
-        bitDepth === 8 &&
-        (colorType === 0 || colorType === 2) &&
-        compression === 0 &&
-        filter === 0 &&
-        interlace === 0;
+      // Word copies the bytes verbatim; an IHDR combination a decoder would refuse must not
+      // become a document that opens differently in each reader.
+      if (!validPngDepth(colorType, bitDepth) || compression !== 0 || filter !== 0) return null;
+      if (interlace !== 0 && interlace !== 1) return null;
+      idatBound =
+        pngRawBytes(width, height, colorType, bitDepth) * (interlace === 1 ? 2 : 1) +
+        MAX_IDAT_OVERHEAD;
+      pdfSafe = bitDepth === 8 && (colorType === 0 || colorType === 2) && interlace === 0;
       structure = { width, height, pdfSafe };
     } else if (type === 'IHDR') {
       return null;
@@ -140,7 +190,12 @@ export function readPngStructure(bytes: Buffer): PngStructure | null {
       pdfSafe = false;
     } else if (type === 'IDAT') {
       sawIdat = true;
+      idatTotal += length;
+      // One IDAT stream cannot hold more than the scanlines it claims to compress.
+      if (idatTotal > idatBound) return null;
     } else if (type === 'IEND') {
+      // IEND carries no data: a non-empty one is a second payload glued into the chunk.
+      if (length !== 0) return null;
       sawIend = true;
       offset = dataEnd + 4;
       break;
@@ -153,18 +208,69 @@ export function readPngStructure(bytes: Buffer): PngStructure | null {
   return { ...structure, pdfSafe };
 }
 
+/** A JPEG that passed the marker walk, and the offset of its first EOI after the scan. */
+export interface JpegStructure extends ImageInfo {
+  /** Bytes through the first EOI: what is embedded, so appended video is left behind. */
+  end: number;
+}
+
 /**
- * Walk the JPEG segments up to the first scan: SOI, every segment length inside the file, a
- * SOF before the scan (that is where the dimensions come from) and EOI as the last two bytes.
- * `pdfkit` only reads the markers and passes the bytes through as DCTDecode, so this is about
+ * The first EOI at or after a scan, walking the entropy-coded data correctly: `FF 00` is a
+ * stuffed data byte, `FF D0`–`FF D7` are restart markers, `FF FF` is fill. A marker that is not
+ * one of those ends the scan; its segment is skipped (progressive JPEGs have several scans), and
+ * a following `SOS` starts another entropy-coded run.
+ */
+function findJpegEnd(bytes: Buffer, start: number): number | null {
+  let offset = start;
+  while (offset + 1 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset++;
+      continue;
+    }
+    const marker = bytes[offset + 1] ?? 0;
+    if (marker === 0x00) {
+      // A stuffed 0xFF in the entropy-coded data, not a marker.
+      offset += 2;
+      continue;
+    }
+    if (marker === 0xff) {
+      // A fill byte: the next byte may itself begin the marker.
+      offset++;
+      continue;
+    }
+    if (marker >= 0xd0 && marker <= 0xd7) {
+      offset += 2;
+      continue;
+    }
+    if (marker === JPEG_EOI) return offset + 2;
+    // Stand-alone markers carry no length. A second SOI here is malformed.
+    if (marker === 0x01) {
+      offset += 2;
+      continue;
+    }
+    if (marker === JPEG_SOI || offset + 4 > bytes.length) return null;
+    const length = bytes.readUInt16BE(offset + 2);
+    if (length < 2 || offset + 2 + length > bytes.length) return null;
+    offset += 2 + length;
+    // An `SOS` header is followed by entropy-coded data; the loop continues scanning it.
+  }
+  return null;
+}
+
+/**
+ * Walk the JPEG segments up to the first scan: SOI, every segment length inside the file, and a
+ * SOF before the scan (that is where the dimensions come from). The EOI is then located in the
+ * entropy-coded data (or after later progressive scans) instead of requiring it to be the last
+ * two bytes, so an Android Motion Photo's appended video is ignored and only the JPEG is used.
+ * `pdfkit` reads only the markers and passes the bytes through as `DCTDecode`, so this is about
  * refusing files whose header lies, not about decoding entropy-coded data.
  */
-export function readJpegStructure(bytes: Buffer): ImageInfo | null {
+export function readJpegStructure(bytes: Buffer): JpegStructure | null {
   if (bytes.length < 4) return null;
   if (bytes[0] !== 0xff || bytes[1] !== JPEG_SOI) return null;
   let offset = 2;
   let info: ImageInfo | null = null;
-  let sawScan = false;
+  let scanStart = -1;
   while (offset + 2 <= bytes.length) {
     if (bytes[offset] !== 0xff) return null;
     const marker = bytes[offset + 1] ?? 0;
@@ -189,16 +295,15 @@ export function readJpegStructure(bytes: Buffer): ImageInfo | null {
       if (!info) return null;
     }
     if (marker === JPEG_SOS) {
-      sawScan = true;
-      offset += length;
+      scanStart = offset + length;
       break;
     }
     offset += length;
   }
-  if (!sawScan || info === null) return null;
-  // EOI last, and the scan must not run past the end of the file.
-  if (offset > bytes.length) return null;
-  return bytes.readUInt16BE(bytes.length - 2) === JPEG_EOI_BYTES ? info : null;
+  if (scanStart === -1 || info === null) return null;
+  const end = findJpegEnd(bytes, scanStart);
+  if (end === null) return null;
+  return { ...info, end };
 }
 
 /**
@@ -214,9 +319,64 @@ export function validateImage(bytes: Buffer, format: EmbedFormat): ImageInfo | n
     return checked({ type: 'png', width: png.width, height: png.height });
   }
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === JPEG_SOI) {
-    return readJpegStructure(bytes);
+    const jpeg = readJpegStructure(bytes);
+    return jpeg ? { type: 'jpeg', width: jpeg.width, height: jpeg.height } : null;
   }
   return null;
+}
+
+/** One PNG chunk with a freshly computed CRC. */
+function pngChunk(type: string, data: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+}
+
+/**
+ * The PNG that `pdfkit` is allowed to see, rebuilt from scratch: signature, IHDR, one IDAT
+ * holding every IDAT payload, and an empty IEND. Every ancillary chunk (tEXt, zTXt, iTXt, iCCP,
+ * eXIf, …) is dropped, and every CRC is recomputed — so no metadata chunk can reach png-js or
+ * `pdfkit`'s chunk parser, however malformed it is. `null` when the file is not the validated,
+ * pass-through class (PDF may not decode it).
+ */
+export function rebuildPngForPdf(bytes: Buffer): Buffer | null {
+  const structure = readPngStructure(bytes);
+  if (!structure || !structure.pdfSafe) return null;
+  let offset = PNG_SIGNATURE.length;
+  let header: Buffer | null = null;
+  const idats: Buffer[] = [];
+  let sawIend = false;
+  while (offset + PNG_CHUNK_OVERHEAD <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.toString('latin1', offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (length > bytes.length - dataStart - 4) return null;
+    if (type === 'IHDR') header = bytes.subarray(dataStart, dataEnd);
+    else if (type === 'IDAT') idats.push(bytes.subarray(dataStart, dataEnd));
+    else if (type === 'IEND') {
+      if (length !== 0) return null;
+      sawIend = true;
+      offset = dataEnd + 4;
+      break;
+    }
+    offset = dataEnd + 4;
+  }
+  if (!header || idats.length === 0 || !sawIend || offset !== bytes.length) return null;
+  return Buffer.concat([
+    Buffer.from(PNG_SIGNATURE),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', Buffer.concat(idats)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/** Where a JPEG ends (through its first EOI), or `null` when it is not a valid JPEG. */
+export function jpegEnd(bytes: Buffer): number | null {
+  return readJpegStructure(bytes)?.end ?? null;
 }
 
 /**

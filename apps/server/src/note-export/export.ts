@@ -3,34 +3,34 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { redactCensored } from '@bokydo/shared';
-import { cleanFilename, type AttachmentStore } from '../attachments/store.js';
+import { sanitizeStoredName, type AttachmentStore } from '../attachments/store.js';
 import type { Database } from '../db/client.js';
 import { noteFiles, notes } from '../db/schema.js';
 import { safeEntryName, ZipWriter } from '../zip/zip-writer.js';
-import { documentFileIds, parseNoteBody } from './ast.js';
-import { buildDocx } from './docx.js';
-import { loadNoteImages, type NoteFileRow } from './images.js';
+import { loadNoteImages, type LoadedImage, type NoteFileRow } from './images.js';
 import {
   DEFAULT_EXPORT_LIMITS,
   ExportDeadline,
   TooLargeError,
-  exportSemaphore,
+  checkBodyShape,
   checkDocumentLimits,
-  measureDocument,
+  exportSemaphore,
   type ExportLimits,
   type ExportSemaphore,
 } from './limits.js';
-import { renderNoteMarkdown } from './markdown.js';
-import { buildPdf } from './pdf.js';
+import { ExportWorker, type NoteExportInternal } from './runner.js';
+import type { WorkerImage } from './worker.js';
 
 /**
  * The per-note export pipeline, behind `GET /api/v1/notes/:id/export` (ADR 0025). It reads the
  * note and its files in one repeatable-read snapshot, applies the censor redaction to the title
  * and every filename before anything derives a heading, a metadata field or a path from them,
- * and renders Markdown (zipped when the note has files), DOCX or PDF.
+ * and then hands the body to a resource-limited worker (see `worker.ts` / `runner.ts`): the
+ * Markdown parse, the AST, the DOCX packer and pdfkit never run on the request thread.
  *
- * Everything a hostile note can inflate is capped here or in `limits.ts`, and the format
- * renderers never see a file that was not probed first.
+ * The main thread only does what needs privileges or shared state: the database snapshot, the
+ * file probes, the image validation, streaming the zip from disk, and enforcing the output cap
+ * on the worker's chunks.
  */
 
 export type NoteExportFormat = 'md' | 'docx' | 'pdf';
@@ -43,12 +43,16 @@ export interface NoteExportDeps {
   limits?: Partial<ExportLimits>;
   /** The concurrency gate; the process-wide one unless a test injects its own. */
   semaphore?: ExportSemaphore;
+  /** Test-only worker hooks (a failing renderer, an exit counter); never set by the route. */
+  internal?: NoteExportInternal;
 }
 
 export interface NoteExportRequest {
   noteId: string;
   userId: string;
   format: NoteExportFormat;
+  /** The client went away while the export was still being prepared or rendered. */
+  signal?: AbortSignal;
 }
 
 export type NoteExportOutput = {
@@ -87,7 +91,7 @@ export class ExportBusyError extends Error {
 /**
  * Run one export. Throws `ExportNotFoundError`, `ExportBusyError`, `TooLargeError` or
  * `ExportTimeoutError`; anything else is a real failure. The returned output holds the slot
- * until `done()` is called, including while a stream is still being read.
+ * until `done()` is called or the worker exits, including while a stream is still being read.
  */
 export async function runNoteExport(
   deps: NoteExportDeps,
@@ -97,20 +101,86 @@ export async function runNoteExport(
   const semaphore = deps.semaphore ?? exportSemaphore;
   const release = semaphore.tryAcquire(request.userId);
   if (!release) throw new ExportBusyError();
-  let done = false;
+  // The 30 s clock starts here, not when the worker starts: queueing/auth/DB time is part of it.
+  const deadline = new ExportDeadline(limits.deadlineMs);
+  let released = false;
   const finish = () => {
-    if (done) return;
-    done = true;
+    if (released) return;
+    released = true;
     release();
   };
+  let worker: ExportWorker | null = null;
   try {
     const loaded = await readNote(deps.db, request.noteId, request.userId);
     if (!loaded) throw new ExportNotFoundError();
-    return await render(deps, limits, request, loaded, finish);
+    const title = redactExportText(loaded.note.title);
+    const files: NoteFileRow[] = loaded.files.map((file) => ({
+      ...file,
+      // Redact before the length bound, so a token cannot be cut in half and leak its prefix,
+      // then sanitise (no percent-decoding), then redact once more as defence in depth.
+      filename: redactExportText(sanitizeStoredName(redactExportText(file.filename))),
+    }));
+    // Refuse a sparse-table bomb or a 100,000-line body before a worker is even spawned. The
+    // worker repeats the check before `md.parse`; this is the cheap, fast-413 path.
+    checkBodyShape(loaded.note.body);
+    deadline.check();
+
+    worker = new ExportWorker({
+      limits,
+      deadline,
+      release: finish,
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(deps.internal ? { internal: deps.internal } : {}),
+    });
+    const analysis = await worker.analyze(loaded.note.body);
+    checkDocumentLimits(analysis.size, limits);
+    deadline.check();
+
+    if (request.format === 'md') {
+      return await markdownExport(deps, title, files, analysis.fileIds, deadline, worker, finish);
+    }
+
+    const { images, tooLarge } = await loadNoteImages(
+      deps.store,
+      files,
+      new Set(analysis.fileIds),
+      {
+        format: request.format,
+      },
+    );
+    if (tooLarge) throw new TooLargeError('the note images exceed the export budget');
+    deadline.check();
+    const fileNames = new Map(files.map((file) => [file.id, file.filename]));
+    const body = await worker.render({
+      format: request.format,
+      title,
+      fileNames: [...fileNames],
+      images: [...images.values()].map(workerImage),
+    });
+    return {
+      contentType: request.format === 'docx' ? CONTENT_TYPES.docx : CONTENT_TYPES.pdf,
+      extension: request.format,
+      title,
+      body,
+      done: outputDone(worker, finish),
+    };
   } catch (err) {
+    // The slot is released by the worker's exit handler; dispose waits for that exit on every
+    // failure path (including a worker that never started).
+    if (worker) await worker.dispose().catch(() => undefined);
     finish();
     throw err;
   }
+}
+
+/** `done()` for a live worker: terminate it (if still rendering) and release after its exit. */
+function outputDone(worker: ExportWorker, finish: () => void): () => void {
+  return () => {
+    void worker
+      .dispose()
+      .catch(() => undefined)
+      .finally(finish);
+  };
 }
 
 /**
@@ -150,116 +220,65 @@ async function readNote(
   );
 }
 
-async function render(
-  deps: NoteExportDeps,
-  limits: ExportLimits,
-  request: NoteExportRequest,
-  loaded: { note: { id: string; title: string; body: string }; files: NoteFileRow[] },
-  done: () => void,
-): Promise<NoteExportOutput> {
-  // The stored title and filenames are attacker-controlled text: a censor token in either must
-  // be redacted before it can become a heading, a metadata field, a zip path or a header value.
-  const title = redactCensored(loaded.note.title);
-  const files: NoteFileRow[] = loaded.files.map((file) => ({
-    ...file,
-    filename: redactCensored(file.filename),
-  }));
-  const fileNames = new Map(files.map((file) => [file.id, file.filename]));
-  const deadline = new ExportDeadline(limits.deadlineMs);
-  const check = () => deadline.check();
-
-  const doc = parseNoteBody(loaded.note.body, { maxTokens: limits.maxTokens });
-  checkDocumentLimits(measureDocument(doc.blocks), limits);
-  check();
-
-  if (request.format === 'md') {
-    const referenced = documentFileIds(doc.blocks);
-    // The body may reference a file that was already purged; only real rows are exported.
-    const candidates = files.filter((file) => referenced.has(file.id));
-    if (candidates.length === 0) {
-      return {
-        contentType: CONTENT_TYPES.md,
-        extension: 'md',
-        title,
-        body: renderNoteMarkdown(title, doc, { fileNames, check }),
-        done,
-      };
-    }
-    // Probe every file before the Markdown is written, so a file that is gone is named in the
-    // text and left out of the archive — the two must agree.
-    const available: NoteFileRow[] = [];
-    const unavailable = new Set<string>();
-    for (const file of candidates) {
-      if (await hasBytes(deps.store, file.id)) available.push(file);
-      else unavailable.add(file.id);
-    }
-    if (available.length === 0) {
-      return {
-        contentType: CONTENT_TYPES.md,
-        extension: 'md',
-        title,
-        body: renderNoteMarkdown(title, doc, { fileNames, fileUnavailable: unavailable, check }),
-        done,
-      };
-    }
-    return markdownZip(deps, title, doc, available, fileNames, unavailable, deadline, done);
-  }
-
-  const wanted = documentFileIds(doc.blocks);
-  const { images, tooLarge } = await loadNoteImages(deps.store, files, wanted, {
-    format: request.format,
-  });
-  if (tooLarge) throw new TooLargeError('the note images exceed the export budget');
-  const context = { images, fileNames };
-  if (request.format === 'docx') {
-    return {
-      contentType: CONTENT_TYPES.docx,
-      extension: 'docx',
-      title,
-      body: buildDocx(title, doc.blocks, context, { deadline }),
-      done,
-    };
-  }
-  return {
-    contentType: CONTENT_TYPES.pdf,
-    extension: 'pdf',
-    title,
-    body: buildPdf(title, doc.blocks, context, {
-      deadline,
-      maxLinkAnnotations: limits.maxLinkAnnotations,
-    }),
-    done,
-  };
-}
-
-/** `«title».md` plus `files/<id>-<name>`, with the body's links rewritten to the relative path. */
-function markdownZip(
+/**
+ * Markdown: the worker renders the text and names the files it actually references; the main
+ * thread probes those files, and either returns one `.md` file (nothing to zip) or streams a zip
+ * whose entries are read from disk one at a time.
+ */
+async function markdownExport(
   deps: NoteExportDeps,
   title: string,
-  doc: ReturnType<typeof parseNoteBody>,
   files: readonly NoteFileRow[],
-  fileNames: ReadonlyMap<string, string>,
-  unavailable: ReadonlySet<string>,
+  referencedIds: readonly string[],
   deadline: ExportDeadline,
-  done: () => void,
-): NoteExportOutput {
+  worker: ExportWorker,
+  finish: () => void,
+): Promise<NoteExportOutput> {
+  const referenced = new Set(referencedIds);
+  // The body may reference a file that was already purged; only real rows are exported.
+  const candidates = files.filter((file) => referenced.has(file.id));
+  // Probe every file before the Markdown is written, so a file that is gone is named in the
+  // text and left out of the archive — the two must agree.
+  const available: NoteFileRow[] = [];
+  const unavailable = new Set<string>();
+  for (const file of candidates) {
+    deadline.check();
+    if (await hasBytes(deps.store, file.id)) available.push(file);
+    else unavailable.add(file.id);
+  }
   const entryNames = new Map<string, string>();
-  for (const file of files) entryNames.set(file.id, fileEntry(file));
+  for (const file of available) entryNames.set(file.id, fileEntry(file));
   // A URL for the link: each path segment escaped, so `#`, `?` and spaces in a filename work.
   const url = (entry: string) => entry.split('/').map(encodeURIComponent).join('/');
   const fileUrls = new Map([...entryNames].map(([id, entry]) => [id, url(entry)] as const));
-  const markdown = renderNoteMarkdown(title, doc, {
-    fileUrls,
-    fileNames,
-    fileUnavailable: unavailable,
-    check: () => deadline.check(),
-  });
-  const mdName = `${safeEntryName(cleanedBase(title))}.md`;
 
+  const result = await worker.renderMarkdown({
+    title,
+    fileNames: [...files].map((file) => [file.id, file.filename]),
+    fileUrls: [...fileUrls],
+    fileUnavailable: [...unavailable],
+  });
+  // The worker names what it actually wrote, so a body that mentions a file URL as plain text
+  // can never put an unreferenced file into the zip.
+  const included = new Set(result.fileIds);
+  const exported = available.filter((file) => included.has(file.id));
+  // Markdown is done with the worker; terminate it before the (I/O-bound) zip is streamed.
+  await worker.dispose();
+  if (exported.length === 0) {
+    return {
+      contentType: CONTENT_TYPES.md,
+      extension: 'md',
+      title,
+      body: result.markdown,
+      done: finish,
+    };
+  }
+
+  const mdName = safeEntryName(`${cleanedBase(title)}.md`);
   const zip = new ZipWriter();
   void (async () => {
-    await zip.add(mdName, markdown);
-    for (const file of files) {
+    await zip.add(redactCensored(mdName), result.markdown);
+    for (const file of exported) {
       deadline.check();
       const entry = entryNames.get(file.id);
       if (!entry) continue;
@@ -278,24 +297,40 @@ function markdownZip(
     extension: 'zip',
     title,
     body: zip.stream,
-    done,
+    done: finish,
+  };
+}
+
+/** A note file id and its bytes, in the form the worker takes: a transferable ArrayBuffer. */
+function workerImage(image: LoadedImage): WorkerImage {
+  const bytes = new ArrayBuffer(image.bytes.length);
+  new Uint8Array(bytes).set(image.bytes);
+  return {
+    id: image.id,
+    filename: image.filename,
+    type: image.type,
+    width: image.width,
+    height: image.height,
+    bytes,
   };
 }
 
 /**
  * A note file entry: the id keeps two files with one name apart, and the name is sanitised for
- * the archive (drive prefixes, reserved names, trailing dots, per-component length).
+ * the archive (drive prefixes, reserved names, trailing dots, per-component length). The final
+ * path component is redacted again, after `safeEntryName` may have rewritten it.
  */
 function fileEntry(file: NoteFileRow): string {
-  return safeEntryName(`files/${file.id}-${cleanFilename(file.filename)}`);
+  return redactCensored(safeEntryName(`files/${file.id}-${sanitizeStoredName(file.filename)}`));
 }
 
 /**
  * A filename that is safe in a header: ASCII fallback plus RFC 5987 `filename*`. The title is
- * redacted again here, so no caller can put a censor token in a `Content-Disposition`.
+ * redacted again here, and the base is never percent-decoded: a stored `%7B` is a literal
+ * character, not a token waiting to be decoded after redaction.
  */
 export function exportFilename(title: string, extension: string): string {
-  const base = cleanedBase(redactCensored(title));
+  const base = redactCensored(cleanedBase(redactExportText(title)));
   const encoded = encodeURIComponent(`${base}.${extension}`).replace(
     /['()*!]/g,
     (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
@@ -307,8 +342,27 @@ export function exportFilename(title: string, extension: string): string {
 export function cleanedBase(title: string): string {
   const trimmed = title.replace(/\s+/g, ' ').trim();
   if (trimmed === '') return 'note';
-  const cleaned = cleanFilename(trimmed);
+  const cleaned = sanitizeStoredName(trimmed);
   return cleaned === 'file' ? 'note' : cleaned;
+}
+
+/**
+ * Redact censor markers, including one hidden behind percent-encoding. Stored names are never
+ * decoded as names — `%20` stays `%20` — but if decoding would reveal a token, the decoded,
+ * redacted text is what may be emitted, because emitting the literal `%7B%7Bcensored…` would put
+ * the ciphertext in a header, a zip path or the Markdown body just the same.
+ */
+export function redactExportText(text: string): string {
+  const redacted = redactCensored(text);
+  if (redacted !== text || !text.includes('%')) return redacted;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(text);
+  } catch {
+    return redacted;
+  }
+  const decodedRedacted = redactCensored(decoded);
+  return decodedRedacted === decoded ? redacted : decodedRedacted;
 }
 
 /**

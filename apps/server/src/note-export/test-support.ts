@@ -94,6 +94,10 @@ export interface PngOptions {
   trailingBytes?: number;
   /** Leave the IDAT chunk out. */
   omitIdat?: boolean;
+  /** Extra chunks (tEXt, iCCP, …) inserted after the colour chunks and before IDAT. */
+  extra?: { type: string; data: Buffer }[];
+  /** Payload of the IEND chunk; a valid PNG has none. */
+  iendData?: Buffer;
 }
 
 /** Build a syntactically valid PNG for the given colour type/bit depth, with real CRCs. */
@@ -115,6 +119,7 @@ export function makePng(opts: PngOptions = {}): Buffer {
   const parts: Buffer[] = [PNG_SIGNATURE, pngChunk('IHDR', header)];
   if (opts.palette) parts.push(pngChunk('PLTE', Buffer.from([0, 0, 0, 255, 255, 255])));
   if (opts.transparency) parts.push(pngChunk('tRNS', Buffer.from([0, 0, 0, 0, 0, 0])));
+  for (const chunk of opts.extra ?? []) parts.push(pngChunk(chunk.type, chunk.data));
   if (!opts.omitIdat) {
     // One scanline: the filter byte, then the pixel bytes for a single row.
     const rowBytes = Math.ceil((width * channels * bitDepth) / 8);
@@ -122,7 +127,7 @@ export function makePng(opts: PngOptions = {}): Buffer {
       opts.idat ?? deflateSync(Buffer.concat([Buffer.from([0]), Buffer.alloc(rowBytes)]));
     parts.push(pngChunk('IDAT', pixels, opts.corruptIdatCrc === true));
   }
-  parts.push(pngChunk('IEND', Buffer.alloc(0)));
+  parts.push(pngChunk('IEND', opts.iendData ?? Buffer.alloc(0)));
   if (opts.trailingBytes) parts.push(Buffer.alloc(opts.trailingBytes, 0x41));
   return Buffer.concat(parts);
 }
@@ -138,6 +143,8 @@ export function makeJpeg(
     sofMarker?: number;
     omitEoi?: boolean;
     segmentLength?: number;
+    /** Bytes after the EOI, like the video an Android Motion Photo appends. */
+    append?: Buffer;
   } = {},
 ): Buffer {
   const width = opts.width ?? 2;
@@ -164,5 +171,6 @@ export function makeJpeg(
   scan[4] = 1;
   parts.push(scan, Buffer.from([0x00, 0x11, 0x22, 0x33]));
   if (!opts.omitEoi) parts.push(Buffer.from([0xff, 0xd9]));
+  if (opts.append) parts.push(opts.append);
   return Buffer.concat(parts);
 }
