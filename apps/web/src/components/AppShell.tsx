@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { resyncPush } from '../lib/push.js';
 import { LiveDesktopNotifications } from '../lib/desktop-notifications.js';
 import { api, clearCsrfToken } from '../lib/api.js';
+import { censorKeys } from '../lib/censor.js';
 import { wipeDevice } from '../lib/device.js';
 import { ConfirmProvider } from '../lib/confirm.js';
 import { sessionQuery } from '../lib/queries.js';
@@ -176,6 +177,8 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
     mutationFn: () => api('POST', '/api/v1/auth/logout'),
     onSettled: async () => {
       clearCsrfToken();
+      // A forgotten-password key is session-only: signing out must forget every derived key.
+      censorKeys.clear();
       queryClient.clear();
       await wipeDevice();
       await navigate({ to: '/login' });
