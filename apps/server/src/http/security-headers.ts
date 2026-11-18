@@ -26,6 +26,9 @@ export async function registerSecurityHeaders(
         objectSrc: ["'none'"],
         baseUri: ["'none'"],
         formAction: ["'self'"],
+        // Note embeds (ADR 0025): click-to-load, `credentialless` frames from exactly these two
+        // origins. Nothing loads from them until the user presses Play; COEP stays require-corp.
+        frameSrc: ['https://www.youtube-nocookie.com', 'https://drive.google.com'],
         frameAncestors: ["'none'"],
       },
     },
