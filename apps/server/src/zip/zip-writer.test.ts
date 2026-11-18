@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { ZipWriter, safeEntryName } from './zip-writer.js';
 import { collect, readZipEntries } from '../note-export/test-support.js';
@@ -31,6 +32,16 @@ describe('archive entry names', () => {
     expect(safeEntryName('files/a:b*c?.txt')).toBe('files/a_b_c_.txt');
   });
 
+  it('checks the reserved stem before the first dot, superscript digits included', () => {
+    // `COM1.backup.txt` is still the COM1 device on Windows: the device name is the stem before
+    // the first dot, not before the last one.
+    expect(safeEntryName('files/COM1.backup.txt')).toBe('files/_COM1.backup.txt');
+    expect(safeEntryName('files/com¹.txt')).toBe('files/_com¹.txt');
+    expect(safeEntryName('files/LPT³.log')).toBe('files/_LPT³.log');
+    expect(safeEntryName('files/COM¹⁰.txt')).toBe('files/COM¹⁰.txt');
+    expect(safeEntryName('files/LPT¹0.txt')).toBe('files/LPT¹0.txt');
+  });
+
   it('bounds every component to 200 UTF-8 bytes without splitting a character', () => {
     const name = safeEntryName(`files/${'é'.repeat(150)}.png`);
     const component = name.split('/')[1] ?? '';
@@ -62,5 +73,29 @@ describe('ZipWriter', () => {
     await new Promise((resolve) => setImmediate(resolve));
     zip.stream.destroy(new Error('client went away'));
     await expect(done).rejects.toThrow(/zip stream closed|client went away/);
+  });
+
+  it('has no unhandled rejection when the reader disappears mid-entry', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const zip = new ZipWriter();
+      zip.stream.on('error', () => undefined);
+      // Incompressible, so the entry really is under backpressure when the output is destroyed.
+      const done = zip.add('big.bin', randomBytes(8 * 1024 * 1024));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      zip.stream.destroy(new Error('client went away'));
+      // One observed pipeline promise rejects; nothing else is left dangling.
+      let rejections = 0;
+      await done.catch(() => {
+        rejections++;
+      });
+      expect(rejections).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });

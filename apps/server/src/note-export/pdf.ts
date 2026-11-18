@@ -1,7 +1,7 @@
 import type { Readable } from 'node:stream';
 import PdfDocument from 'pdfkit';
 import type { Block, ListBlock, Run } from './ast.js';
-import { validateImage } from './image-info.js';
+import { jpegEnd, rebuildPngForPdf, validateImage } from './image-info.js';
 import type { LoadedImage } from './images.js';
 import { TooLargeError, type ExportDeadline } from './limits.js';
 
@@ -617,22 +617,90 @@ class PdfRenderer {
   }
 
   /**
+   * A table whose columns cannot all reach their minimum width is not laid out as a grid: it
+   * becomes a list of `header: value` lines, one per non-empty cell, so nothing overflows the
+   * page. Documented in docs/note-export.md.
+   */
+  private tableAsList(block: Extract<Block, { type: 'table' }>): void {
+    const columns = Math.max(1, block.header.length, ...block.rows.map((row) => row.length));
+    const plain = (runs: readonly Run[]): string => {
+      let text = '';
+      for (const run of runs) {
+        if (run.kind === 'text') text += run.censor ? '█████' : run.text;
+        else if (run.kind === 'image') text += `[image: ${run.alt || 'file'}]`;
+        else text += ' ';
+      }
+      return text.trim();
+    };
+    for (const row of block.rows) {
+      for (let index = 0; index < columns; index++) {
+        const head = plain(block.header[index] ?? []);
+        const value = plain(row[index] ?? []);
+        if (head === '' && value === '') continue;
+        const text = head === '' ? value : `${head}: ${value}`;
+        this.writeInline(
+          [{ kind: 'text', text }],
+          { size: BODY_SIZE, bold: false, italic: false },
+          0,
+          2,
+        );
+      }
+      this.y += 4;
+    }
+    this.y += 8;
+  }
+
+  /**
+   * A header row that needs more lines than a page holds is truncated to the page, with an
+   * ellipsis on the last line of every cell. It must stay repeatable: skipping it on continuation
+   * pages loses the labels, and drawing it whole would run into the margin.
+   */
+  private fitHeader(
+    header: readonly Atom[][][],
+    widths: readonly number[],
+    lineHeight: number,
+  ): { cells: Atom[][][]; lines: number } {
+    const room = Math.max(1, Math.floor((this.bottom - this.top - TABLE_PAD * 2) / lineHeight));
+    const needed = Math.max(1, ...header.map((cell) => cell.length));
+    if (needed <= room) return { cells: header.map((cell) => cell), lines: needed };
+    const ellipsis = this.textAtom('…', helix(false, false), BODY_SIZE, null, false);
+    const cells = header.map((cell, index) => {
+      const lines = cell.slice(0, room).map((line) => [...line]);
+      const last = lines[room - 1] ?? [];
+      while (last.length > 0 && last[last.length - 1]?.kind === 'space') last.pop();
+      let used = last.reduce((sum, atom) => sum + atomWidth(atom), 0);
+      const max = Math.max(12, (widths[index] ?? this.width) - TABLE_PAD * 2);
+      while (last.length > 0 && used + ellipsis.width > max) {
+        const removed = last.pop();
+        used -= removed ? atomWidth(removed) : 0;
+      }
+      last.push(ellipsis);
+      return lines;
+    });
+    return { cells, lines: room };
+  }
+
+  /**
    * A table: wrapped cells in content-sized columns, rows broken across pages (the box is drawn
    * per segment) and the header row repeated at the top of every page the table continues on.
+   * A table too wide for even its minimum columns is rendered as `header: value` lines instead.
    */
   private table(block: Extract<Block, { type: 'table' }>): void {
     const columns = Math.max(1, block.header.length, ...block.rows.map((row) => row.length));
     const widths = this.tableWidths(block, columns);
+    if (widths.reduce((sum, width) => sum + width, 0) > this.width + 0.5) {
+      this.tableAsList(block);
+      return;
+    }
     const lineHeight = Math.round(BODY_SIZE * LINE_FACTOR);
     const prepare = (cells: readonly Run[][], head: boolean) =>
       Array.from({ length: columns }, (_, index) =>
         this.cellLines(cells[index] ?? [], widths[index] ?? this.width, head),
       );
-    const header = prepare(block.header, true);
-    const headerLines = Math.max(1, ...header.map((cell) => cell.length));
+    const fitted = this.fitHeader(prepare(block.header, true), widths, lineHeight);
+    const header = fitted.cells;
+    const headerLines = fitted.lines;
     const repeatHeader = () => {
-      // A header taller than a page cannot be repeated without looping; skip it there.
-      if (headerLines * lineHeight + TABLE_PAD * 2 > this.bottom - this.top) return;
       this.tableSegment(header, widths, 0, headerLines, true, lineHeight);
     };
     this.ensure(headerLines * lineHeight + TABLE_PAD * 2);
@@ -677,8 +745,17 @@ class PdfRenderer {
     // interlaced class that png-js inflates inside a zlib callback. The loader already filtered,
     // but a caller need not have.
     if (!validateImage(image.bytes, 'pdf')) return null;
-    // `openImage` is pdfkit's own parser entry point; the validated class never inflates here.
-    const opened = (this.doc as PdfDocRuntime).openImage(image.bytes);
+    // A PNG is rebuilt from IHDR/IDAT/IEND only: ancillary chunks (tEXt, iCCP, eXIf, …) are
+    // dropped and every CRC is recomputed, so a metadata chunk cannot make pdfkit's parser throw.
+    // A JPEG is cut at its first EOI, so an appended Motion Photo video is never embedded.
+    const bytes =
+      image.type === 'png'
+        ? rebuildPngForPdf(image.bytes)
+        : image.bytes.subarray(0, jpegEnd(image.bytes) ?? image.bytes.length);
+    if (!bytes) return null;
+    // `openImage` is pdfkit's own parser entry point; the validated class never inflates here,
+    // and a throw is caught by `image()` so the reader gets the file's name instead.
+    const opened = (this.doc as PdfDocRuntime).openImage(bytes);
     this.prepared.set(image.id, opened);
     return opened;
   }
@@ -705,12 +782,12 @@ class PdfRenderer {
     const width = Math.max(1, image.width * ratio);
     const height = Math.max(1, image.height * ratio);
     this.ensure(height + 12);
-    const prepared = this.preparedImage(image);
-    if (!prepared) {
-      this.imageText(block.alt, block.fileId, indent, italic);
-      return;
-    }
     try {
+      const prepared = this.preparedImage(image);
+      if (!prepared) {
+        this.imageText(block.alt, block.fileId, indent, italic);
+        return;
+      }
       this.doc.image(
         prepared as unknown as Buffer,
         this.left + indent + (maxWidth - width) / 2,
@@ -719,8 +796,8 @@ class PdfRenderer {
       );
       this.y += height + 12;
     } catch {
-      // pdfkit refused the bytes. A picture is not worth losing the export over, so the reader
-      // gets the name instead.
+      // Anything the image parser refuses — a metadata chunk, a decoder quirk — is not worth
+      // losing the export over, so the reader gets the name instead.
       this.imageText(block.alt, block.fileId, indent, italic);
     }
   }

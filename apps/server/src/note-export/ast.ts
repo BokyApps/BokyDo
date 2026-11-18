@@ -1,6 +1,6 @@
 import { CENSOR_PLACEHOLDER, parseEmbedUrl, redactCensored, safeHref } from '@bokydo/shared';
 import MarkdownIt, { type Token } from 'markdown-it';
-import { TooLargeError } from './limits.js';
+import { TooLargeError, checkBodyShape } from './limits.js';
 
 /**
  * One small document model shared by the three note exporters. The stored note body is
@@ -502,6 +502,9 @@ function parseTable(walker: Walker): TableBlock {
  * hundreds of thousands of tokens, and the cap has to bite before the model does.
  */
 export function parseNoteBody(body: string, opts: { maxTokens?: number } = {}): NoteDocument {
+  // Cheap first-pass shape limits: a sparse table or a hundred thousand one-line blocks is
+  // refused before markdown-it allocates a single token.
+  checkBodyShape(body);
   const redacted = redactCensored(body);
   const tokens = parser.parse(redacted, {});
   if (opts.maxTokens !== undefined && tokens.length > opts.maxTokens)

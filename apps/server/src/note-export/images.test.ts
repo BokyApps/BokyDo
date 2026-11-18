@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AttachmentStore } from '../attachments/store.js';
 import { loadNoteImages } from './images.js';
-import { PNG_1X1, makePng } from './test-support.js';
+import { PNG_1X1, makeJpeg, makePng } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
 const GIF_ID = '55555555-5555-4555-8555-555555555555';
@@ -86,6 +86,23 @@ describe('note export images', () => {
     expect(pdf.images.size).toBe(0);
   });
 
+  it('cuts a motion-photo JPEG at its first EOI before handing it to a renderer', async () => {
+    const plain = makeJpeg({ width: 2, height: 2 });
+    const motion = makeJpeg({
+      width: 2,
+      height: 2,
+      append: Buffer.from('ftypmp42-this-is-not-an-image', 'latin1'),
+    });
+    await writeFile(path.join(store.dir, PNG_ID), motion);
+    const { images } = await loadNoteImages(
+      store,
+      [{ ...row(PNG_ID, motion.length), contentType: 'image/jpeg' }],
+      new Set([PNG_ID]),
+    );
+    expect(images.get(PNG_ID)?.bytes.equals(plain)).toBe(true);
+    expect(images.get(PNG_ID)?.bytes.toString('latin1')).not.toContain('ftypmp42');
+  });
+
   it('refuses a PNG whose chunk CRC is wrong, before any decoder sees it', async () => {
     const corrupt = makePng({ colorType: 2, corruptIdatCrc: true });
     await writeFile(path.join(store.dir, PNG_ID), corrupt);
@@ -106,10 +123,10 @@ describe('note export images', () => {
     expect(images.get(PNG_ID)?.width).toBe(1);
   });
 
-  it('refuses an export whose images pass the 100 MB budget, before reading them', async () => {
+  it('refuses an export whose images pass the 50 MB budget, before reading them', async () => {
     // No bytes on disk: the budget is decided from the declared sizes, so nothing is read.
-    // Eleven files at the 10 MB per-image cap are 110 MB of images.
-    const ids = Array.from({ length: 11 }, () => randomUUID());
+    // Six files at the 10 MB per-image cap are 60 MB of images.
+    const ids = Array.from({ length: 6 }, () => randomUUID());
     const { images, tooLarge } = await loadNoteImages(
       store,
       ids.map((id) => row(id, 10 * 1024 * 1024)),

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { eq } from 'drizzle-orm';
@@ -13,6 +14,7 @@ import { cmd, id as newId, SyncUser } from '../test/sync.js';
 import { runNoteExport } from './export.js';
 import { exportSemaphore, type ExportLimits } from './limits.js';
 import { capOutputBytes, registerNoteExportRoutes } from './routes.js';
+import type { NoteExportInternal } from './runner.js';
 import { PNG_1X1, PNG_RGB, collect, makePng, readZipEntries, zipText } from './test-support.js';
 
 let t: TestApp;
@@ -122,14 +124,23 @@ function exportNote(who: Person | Client, id: string, format?: string) {
  * A bare Fastify app carrying only the export route, with the caller already "signed in". It is
  * how the runtime limits are tested: the route otherwise always runs with the production values.
  */
-async function limitedApp(userId: string, limits: Partial<ExportLimits>): Promise<FastifyInstance> {
+async function limitedApp(
+  userId: string,
+  limits: Partial<ExportLimits>,
+  internal?: NoteExportInternal,
+): Promise<FastifyInstance> {
   const app = Fastify();
   app.decorateRequest('session', null);
   app.decorateRequest('token', null);
   app.addHook('onRequest', async (req) => {
     req.session = { user: { id: userId } } as never;
   });
-  registerNoteExportRoutes(app, { db: t.db.db, store, limits });
+  registerNoteExportRoutes(app, {
+    db: t.db.db,
+    store,
+    limits,
+    ...(internal ? { internal } : {}),
+  });
   await app.ready();
   return app;
 }
@@ -340,8 +351,9 @@ describe.skipIf(!TEST_DATABASE_URL)('note export API', () => {
       const header = response.headers['content-disposition'] ?? '';
       expect(header).not.toContain('censored');
       expect(header).not.toContain(SALT);
-      const encoded = header.includes("filename*=UTF-8''")
-        ? decodeURIComponent(header.slice(header.indexOf("filename*=UTF-8''") + 18))
+      const marker = "filename*=UTF-8''";
+      const encoded = header.includes(marker)
+        ? decodeURIComponent(header.slice(header.indexOf(marker) + marker.length))
         : '';
       expect(encoded).not.toContain('censored');
       expect(encoded).not.toContain(SALT);
@@ -633,6 +645,211 @@ describe.skipIf(!TEST_DATABASE_URL)('note export API', () => {
     try {
       const response = await app.inject({ method: 'GET', url: `/api/v1/notes/${id}/export` });
       expect(response.statusCode).toBe(413);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not percent-decode a title or filename into a live censor token', async () => {
+    const alice = await person('alice');
+    const noteId = await createNote(alice, {
+      // Stored percent-encoded: decoding it after redaction would create the token again.
+      title: `%7B%7Bcensored:v1:${SALT}:${IV}:${CIPHERTEXT}%7D%7D`,
+      body: '',
+    });
+    const fileId = await addFile(alice, noteId, PNG_1X1, `shot ${CENSOR}.png`, 'image/png');
+    await t.db.db
+      .update(notes)
+      .set({
+        body: `![shot](/api/v1/note-files/${fileId}?inline=1)\n\n[shot](/api/v1/note-files/${fileId})\n`,
+      })
+      .where(eq(notes.id, noteId));
+
+    const leaked = (text: string) =>
+      text.includes('censored') || text.includes(SALT) || text.includes(CIPHERTEXT);
+    for (const format of ['md', 'docx', 'pdf'] as const) {
+      const response = await exportNote(alice, noteId, format);
+      expect(response.statusCode).toBe(200);
+      const header = response.headers['content-disposition'] ?? '';
+      expect(header).not.toContain('censored');
+      expect(header).not.toContain(SALT);
+      const marker = "filename*=UTF-8''";
+      const encoded = header.includes(marker)
+        ? decodeURIComponent(header.slice(header.indexOf(marker) + marker.length))
+        : '';
+      expect(leaked(encoded)).toBe(false);
+      if (format === 'md') {
+        const entries = readZipEntries(response.rawPayload);
+        for (const [name, body] of entries) {
+          expect(leaked(name), name).toBe(false);
+          expect(leaked(body.toString('utf8')), name).toBe(false);
+        }
+        // The title and filename become the placeholder, not the literal percent text.
+        expect([...entries.keys()].some((name) => name.includes('█████'))).toBe(true);
+      } else if (format === 'docx') {
+        for (const entry of readZipEntries(response.rawPayload).values()) {
+          expect(leaked(entry.toString('latin1'))).toBe(false);
+        }
+      } else {
+        expect(leaked(response.rawPayload.toString('latin1'))).toBe(false);
+      }
+    }
+  });
+
+  it('answers a worker out-of-memory with 413 and lets the next export run', async () => {
+    const alice = await person('alice');
+    const id = await createNote(alice, { title: 'Big', body: 'Hello\n' });
+    const app = await limitedApp(alice.id, {}, { testRenderer: 'oom' });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/notes/${id}/export?format=docx`,
+      });
+      expect(response.statusCode).toBe(413);
+      expect(response.json()).toEqual({ error: 'too_large' });
+    } finally {
+      await app.close();
+    }
+    expect(exportSemaphore.running).toBe(0);
+
+    const again = await limitedApp(alice.id, {});
+    try {
+      const response = await again.inject({
+        method: 'GET',
+        url: `/api/v1/notes/${id}/export?format=pdf`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.rawPayload.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    } finally {
+      await again.close();
+    }
+  });
+
+  it('answers an unrelated worker failure with 500 internal_error, and survives', async () => {
+    const alice = await person('alice');
+    const id = await createNote(alice, { title: 'Broken', body: 'Hello\n' });
+    const app = await limitedApp(alice.id, {}, { testRenderer: 'throw' });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/notes/${id}/export?format=docx`,
+      });
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({ error: 'internal_error' });
+    } finally {
+      await app.close();
+    }
+    expect(exportSemaphore.running).toBe(0);
+
+    const again = await limitedApp(alice.id, {});
+    try {
+      expect(
+        (await again.inject({ method: 'GET', url: `/api/v1/notes/${id}/export?format=md` }))
+          .statusCode,
+      ).toBe(200);
+    } finally {
+      await again.close();
+    }
+  });
+
+  it('refuses a sparse-table bomb fast, without spawning a renderer', async () => {
+    const alice = await person('alice');
+    const row = `|${' |'.repeat(1800)}a|\n`;
+    const id = await createNote(alice, { body: row.repeat(30) });
+    const started = performance.now();
+    const response = await exportNote(alice, id, 'pdf');
+    const elapsed = performance.now() - started;
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toEqual({ error: 'too_large' });
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  it('refuses a 512 KiB list body without crashing, or renders it within the limits', async () => {
+    const alice = await person('alice');
+    const body = '- a\n'.repeat(131_072);
+    expect(body.length).toBe(524_288);
+    const id = await createNote(alice, { title: 'Huge list', body });
+    const response = await exportNote(alice, id, 'docx');
+    expect([200, 413]).toContain(response.statusCode);
+    // The process is still serving after whatever the limits decided.
+    expect((await exportNote(alice, await createNote(alice, { body: 'ok\n' }))).statusCode).toBe(
+      200,
+    );
+  });
+
+  it('kills the worker when the client disconnects before the first chunk', async () => {
+    const alice = await person('alice');
+    const id = await createNote(alice, { title: 'Slow start', body: 'Hello\n' });
+    let exited!: () => void;
+    const workerExited = new Promise<void>((resolve) => {
+      exited = resolve;
+    });
+    // A 15 s deadline, far longer than this test: only the disconnect can end the worker.
+    const app = await limitedApp(
+      alice.id,
+      { deadlineMs: 15_000 },
+      { testRenderer: 'slow', onWorkerExit: exited },
+    );
+    try {
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      const address = app.server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const request = http.get(`http://127.0.0.1:${port}/api/v1/notes/${id}/export?format=pdf`);
+      request.on('error', () => undefined);
+      // The worker is spawned and parsing/rendering; no headers exist yet.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      request.destroy();
+      await Promise.race([
+        workerExited,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('worker did not exit after early disconnect')), 3000),
+        ),
+      ]);
+      for (let attempt = 0; attempt < 100 && exportSemaphore.running > 0; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(exportSemaphore.running).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('kills the worker and frees the slot when the client disconnects mid-render', async () => {
+    const alice = await person('alice');
+    const id = await createNote(alice, { title: 'Slow', body: 'Hello\n' });
+    let exited!: () => void;
+    const workerExited = new Promise<void>((resolve) => {
+      exited = resolve;
+    });
+    const app = await limitedApp(
+      alice.id,
+      {},
+      { testRenderer: 'slow-stream', onWorkerExit: exited },
+    );
+    try {
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      const address = app.server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(
+          `http://127.0.0.1:${port}/api/v1/notes/${id}/export?format=docx`,
+          (res) => {
+            // Headers are out, the worker is mid-render: drop the connection like a browser tab.
+            res.destroy();
+            resolve();
+          },
+        );
+        req.on('error', reject);
+        req.setTimeout(5000, () => reject(new Error('request timed out')));
+      });
+      await Promise.race([
+        workerExited,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('worker did not exit after disconnect')), 5000),
+        ),
+      ]);
+      for (let attempt = 0; attempt < 100 && exportSemaphore.running > 0; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(exportSemaphore.running).toBe(0);
     } finally {
       await app.close();
     }

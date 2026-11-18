@@ -35,8 +35,6 @@ export interface DocxContext {
   images: ReadonlyMap<string, LoadedImage>;
   /** Note-file id → filename, for links whose file is not being embedded. */
   fileNames: ReadonlyMap<string, string>;
-  /** One prepared run per note file, so a file placed twice is embedded once and built once. */
-  prepared?: Map<string, ImageRun>;
 }
 
 /** A4 in twips, with 2 cm margins; the text column is what images are scaled to. */
@@ -98,17 +96,18 @@ function scale(image: { width: number; height: number }): { width: number; heigh
   };
 }
 
-function imageRun(ctx: DocxContext, image: LoadedImage): ImageRun {
-  const prepared = ctx.prepared?.get(image.id);
-  if (prepared) return prepared;
-  const run = new ImageRun({
+/**
+ * A new run per placement: `docx` deduplicates the embedded media by a hash of its bytes, but
+ * the drawing id (`<wp:docPr id>`) lives on the run. Reusing one `ImageRun` gives every
+ * placement the same id, which Word treats as a duplicate drawing and may drop or repair.
+ */
+function imageRun(image: LoadedImage): ImageRun {
+  return new ImageRun({
     type: image.type === 'png' ? 'png' : 'jpg',
     data: image.bytes,
     transformation: scale(image),
     altText: { name: image.filename, description: image.filename, title: image.filename },
   });
-  ctx.prepared?.set(image.id, run);
-  return run;
 }
 
 function missingImage(name: string, italic: boolean): TextRun {
@@ -121,7 +120,7 @@ function runChildren(run: Run, ctx: DocxContext, italic: boolean): ParagraphChil
   if (run.kind === 'image') {
     const image = run.fileId ? ctx.images.get(run.fileId) : undefined;
     // An image inside a paragraph or a table cell stays inline: Word places it in the run.
-    if (image) return [imageRun(ctx, image)];
+    if (image) return [imageRun(image)];
     const name = run.alt || (run.fileId ? ctx.fileNames.get(run.fileId) : null) || 'file';
     return [missingImage(name, italic)];
   }
@@ -198,7 +197,7 @@ function cellParagraph(block: Block, ctx: DocxContext, bold: boolean, align: str
     });
   if (block.type === 'image') {
     const image = block.fileId ? ctx.images.get(block.fileId) : undefined;
-    if (image) return new Paragraph({ ...options, children: [imageRun(ctx, image)] });
+    if (image) return new Paragraph({ ...options, children: [imageRun(image)] });
     return new Paragraph({ ...options, children: [missingImage(block.alt || 'file', false)] });
   }
   if (block.type === 'embed')
@@ -383,7 +382,7 @@ function blocksToDocx(
         children.push(
           new Paragraph({
             children: image
-              ? [imageRun(ctx, image)]
+              ? [imageRun(image)]
               : [
                   missingImage(
                     block.alt || (block.fileId ? ctx.fileNames.get(block.fileId) : null) || 'file',
@@ -448,13 +447,7 @@ export function buildDocx(
     children.push(
       new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(cleanTitle)] }),
     );
-  children.push(
-    ...blocksToDocx(
-      blocks,
-      { ...ctx, prepared: ctx.prepared ?? new Map() },
-      { state: { lists: 0 }, ...opts },
-    ),
-  );
+  children.push(...blocksToDocx(blocks, ctx, { state: { lists: 0 }, ...opts }));
 
   const document = new Document({
     title: cleanTitle,

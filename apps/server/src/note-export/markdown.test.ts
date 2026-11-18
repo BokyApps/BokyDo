@@ -1,7 +1,7 @@
 import MarkdownIt from 'markdown-it';
 import { describe, expect, it } from 'vitest';
 import { parseNoteBody } from './ast.js';
-import { renderNoteMarkdown } from './markdown.js';
+import { renderBlocks, renderNoteMarkdown } from './markdown.js';
 
 const FILE_ID = '22222222-2222-4222-8222-222222222222';
 const NOTE_ID = '11111111-1111-4111-8111-111111111111';
@@ -165,6 +165,44 @@ describe('note export Markdown', () => {
       const code = tokens.filter((token) => token.type === 'fence');
       expect(code.length, out).toBe(1);
     }
+  });
+
+  it('separates inline code from a code-only link so no delimiter run merges', () => {
+    const parser = new MarkdownIt({ html: true });
+    // The first span needs a two-backtick fence because its text contains one. Without a
+    // separator its closing run touches the link's code span; three backticks cannot close a
+    // two-backtick span, so `<i>` would escape as raw HTML on a lenient reparse.
+    const body = '``a`b``[`<i>`](http://example.com) and ``<b>``[`<b>`](http://example.com/b)\n';
+    const out = render(body);
+    expect(out).toContain('[`<i>`](http://example.com/)');
+    expect(out).toContain('[`<b>`](http://example.com/b)');
+    expect(out).not.toContain('```');
+    const tokens = parser.parse(out, {});
+    const inline = tokens.flatMap((token) => token.children ?? []);
+    const html = [...tokens, ...inline].filter(
+      (token) => token.type === 'html_block' || token.type === 'html_inline',
+    );
+    expect(html, out).toEqual([]);
+    const images = inline.filter((token) => token.type === 'image');
+    expect(images, out).toEqual([]);
+    // Both code spans survive as code, with their literal `<i>`/`<b>` text.
+    const code = inline.filter((token) => token.type === 'code_inline');
+    expect(code.map((token) => token.content)).toEqual(['a`b', '<i>', '<b>', '<b>']);
+
+    // Two code spans that really are adjacent in the model get a literal space between them,
+    // so their backtick runs never touch.
+    const adjacent = renderBlocks([
+      {
+        type: 'paragraph',
+        runs: [
+          { kind: 'text', text: 'a', code: true },
+          { kind: 'text', text: 'b', code: true },
+        ],
+      },
+    ]);
+    expect(adjacent).toBe('`a` `b`');
+    const adjacentInline = parser.parse(adjacent, {}).flatMap((token) => token.children ?? []);
+    expect(adjacentInline.filter((token) => token.type === 'code_inline')).toHaveLength(2);
   });
 
   it('writes a remote image as a link, never as an image', () => {
