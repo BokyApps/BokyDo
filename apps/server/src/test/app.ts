@@ -1,5 +1,5 @@
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildApp } from '../app.js';
@@ -66,6 +66,9 @@ export async function testApp(
     close: async () => {
       await app.close();
       await db.close();
+      // Every test app gets a fresh data dir; leaving them filled /tmp with thousands of
+      // directories, which slowed down tools that scan it (e.g. other repos' session hooks).
+      await rm(dataDir, { recursive: true, force: true });
     },
   };
 }
