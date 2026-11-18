@@ -7,6 +7,7 @@ import {
   type ListBlock,
   type Run,
 } from './ast.js';
+import { TooLargeError } from './limits.js';
 
 const NOTE_ID = '11111111-1111-4111-8111-111111111111';
 const FILE_ID = '22222222-2222-4222-8222-222222222222';
@@ -173,13 +174,26 @@ describe('note export AST', () => {
   });
 
   it('never exposes a malformed censor token either', () => {
-    // `redactCensored` is deliberately lenient about hand-edited tokens; the invariant the
-    // exporters rely on is that no ciphertext-shaped text reaches an output.
-    const { blocks } = parseNoteBody('before {{censored:v1:short:iv:ct}} after\n');
-    const visible = text(only(blocks, 'paragraph').runs);
+    // `redactCensored` is deliberately lenient about hand-edited tokens: an opener that is not a
+    // valid token is still replaced, so no ciphertext-shaped text reaches an output.
+    const malformed = `{{censored:v1:short:iv:${'c2VjcmV0cGhyYXNl'}}}`;
+    const { blocks } = parseNoteBody(`before ${malformed} after\n`);
+    const runs = only(blocks, 'paragraph').runs.filter((run) => run.kind === 'text');
+    expect(runs.map((run) => run.text)).toEqual(['before ', '█████', ' after']);
+    expect(runs[1]?.censor).toBe(true);
+    // The ciphertext was in the input this time, so this assertion says something.
     expect(JSON.stringify(blocks)).not.toContain('c2VjcmV0');
-    expect(visible).toContain('before');
-    expect(visible).toContain('after');
+    expect(JSON.stringify(blocks)).not.toContain('short');
+  });
+
+  it('counts markdown-it tokens and refuses a body over the cap before building blocks', () => {
+    const body = '- a\n'.repeat(5_000);
+    const parsed = parseNoteBody(body);
+    expect(parsed.tokenCount).toBeGreaterThan(10_000);
+    expect(parsed.blocks.length).toBeGreaterThan(0);
+    expect(() => parseNoteBody(body, { maxTokens: 10_000 })).toThrow(/Markdown tokens/);
+    // The cap is checked before the walker, so a body that is over it never becomes blocks.
+    expect(() => parseNoteBody(body, { maxTokens: 0 })).toThrow(TooLargeError);
   });
 
   it('counts blocks recursively, for the export limit', () => {

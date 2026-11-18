@@ -1,3 +1,4 @@
+import MarkdownIt from 'markdown-it';
 import { describe, expect, it } from 'vitest';
 import { parseNoteBody } from './ast.js';
 import { renderNoteMarkdown } from './markdown.js';
@@ -130,5 +131,60 @@ describe('note export Markdown', () => {
     const once = render(body, 'Note');
     const twice = render(once);
     expect(twice).toBe(once);
+  });
+
+  it('chooses a fence longer than any run in the code, in one pass', () => {
+    // The source is a tilde fence; its body holds a run of three backticks and three tildes.
+    const out = render('~~~~md\n```\ninner fence\n~~~\n~~~~\n');
+    // The info string has no backtick, so the fence is backticks, longer than every run.
+    expect(out).toBe('````md\n```\ninner fence\n~~~\n````\n');
+  });
+
+  it('picks the other fence character when the info string holds a backtick', () => {
+    const out = render('~~~c`x\ncode with ``` and ~~~~\n~~~\n');
+    // A backtick fence may not carry a backtick in its info string, so tildes are used — five
+    // of them here, longer than the body's run of four.
+    expect(out).toBe('~~~~~c`x\ncode with ``` and ~~~~\n~~~~~\n');
+  });
+
+  it('never lets code reopen a fence or raw HTML when parsed again with html: true', () => {
+    const parser = new MarkdownIt({ html: true });
+    const bodies = [
+      '````\n```js\n</script><script>alert(1)</script>\n````\n',
+      '~~~\n```\n<div onclick="x()">html</div>\n```\n~~~\n',
+      '```\n~~~~\n<style>b{}</style>\n```\n',
+    ];
+    for (const body of bodies) {
+      const out = render(body);
+      const tokens = parser.parse(out, {});
+      const html = tokens.filter(
+        (token) => token.type === 'html_block' || token.type === 'html_inline',
+      );
+      expect(html, out).toEqual([]);
+      // The code survives as one code block, not as a closed fence plus text.
+      const code = tokens.filter((token) => token.type === 'fence');
+      expect(code.length, out).toBe(1);
+    }
+  });
+
+  it('writes a remote image as a link, never as an image', () => {
+    const out = render('![shot](https://example.com/x.png)\n\n![nope](ftp://example.com/x.png)\n');
+    expect(out).toContain('[shot](https://example.com/x.png)');
+    expect(out).not.toContain('![shot]');
+    // A destination the app would never open is not linked at all.
+    expect(out).toContain('[image: nope]');
+  });
+
+  it('names a file whose bytes are gone as unavailable text', () => {
+    const out = renderNoteMarkdown(
+      '',
+      parseNoteBody(`[gone.pdf](/api/v1/note-files/${FILE_ID})\n`),
+      {
+        fileNames: new Map([[FILE_ID, 'gone.pdf']]),
+        fileUnavailable: new Set([FILE_ID]),
+      },
+    );
+    expect(out).toContain('file unavailable: gone.pdf');
+    expect(out).not.toContain('/api/v1/note-files/');
   });
 });

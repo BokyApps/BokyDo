@@ -5,7 +5,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AttachmentStore } from '../attachments/store.js';
 import { loadNoteImages } from './images.js';
-import { PNG_1X1 } from './test-support.js';
+import { PNG_1X1, makePng } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
 const GIF_ID = '55555555-5555-4555-8555-555555555555';
@@ -72,6 +72,36 @@ describe('note export images', () => {
       new Set([PNG_ID, HUGE_ID]),
     );
     expect(images.size).toBe(0);
+  });
+
+  it('loads an alpha PNG for DOCX but never for PDF', async () => {
+    await writeFile(path.join(store.dir, PNG_ID), PNG_1X1);
+    const rows = [row(PNG_ID, PNG_1X1.length)];
+    const docx = await loadNoteImages(store, rows, new Set([PNG_ID]), { format: 'docx' });
+    expect(docx.images.get(PNG_ID)?.bytes.equals(PNG_1X1)).toBe(true);
+    // pdfkit decodes colour types 4 and 6 inside a zlib callback, where a throw crashes.
+    const pdf = await loadNoteImages(store, rows, new Set([PNG_ID]), { format: 'pdf' });
+    expect(pdf.images.size).toBe(0);
+  });
+
+  it('refuses a PNG whose chunk CRC is wrong, before any decoder sees it', async () => {
+    const corrupt = makePng({ colorType: 2, corruptIdatCrc: true });
+    await writeFile(path.join(store.dir, PNG_ID), corrupt);
+    for (const format of ['docx', 'pdf'] as const) {
+      const { images } = await loadNoteImages(
+        store,
+        [row(PNG_ID, corrupt.length)],
+        new Set([PNG_ID]),
+        { format },
+      );
+      expect(images.size).toBe(0);
+    }
+    const valid = makePng({ colorType: 2 });
+    await writeFile(path.join(store.dir, PNG_ID), valid);
+    const { images } = await loadNoteImages(store, [row(PNG_ID, valid.length)], new Set([PNG_ID]), {
+      format: 'pdf',
+    });
+    expect(images.get(PNG_ID)?.width).toBe(1);
   });
 
   it('refuses an export whose images pass the 100 MB budget, before reading them', async () => {

@@ -1,9 +1,14 @@
+import { safeHref } from '@bokydo/shared';
 import type { Block, NoteDocument, Run, TextRun } from './ast.js';
 
 /**
  * Markdown export: the parsed document, written back out as CommonMark. Links that only mean
  * something inside BokyDo are flattened to their text, note-file links point into the export's
  * `files/` folder, and censored spans are the `█████` placeholder.
+ *
+ * The output is read back by editors and by `markdown-it` itself, so it must not be able to
+ * contain raw HTML or a fence the body can close early: code fences are chosen from the content
+ * (see `fenceFor`), and an image that is not inside the zip is a link, never `![…]`.
  */
 
 export interface MarkdownOptions {
@@ -11,6 +16,10 @@ export interface MarkdownOptions {
   fileUrls?: ReadonlyMap<string, string>;
   /** Note-file id → display filename, used when a file is not part of the export. */
   fileNames?: ReadonlyMap<string, string>;
+  /** Note files whose bytes are gone: their references become `[file unavailable: name]`. */
+  fileUnavailable?: ReadonlySet<string>;
+  /** Called between blocks, so a render can abandon a document that is taking too long. */
+  check?: () => void;
 }
 
 /** ASCII punctuation that means something to CommonMark, escaped so text stays text. */
@@ -25,9 +34,56 @@ function markdownUrl(url: string): string {
   return /[()\s<>]/.test(url) ? `<${url}>` : url;
 }
 
+/** The longest runs of backticks and tildes in `text`, both found in one linear pass. */
+function fenceRuns(text: string): { backtick: number; tilde: number } {
+  let backtick = 0;
+  let tilde = 0;
+  let run = 0;
+  let runChar = '';
+  for (const ch of text) {
+    if (ch !== '`' && ch !== '~') {
+      run = 0;
+      runChar = '';
+      continue;
+    }
+    if (ch === runChar) run++;
+    else {
+      runChar = ch;
+      run = 1;
+    }
+    if (ch === '`') {
+      if (run > backtick) backtick = run;
+    } else if (run > tilde) {
+      tilde = run;
+    }
+  }
+  return { backtick, tilde };
+}
+
+/**
+ * A fenced code block's fence, chosen from one pass over the body and one over the info string.
+ * The fence character must not appear in the info string at all, and the fence must be longer
+ * than the longest run of it in the body — a shorter fence could be closed early (or an info
+ * string containing the fence character could open something else) when the export is parsed
+ * again, including with `html: true`.
+ */
+export function fenceFor(body: string, info: string): { fence: string; info: string } {
+  let label = info;
+  let char: 'backtick' | 'tilde' = 'backtick';
+  if (label.includes('`')) {
+    // A backtick fence may not carry a backtick in its info string; a tilde fence may carry a
+    // tilde, but the rule here is stricter and simpler: the fence character never appears in
+    // the info string at all.
+    if (label.includes('~')) label = label.replace(/[`~]/g, '');
+    else char = 'tilde';
+  }
+  const runs = fenceRuns(body);
+  const longest = Math.max(char === 'backtick' ? runs.backtick : runs.tilde, 0);
+  return { fence: (char === 'backtick' ? '`' : '~').repeat(Math.max(3, longest + 1)), info: label };
+}
+
 function codeSpan(text: string): string {
-  let fence = '`';
-  while (text.includes(fence)) fence += '`';
+  const fence = '`'.repeat(fenceRuns(text).backtick + 1);
   const pad =
     text.startsWith('`') || text.endsWith('`') || text.startsWith(' ') || text.endsWith(' ');
   return pad ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
@@ -41,15 +97,27 @@ function fileUrl(fileId: string, opts: MarkdownOptions): string | null {
   return opts.fileUrls?.get(fileId) ?? null;
 }
 
+/** No bytes behind the reference: plain text, so the export never points at nothing. */
+function unavailableMarkdown(name: string): string {
+  return `\\[file unavailable: ${escapeText(name)}\\]`;
+}
+
 function imageMarkdown(
   image: { alt: string; src: string; fileId: string | null },
   opts: MarkdownOptions,
 ): string {
-  const url = image.fileId ? fileUrl(image.fileId, opts) : null;
-  if (url) return `![${escapeText(image.alt)}](${markdownUrl(url)})`;
-  if (image.fileId)
-    return `[image: ${escapeText(image.alt || fileName(image.fileId, opts) || 'file')}]`;
-  return `![${escapeText(image.alt)}](${markdownUrl(image.src)})`;
+  if (image.fileId) {
+    const name = fileName(image.fileId, opts) ?? 'file';
+    if (opts.fileUnavailable?.has(image.fileId)) return unavailableMarkdown(name);
+    const url = fileUrl(image.fileId, opts);
+    // Only an image that is actually in the zip is written as an image.
+    if (url) return `![${escapeText(image.alt)}](${markdownUrl(url)})`;
+    return `[image: ${escapeText(image.alt || name)}]`;
+  }
+  // A remote image would be fetched when the export is opened: keep it a link.
+  const href = safeHref(image.src);
+  if (!href) return `[image: ${escapeText(image.alt || 'image')}]`;
+  return `[${escapeText(image.alt) || escapeText(image.src)}](${markdownUrl(href)})`;
 }
 
 /** Emphasis markers need the spaces outside: `** bold**` is not emphasis in CommonMark. */
@@ -80,6 +148,8 @@ function runMarkdown(run: Run, opts: MarkdownOptions): string {
 
   if (run.fileId) {
     if (run.code) return text;
+    const name = fileName(run.fileId, opts) ?? text;
+    if (opts.fileUnavailable?.has(run.fileId)) return unavailableMarkdown(name);
     const url = fileUrl(run.fileId, opts);
     if (url) return `[${text}](${markdownUrl(url)})`;
     if (run.href) return `[${text}](${markdownUrl(run.href)})`;
@@ -109,10 +179,9 @@ function headingMarkdown(level: number, runs: readonly Run[], opts: MarkdownOpti
 }
 
 function codeMarkdown(text: string, language: string): string {
-  let fence = '```';
-  while (text.includes(fence)) fence += '`';
   const body = text.endsWith('\n') ? text.slice(0, -1) : text;
-  return `${fence}${language}\n${body}\n${fence}`;
+  const { fence, info } = fenceFor(body, language);
+  return `${fence}${info}\n${body}\n${fence}`;
 }
 
 function quoteMarkdown(blocks: readonly Block[], opts: MarkdownOptions): string {
@@ -182,6 +251,7 @@ function tableMarkdown(block: Extract<Block, { type: 'table' }>, opts: MarkdownO
 }
 
 function blockMarkdown(block: Block, opts: MarkdownOptions): string {
+  opts.check?.();
   switch (block.type) {
     case 'heading':
       return headingMarkdown(block.level, block.runs, opts);

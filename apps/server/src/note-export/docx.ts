@@ -17,11 +17,13 @@ import {
   WidthType,
   type FileChild,
   type ILevelsOptions,
+  type NumberingDefinition,
   type ParagraphChild,
 } from 'docx';
 import { PassThrough, type Readable } from 'node:stream';
 import type { Block, ListBlock, Run } from './ast.js';
 import type { LoadedImage } from './images.js';
+import type { ExportDeadline } from './limits.js';
 
 /**
  * DOCX export. Word has no concept of "censored", so a span is the placeholder text `█████`,
@@ -33,6 +35,8 @@ export interface DocxContext {
   images: ReadonlyMap<string, LoadedImage>;
   /** Note-file id → filename, for links whose file is not being embedded. */
   fileNames: ReadonlyMap<string, string>;
+  /** One prepared run per note file, so a file placed twice is embedded once and built once. */
+  prepared?: Map<string, ImageRun>;
 }
 
 /** A4 in twips, with 2 cm margins; the text column is what images are scaled to. */
@@ -52,23 +56,32 @@ const HEADING_LEVELS = [
   HeadingLevel.HEADING_6,
 ] as const;
 
-const ORDERED_LIST = 'note-export-ordered';
-
 /** 1–9 decimal levels with an indent each, so a nested list stays visibly nested. */
-const numbering = {
-  config: [
-    {
-      reference: ORDERED_LIST,
-      levels: Array.from({ length: 9 }, (_, level): ILevelsOptions => ({
-        level,
-        format: LevelFormat.DECIMAL,
-        text: `%${level + 1}.`,
-        alignment: AlignmentType.START,
-        style: { paragraph: { indent: { left: 720 + level * 720, hanging: 360 } } },
-      })),
-    },
-  ],
-};
+function orderedLevels(first: number, depth: number): ILevelsOptions[] {
+  return Array.from({ length: 9 }, (_, level): ILevelsOptions => ({
+    level,
+    format: LevelFormat.DECIMAL,
+    text: `%${level + 1}.`,
+    alignment: AlignmentType.START,
+    style: { paragraph: { indent: { left: 720 + level * 720, hanging: 360 } } },
+    // A list that starts at 7 numbers 7, 8, 9: the start lives on the level, and each list is
+    // its own numbering instance so a later list starts again.
+    start: level === depth ? first : 1,
+  }));
+}
+
+/**
+ * A numbering definition for one ordered list. `docx` keeps the definition of the first
+ * reference it sees, so the reference names the start and the level it applies to; the
+ * document's own config has none of these.
+ */
+function orderedDefinition(start: number, depth: number): NumberingDefinition {
+  const first = Math.min(Math.max(1, Math.trunc(start) || 1), 2_147_483_647);
+  return {
+    reference: `note-export-ordered-${depth}-${first}`,
+    levels: orderedLevels(first, depth),
+  };
+}
 
 function heading(level: number) {
   return HEADING_LEVELS[Math.min(6, Math.max(1, level)) - 1] ?? HeadingLevel.HEADING_1;
@@ -85,13 +98,17 @@ function scale(image: { width: number; height: number }): { width: number; heigh
   };
 }
 
-function imageRun(image: LoadedImage): ImageRun {
-  return new ImageRun({
+function imageRun(ctx: DocxContext, image: LoadedImage): ImageRun {
+  const prepared = ctx.prepared?.get(image.id);
+  if (prepared) return prepared;
+  const run = new ImageRun({
     type: image.type === 'png' ? 'png' : 'jpg',
     data: image.bytes,
     transformation: scale(image),
     altText: { name: image.filename, description: image.filename, title: image.filename },
   });
+  ctx.prepared?.set(image.id, run);
+  return run;
 }
 
 function missingImage(name: string, italic: boolean): TextRun {
@@ -103,7 +120,8 @@ function runChildren(run: Run, ctx: DocxContext, italic: boolean): ParagraphChil
   if (run.kind === 'break') return [new TextRun({ break: 1 })];
   if (run.kind === 'image') {
     const image = run.fileId ? ctx.images.get(run.fileId) : undefined;
-    if (image) return [imageRun(image)];
+    // An image inside a paragraph or a table cell stays inline: Word places it in the run.
+    if (image) return [imageRun(ctx, image)];
     const name = run.alt || (run.fileId ? ctx.fileNames.get(run.fileId) : null) || 'file';
     return [missingImage(name, italic)];
   }
@@ -180,7 +198,7 @@ function cellParagraph(block: Block, ctx: DocxContext, bold: boolean, align: str
     });
   if (block.type === 'image') {
     const image = block.fileId ? ctx.images.get(block.fileId) : undefined;
-    if (image) return new Paragraph({ ...options, children: [imageRun(image)] });
+    if (image) return new Paragraph({ ...options, children: [imageRun(ctx, image)] });
     return new Paragraph({ ...options, children: [missingImage(block.alt || 'file', false)] });
   }
   if (block.type === 'embed')
@@ -245,11 +263,24 @@ function tableBlock(block: Extract<Block, { type: 'table' }>, ctx: DocxContext):
   });
 }
 
-function listBlock(block: ListBlock, ctx: DocxContext, level: number, indent: number): FileChild[] {
+function listBlock(
+  block: ListBlock,
+  ctx: DocxContext,
+  level: number,
+  indent: number,
+  state: { lists: number },
+): FileChild[] {
   const depth = Math.min(8, level);
   const items: FileChild[] = [];
+  // One numbering instance per list: without it Word continues the previous list's numbers.
   const listProperties = block.ordered
-    ? { numbering: { reference: ORDERED_LIST, level: depth } }
+    ? {
+        numbering: {
+          reference: orderedDefinition(block.start, depth),
+          level: depth,
+          instance: state.lists++,
+        },
+      }
     : { bullet: { level: depth } };
   for (const item of block.items) {
     const rest = [...item.blocks];
@@ -267,7 +298,7 @@ function listBlock(block: ListBlock, ctx: DocxContext, level: number, indent: nu
       items.push(new Paragraph({ ...listProperties, children: marker }));
       if (first) rest.unshift(first);
     }
-    items.push(...blocksToDocx(rest, ctx, { indent: indent + 720, listLevel: depth + 1 }));
+    items.push(...blocksToDocx(rest, ctx, { indent: indent + 720, listLevel: depth + 1, state }));
   }
   return items;
 }
@@ -275,12 +306,20 @@ function listBlock(block: ListBlock, ctx: DocxContext, level: number, indent: nu
 function blocksToDocx(
   blocks: readonly Block[],
   ctx: DocxContext,
-  opts: { indent?: number; listLevel?: number; italic?: boolean } = {},
+  opts: {
+    indent?: number;
+    listLevel?: number;
+    italic?: boolean;
+    state?: { lists: number };
+    deadline?: ExportDeadline;
+  } = {},
 ): FileChild[] {
   const children: FileChild[] = [];
   const indent = opts.indent;
   const italic = opts.italic === true;
+  const state = opts.state ?? { lists: 0 };
   for (const block of blocks) {
+    opts.deadline?.check();
     switch (block.type) {
       case 'heading':
         children.push(
@@ -316,11 +355,16 @@ function blocksToDocx(
         break;
       case 'quote':
         children.push(
-          ...blocksToDocx(block.blocks, ctx, { indent: (indent ?? 0) + 720, italic: true }),
+          ...blocksToDocx(block.blocks, ctx, {
+            indent: (indent ?? 0) + 720,
+            italic: true,
+            state,
+            ...(opts.deadline ? { deadline: opts.deadline } : {}),
+          }),
         );
         break;
       case 'list':
-        children.push(...listBlock(block, ctx, opts.listLevel ?? 0, indent ?? 0));
+        children.push(...listBlock(block, ctx, opts.listLevel ?? 0, indent ?? 0, state));
         break;
       case 'table':
         children.push(tableBlock(block, ctx));
@@ -339,7 +383,7 @@ function blocksToDocx(
         children.push(
           new Paragraph({
             children: image
-              ? [imageRun(image)]
+              ? [imageRun(ctx, image)]
               : [
                   missingImage(
                     block.alt || (block.fileId ? ctx.fileNames.get(block.fileId) : null) || 'file',
@@ -392,19 +436,29 @@ function blocksToDocx(
 }
 
 /** Build a DOCX document as a readable stream (the packer emits the archive in one buffer). */
-export function buildDocx(title: string, blocks: readonly Block[], ctx: DocxContext): Readable {
+export function buildDocx(
+  title: string,
+  blocks: readonly Block[],
+  ctx: DocxContext,
+  opts: { deadline?: ExportDeadline } = {},
+): Readable {
   const children: FileChild[] = [];
   const cleanTitle = title.replace(/\s+/g, ' ').trim();
   if (cleanTitle)
     children.push(
       new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(cleanTitle)] }),
     );
-  children.push(...blocksToDocx(blocks, ctx));
+  children.push(
+    ...blocksToDocx(
+      blocks,
+      { ...ctx, prepared: ctx.prepared ?? new Map() },
+      { state: { lists: 0 }, ...opts },
+    ),
+  );
 
   const document = new Document({
     title: cleanTitle,
     creator: 'BokyDo',
-    numbering,
     sections: [
       {
         properties: {
@@ -419,6 +473,10 @@ export function buildDocx(title: string, blocks: readonly Block[], ctx: DocxCont
   });
   // `docx` hands back an old-style event stream; a PassThrough is async-iterable and pipes.
   const out = new PassThrough();
+  // The packer builds the whole archive before emitting it, in a handful of writes that never
+  // wait on `'drain'`; if the response was destroyed mid-write the resulting error is expected,
+  // and must not become an unhandled event. The reply listens too and aborts the download.
+  out.on('error', () => undefined);
   const packed = Packer.toStream(document) as unknown as Readable;
   packed.on('error', (err: Error) => out.destroy(err));
   packed.pipe(out);

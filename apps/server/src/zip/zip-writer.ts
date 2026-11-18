@@ -47,16 +47,21 @@ export class ZipWriter {
         compressed += chunk.length;
         if (!this.stream.write(chunk)) {
           deflate.pause();
-          this.stream.once('drain', () => deflate.resume());
+          // A disconnected reader never drains: fail the producer instead of parking it.
+          waitFor(this.stream, 'drain').then(
+            () => deflate.resume(),
+            (err: Error) => deflate.destroy(err),
+          );
         }
       });
       deflate.on('end', resolve);
       deflate.on('error', reject);
+      deflate.on('close', () => reject(new Error('zip entry closed before it finished')));
     });
     const feed = async (chunk: Buffer) => {
       crc = crc32(chunk, crc);
       size += chunk.length;
-      if (!deflate.write(chunk)) await new Promise((r) => deflate.once('drain', r));
+      if (!deflate.write(chunk)) await waitFor(deflate, 'drain');
     };
     if (typeof data === 'string' || Buffer.isBuffer(data)) {
       await feed(Buffer.from(data));
@@ -142,20 +147,106 @@ export class ZipWriter {
 
   private async write(buf: Buffer): Promise<void> {
     this.offset += buf.length;
-    if (!this.stream.write(buf)) await new Promise((r) => this.stream.once('drain', r));
+    if (!this.stream.write(buf)) await waitFor(this.stream, 'drain');
   }
+}
+
+/**
+ * Resolve on `event`, reject on `'error'` or `'close'`: a writer whose reader has gone away must
+ * not wait for a `'drain'` that is never coming.
+ */
+function waitFor(
+  stream: NodeJS.EventEmitter & { destroyed?: boolean },
+  event: string,
+): Promise<void> {
+  if (stream.destroyed) return Promise.reject(new Error('zip stream closed'));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      stream.off(event, onEvent);
+      stream.off('error', onError);
+      stream.off('close', onClose);
+    };
+    const onEvent = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error('zip stream closed'));
+    };
+    stream.once(event, onEvent);
+    stream.once('error', onError);
+    stream.once('close', onClose);
+  });
 }
 
 export class ZipLimitError extends Error {}
 
-/** A relative, forward-slash path without `..`, control characters or a leading slash. */
+/** One path component may not exceed this many UTF-8 bytes (Windows' own practical limit). */
+const MAX_COMPONENT_BYTES = 200;
+/** Windows refuses these device names, with or without an extension. */
+const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+/** Characters Windows refuses in a name, plus the archive's own separator (handled apart). */
+const FORBIDDEN_CHARS = /[:*?"<>|]/g;
+
+/** `text` cut to at most `max` UTF-8 bytes without splitting a character. */
+function trimToBytes(text: string, max: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= max) return text;
+  // `toString` replaces the partial trailing sequence with U+FFFD, which is dropped again.
+  let cut = bytes.subarray(0, max).toString('utf8');
+  let end = cut.length;
+  while (end > 0 && cut.charAt(end - 1) === '\uFFFD') end--;
+  cut = cut.slice(0, end);
+  return trimTrailing(cut);
+}
+
+/** Windows drops trailing dots and spaces, which would let two entries collide. */
+function trimTrailing(text: string): string {
+  let end = text.length;
+  while (end > 0) {
+    const ch = text.charAt(end - 1);
+    if (ch !== '.' && ch !== ' ') break;
+    end--;
+  }
+  return text.slice(0, end);
+}
+
+/**
+ * One archive path component: control characters and Windows-forbidden characters removed, no
+ * drive prefix (`C:`), no trailing dot or space, no reserved device name, and at most 200 UTF-8
+ * bytes.
+ */
+function safeComponent(part: string): string | null {
+  if (part === '' || part === '.' || part === '..') return null;
+  // A drive designator is not a directory.
+  if (/^[a-z]:$/i.test(part)) return null;
+  let clean = trimTrailing(
+    part
+      .replace(/[\p{Cc}\p{Cf}]/gu, '')
+      .replace(FORBIDDEN_CHARS, '_')
+      .trim(),
+  );
+  if (clean === '' || clean === '.' || clean === '..') return null;
+  const dot = clean.lastIndexOf('.');
+  const stem = dot > 0 ? clean.slice(0, dot) : clean;
+  if (RESERVED_NAME.test(stem)) clean = `_${clean}`;
+  clean = trimTrailing(trimToBytes(clean, MAX_COMPONENT_BYTES).trim());
+  return clean === '' ? null : clean;
+}
+
+/** A relative, forward-slash path without `..`, drive prefixes or Windows-forbidden names. */
 export function safeEntryName(name: string): string {
   const parts = name
     .replace(/\\/g, '/')
     .split('/')
-    .map((p) => p.replace(/[\p{Cc}\p{Cf}]/gu, '').trim())
-    .filter((p) => p !== '' && p !== '.' && p !== '..');
-  const joined = parts.join('/').slice(0, 400);
+    .map(safeComponent)
+    .filter((part): part is string => part !== null);
+  const joined = trimToBytes(parts.join('/'), 400);
   return joined || 'file';
 }
 
