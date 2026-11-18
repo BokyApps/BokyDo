@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AttachmentStore } from '../attachments/store.js';
 import { loadNoteImages } from './images.js';
 import { PNG_1X1, makePng } from './test-support.js';
@@ -18,6 +18,8 @@ beforeEach(async () => {
   store = new AttachmentStore(await mkdtemp(path.join(tmpdir(), 'bokydo-note-export-')));
   await mkdir(store.dir, { recursive: true });
 });
+// The store's directory sits inside the temp dir; remove the whole temp dir.
+afterEach(async () => rm(path.dirname(store.dir), { recursive: true, force: true }));
 
 const row = (id: string, size: number, contentType = 'image/png') => ({
   id,
