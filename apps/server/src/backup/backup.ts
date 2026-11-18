@@ -196,6 +196,18 @@ export class BackupService {
       for (const f of files.filter((n) => /^[0-9a-f-]{36}$/.test(n))) {
         await archive.entry(`attachments/${f}`, createReadStream(path.join(attachmentsDir, f)));
       }
+      // Note files live beside attachments but in their own directory; they are archived the
+      // same way (UUID names only) and restored into their own staging directory.
+      const noteFilesDir = path.join(this.deps.dataDir, 'note-files');
+      let noteFiles: string[] = [];
+      try {
+        noteFiles = await readdir(noteFilesDir);
+      } catch {
+        // no note files yet
+      }
+      for (const f of noteFiles.filter((n) => /^[0-9a-f-]{36}$/.test(n))) {
+        await archive.entry(`note-files/${f}`, createReadStream(path.join(noteFilesDir, f)));
+      }
       await archive.end();
       await enc.end();
       await rename(part, final);
@@ -267,7 +279,9 @@ export class BackupService {
 
       // 3. Restore.
       const staging = path.join(this.deps.dataDir, `attachments.restore-${Date.now()}`);
+      const noteStaging = path.join(this.deps.dataDir, `note-files.restore-${Date.now()}`);
       await mkdir(staging, { recursive: true, mode: 0o700 });
+      await mkdir(noteStaging, { recursive: true, mode: 0o700 });
       const secrets = new Map<string, string>();
       try {
         await this.deps.sql.begin(async (tx) => {
@@ -330,6 +344,13 @@ export class BackupService {
                 entry.data,
                 createWriteStream(path.join(staging, f), { mode: 0o600, flags: 'wx' }),
               );
+            } else if (entry.name.startsWith('note-files/')) {
+              const f = entry.name.slice(11);
+              if (!/^[0-9a-f-]{36}$/.test(f)) throw new BackupError('invalid');
+              await pipeline(
+                entry.data,
+                createWriteStream(path.join(noteStaging, f), { mode: 0o600, flags: 'wx' }),
+              );
             } else {
               throw new BackupError('invalid');
             }
@@ -351,14 +372,18 @@ export class BackupService {
         });
       } catch (err) {
         await rm(staging, { recursive: true, force: true });
+        await rm(noteStaging, { recursive: true, force: true });
         throw err;
       }
 
       // 4. Files and keys (the database already matches them).
       const stamp = Date.now();
       const attachments = path.join(this.deps.dataDir, 'attachments');
+      const noteFiles = path.join(this.deps.dataDir, 'note-files');
       await rename(attachments, `${attachments}.pre-restore-${stamp}`).catch(() => undefined);
       await rename(staging, attachments);
+      await rename(noteFiles, `${noteFiles}.pre-restore-${stamp}`).catch(() => undefined);
+      await rename(noteStaging, noteFiles);
       for (const [f, value] of secrets) {
         const target = path.join(this.deps.secretsDir, f);
         await rename(target, `${target}.pre-restore-${stamp}`).catch(() => undefined);

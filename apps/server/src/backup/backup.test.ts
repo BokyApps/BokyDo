@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import postgres from 'postgres';
@@ -41,6 +41,29 @@ async function reason(p: Promise<unknown>): Promise<string> {
   } catch (err) {
     return (err as Error).constructor.name;
   }
+}
+
+/** Copy a backup, adding one entry after the manifest, to exercise restore validation. */
+async function withExtraEntry(
+  source: string,
+  target: string,
+  extra: { name: string; data: string },
+): Promise<void> {
+  const out = createWriteStream(target);
+  const enc = await BackupEncryptor.create(out, PASSPHRASE, 'test');
+  const archive = new ArchiveWriter(enc);
+  for await (const entry of readArchive(decryptBackup(createReadStream(source), PASSPHRASE))) {
+    if (entry.name === 'manifest.json') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of entry.data) chunks.push(chunk);
+      await archive.entry('manifest.json', Buffer.concat(chunks));
+      await archive.entry(extra.name, extra.data);
+    } else {
+      await archive.entry(entry.name, entry.data);
+    }
+  }
+  await archive.end();
+  await enc.end();
 }
 
 describe('backup encryption', () => {
@@ -231,6 +254,69 @@ describe.skipIf(!TEST_DATABASE_URL)('backups and restore', { timeout: 60_000 }, 
       { n: number },
     ];
     expect(n).toBe(readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR }).length);
+  });
+
+  it('restores note files byte for byte into an empty data directory', async () => {
+    await t.app.services.settings.update(
+      { 'backups.passphrase': PASSPHRASE },
+      { userId: null, ip: null },
+    );
+    const created = await admin.http.post('/api/v1/notes', { title: 'With file' });
+    expect(created.statusCode).toBe(201);
+    const noteId = created.json().note.id as string;
+    const bytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('note file body'),
+    ]);
+    const uploaded = await admin.http.request({
+      method: 'POST',
+      url: `/api/v1/notes/${noteId}/files`,
+      headers: { 'content-type': 'application/octet-stream', 'x-filename': 'note.png' },
+      payload: bytes,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const fileId = uploaded.json().id as string;
+    const name = (await admin.http.post('/api/v1/admin/backups')).json().name as string;
+    expect(await readdir(path.join(t.dataDir, 'note-files'))).toContain(fileId);
+
+    // The backup holds the only copy now: the live note-files directory is emptied.
+    await rm(path.join(t.dataDir, 'note-files'), { recursive: true, force: true });
+    await rm(path.join(t.dataDir, 'attachments'), { recursive: true, force: true });
+    const res = await admin.http.post(`/api/v1/admin/backups/${name}/restore`, {
+      passphrase: PASSPHRASE,
+      confirm: 'RESTORE',
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Sessions are not part of a backup, so sign in again before downloading.
+    expect((await admin.http.login('root', 'violin-pancake-orbit-meadow')).statusCode).toBe(200);
+    const download = await admin.http.request({
+      method: 'GET',
+      url: `/api/v1/note-files/${fileId}`,
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.rawPayload.equals(bytes)).toBe(true);
+  });
+
+  it('refuses note-file entries that are not plain UUID names', async () => {
+    await t.app.services.settings.update(
+      { 'backups.passphrase': PASSPHRASE },
+      { userId: null, ip: null },
+    );
+    const dir = t.app.services.backups.dir;
+    const name = (await admin.http.post('/api/v1/admin/backups')).json().name as string;
+    let i = 0;
+    for (const bad of ['note-files/../x', 'note-files/not-a-uuid']) {
+      const target = path.join(dir, `uploaded-2026-01-0${++i}T00-00-00Z.bkdo`);
+      await withExtraEntry(path.join(dir, name), target, { name: bad, data: 'x' });
+      const res = await admin.http.post(`/api/v1/admin/backups/${path.basename(target)}/restore`, {
+        passphrase: PASSPHRASE,
+        confirm: 'RESTORE',
+      });
+      expect(res.statusCode, bad).toBe(400);
+      expect(res.json().error, bad).toBe('backup_invalid');
+    }
+    expect((await t.db.db.select().from(users)).map((u) => u.username)).toEqual(['root']);
   });
 
   it('refuses a backup from a different schema lineage, without touching anything', async () => {

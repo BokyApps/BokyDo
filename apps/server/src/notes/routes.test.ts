@@ -3,11 +3,13 @@ import { mkdir, readdir, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { AttachmentStore } from '../attachments/store.js';
 import { noteFiles, noteLinks, noteTaskLinks, notes } from '../db/schema.js';
 import { grantProjectAccess } from '../sync/membership.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id as newId, SyncUser } from '../test/sync.js';
+import { purgeNotes } from './service.js';
 
 let t: TestApp;
 type Person = { id: string; http: Client; sync: SyncUser };
@@ -17,6 +19,7 @@ const PNG = Buffer.concat([
   Buffer.alloc(100, 1),
 ]);
 const HTML = Buffer.from('<html><script>alert(document.cookie)</script></html>');
+const PDF = Buffer.from('%PDF-1.7\n% not an image\n');
 const SALT = 'A'.repeat(22);
 const IV = 'B'.repeat(16);
 /** A syntactically valid v1 span; its ciphertext is not a word anyone could search for. */
@@ -100,6 +103,25 @@ function ageFile(id: string, ms = 25 * 3600 * 1000) {
     .where(eq(noteFiles.id, id));
 }
 
+function ageUnreferenced(id: string, ms: number) {
+  return t.db.db
+    .update(noteFiles)
+    .set({ unreferencedAt: new Date(Date.now() - ms) })
+    .where(eq(noteFiles.id, id));
+}
+
+/** Replace the app so a test can inject route registration options. */
+async function appWithQuota(quota: { bytes: number; count: number }): Promise<TestApp> {
+  await t?.close();
+  const next = await testApp({
+    configurePluginsForTest: (app) => {
+      app.decorate('noteUploadQuotaForTest', quota);
+    },
+  });
+  await next.app.services.settings.markSetupComplete({ userId: null, ip: null });
+  return next;
+}
+
 beforeEach(async () => {
   if (!TEST_DATABASE_URL) return;
   t = await testApp();
@@ -169,8 +191,9 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect(retry.status).toBe(200);
     expect(retry.note.id).toBe(id);
     expect((await createNote(alice, { ...payload, title: 'Changed' })).status).toBe(409);
-    // Somebody else's stable ID is not usable.
-    expect((await createNote(bob, payload)).status).toBe(404);
+    // Somebody else's stable ID is a conflict, never a hint that the ID is free.
+    expect((await createNote(bob, payload)).status).toBe(409);
+    expect((await createNote(bob, payload)).body).toEqual({ error: 'id_conflict' });
     expect((await listNotes(bob)).notes).toEqual([]);
   });
 
@@ -329,6 +352,15 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect(second.notes.map((n) => n.id)).toEqual([a.note.id]);
     expect(second.nextCursor).toBeNull();
     expect((await listNotes(alice, '?cursor=not-a-cursor')).status).toBe(400);
+
+    // Cursors must carry the canonical ISO instant they were issued with.
+    const decoded = JSON.parse(
+      Buffer.from(first.nextCursor!, 'base64url').toString('utf8'),
+    ) as Record<string, unknown>;
+    for (const u of ['2026-01-02T00:00:00Z', '2026-01-02T00:00:00.000+00:00', 'not a date']) {
+      const cursor = Buffer.from(JSON.stringify({ ...decoded, u })).toString('base64url');
+      expect((await listNotes(alice, `?cursor=${encodeURIComponent(cursor)}`)).status).toBe(400);
+    }
   });
 
   it('archives, trashes, restores and deletes forever with its files', async () => {
@@ -521,6 +553,13 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     const htmlDownload = await download(alice, html.body.id as string, true);
     expect(htmlDownload.headers['content-type']).toBe('application/octet-stream');
     expect(htmlDownload.headers['content-disposition']).toMatch(/^attachment; /);
+
+    // A PDF is not a raster image: downloaded as opaque bytes even when inline is requested.
+    const pdf = await upload(alice, noteId, PDF, { filename: 'doc.pdf' });
+    const pdfDownload = await download(alice, pdf.body.id as string, true);
+    expect(pdfDownload.headers['content-type']).toBe('application/octet-stream');
+    expect(pdfDownload.headers['content-disposition']).toMatch(/^attachment; /);
+    expect(pdfDownload.rawPayload.equals(PDF)).toBe(true);
   });
 
   it('enforces upload size, emptiness, media type, the off switch and quotas', async () => {
@@ -569,6 +608,33 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect((await upload(alice, noteId, PNG)).status).toBe(429);
   });
 
+  it('reserves quota before streaming, so one upload cannot cross it', async () => {
+    t = await appWithQuota({ bytes: PNG.length - 1, count: 10 });
+    const alice = await person('alice');
+    const note = await createNote(alice, { title: 'Budget' });
+    const noteId = note.note.id as string;
+    const dir = path.join(t.dataDir, 'note-files');
+
+    const tooBig = await upload(alice, noteId, PNG);
+    expect(tooBig.status).toBe(413);
+    expect(await t.db.db.select().from(noteFiles)).toEqual([]);
+    expect(await readdir(dir).catch(() => [])).toEqual([]);
+  });
+
+  it('lets exactly one of two concurrent uploads take the last quota slot', async () => {
+    t = await appWithQuota({ bytes: PNG.length + 40, count: 10 });
+    const alice = await person('alice');
+    const note = await createNote(alice, { title: 'Race' });
+    const noteId = note.note.id as string;
+    const [a, b] = await Promise.all([upload(alice, noteId, PNG), upload(alice, noteId, PNG)]);
+    expect([a.status, b.status].filter((status) => status === 201)).toHaveLength(1);
+    expect([a.status, b.status].filter((status) => status !== 201)).toHaveLength(1);
+    const rows = await t.db.db.select().from(noteFiles);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('ready');
+    expect(await readdir(path.join(t.dataDir, 'note-files'))).toHaveLength(1);
+  });
+
   it('rate-limits note uploads to 120 per hour per user', async () => {
     const alice = await person('alice');
     const note = await createNote(alice, { title: 'Rate' });
@@ -578,38 +644,91 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect((await upload(alice, noteId, PNG)).body).toEqual({ error: 'rate_limited' });
   });
 
-  it('marks files referenced by the body and purges pending, trashed and stray files', async () => {
+  it('claims links, and purges pending files, stale uploads and trashed notes', async () => {
     const alice = await person('alice');
+    const project = newId();
+    const task = newId();
+    await alice.sync.ok(
+      cmd('project_add', { id: project, name: 'Work' }),
+      cmd('task_add', { id: task, projectId: project, content: 'Linked task' }),
+    );
+    const target = await createNote(alice, { title: 'Target' });
     const note = await createNote(alice, { title: 'Purge' });
     const noteId = note.note.id as string;
-    const pending = await upload(alice, noteId, PNG, { filename: 'pending.png' });
-    const pendingId = pending.body.id as string;
 
-    // Pending for 25 hours: gone from the row table and from disk.
-    await ageFile(pendingId);
-    await t.app.services.purgeNotes!();
-    expect(await t.db.db.select().from(noteFiles)).toEqual([]);
-    expect(await readdir(path.join(t.dataDir, 'note-files'))).not.toContain(pendingId);
-
-    // Referenced files survive even when old.
+    // A referenced file survives even when it was uploaded long ago, and its links are stored.
     const kept = await upload(alice, noteId, PNG, { filename: 'kept.png' });
     const keptId = kept.body.id as string;
-    await alice.http.patch(`/api/v1/notes/${noteId}`, {
-      body: `![kept](/api/v1/note-files/${keptId})`,
-    });
-    await ageFile(keptId);
+    expect(
+      (
+        await alice.http.patch(`/api/v1/notes/${noteId}`, {
+          body: [
+            `![kept](/api/v1/note-files/${keptId})`,
+            `[target](bokydo:note/${target.note.id as string})`,
+            `[task](bokydo:task/${task})`,
+          ].join('\n'),
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(await t.db.db.select().from(noteLinks)).toHaveLength(1);
+    expect(await t.db.db.select().from(noteTaskLinks)).toHaveLength(1);
+    await ageFile(keptId, 48 * 3600 * 1000);
     await t.app.services.purgeNotes!();
     expect((await t.db.db.select().from(noteFiles)).map((row) => row.id)).toEqual([keptId]);
     expect(await readdir(path.join(t.dataDir, 'note-files'))).toContain(keptId);
 
-    // A note trashed for over 30 days, with its file and links, is purged.
+    // Removing the reference starts the 24 h clock then, not at upload time: 23 h after the
+    // removal the file is still there, even though it was uploaded 48 hours ago.
+    expect(
+      (await alice.http.patch(`/api/v1/notes/${noteId}`, { body: 'no links' })).statusCode,
+    ).toBe(200);
+    expect(await t.db.db.select().from(noteLinks)).toEqual([]);
+    expect(await t.db.db.select().from(noteTaskLinks)).toEqual([]);
+    await ageUnreferenced(keptId, 23 * 3600 * 1000);
+    await t.app.services.purgeNotes!();
+    expect((await t.db.db.select().from(noteFiles)).map((row) => row.id)).toEqual([keptId]);
+    expect(await readdir(path.join(t.dataDir, 'note-files'))).toContain(keptId);
+
+    await ageUnreferenced(keptId, 25 * 3600 * 1000);
+    await t.app.services.purgeNotes!();
+    expect(await t.db.db.select().from(noteFiles)).toEqual([]);
+    expect(await readdir(path.join(t.dataDir, 'note-files'))).not.toContain(keptId);
+
+    // A reservation whose client went away is gone after an hour, row, file and `.part`.
+    const dir = path.join(t.dataDir, 'note-files');
+    await mkdir(dir, { recursive: true });
+    const staleId = newId();
+    await writeFile(path.join(dir, staleId), 'stale');
+    await writeFile(path.join(dir, `${staleId}.part`), 'partial');
+    await t.db.db.insert(noteFiles).values({
+      id: staleId,
+      noteId,
+      ownerUserId: alice.id,
+      filename: 'stale',
+      contentType: 'application/octet-stream',
+      size: 5,
+      sha256: 'x',
+      status: 'uploading',
+      createdAt: new Date(Date.now() - 2 * 3600 * 1000),
+    });
+    await t.app.services.purgeNotes!();
+    expect(await readdir(dir)).not.toContain(staleId);
+    expect(await readdir(dir)).not.toContain(`${staleId}.part`);
+
+    // A note trashed for over 30 days, with its file and links, is purged; the link rows go too.
     const trashed = await createNote(alice, { title: 'Old trash' });
     const trashedId = trashed.note.id as string;
     const doomed = await upload(alice, trashedId, PNG, { filename: 'doomed.png' });
     const doomedId = doomed.body.id as string;
     await alice.http.patch(`/api/v1/notes/${trashedId}`, {
-      body: `![doomed](/api/v1/note-files/${doomedId})`,
+      body: [
+        `![doomed](/api/v1/note-files/${doomedId})`,
+        `[target](bokydo:note/${target.note.id as string})`,
+        `[task](bokydo:task/${task})`,
+      ].join('\n'),
     });
+    expect(await t.db.db.select().from(noteLinks)).toHaveLength(1);
+    expect(await t.db.db.select().from(noteTaskLinks)).toHaveLength(1);
     await alice.http.patch(`/api/v1/notes/${trashedId}`, { trashed: true });
     await t.db.db
       .update(notes)
@@ -617,11 +736,11 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
       .where(eq(notes.id, trashedId));
     await t.app.services.purgeNotes!();
     expect((await t.db.db.select().from(notes)).map((row) => row.id)).not.toContain(trashedId);
-    expect(await readdir(path.join(t.dataDir, 'note-files'))).not.toContain(doomedId);
+    expect(await t.db.db.select().from(noteLinks)).toEqual([]);
+    expect(await t.db.db.select().from(noteTaskLinks)).toEqual([]);
+    expect(await readdir(dir)).not.toContain(doomedId);
 
     // Bytes with no row are removed once they are old enough; fresh ones are left alone.
-    const dir = path.join(t.dataDir, 'note-files');
-    await mkdir(dir, { recursive: true });
     const stray = newId();
     const fresh = newId();
     await writeFile(path.join(dir, stray), 'stray');
@@ -631,6 +750,30 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     await t.app.services.purgeNotes!();
     expect(await readdir(dir)).not.toContain(stray);
     expect(await readdir(dir)).toContain(fresh);
+  });
+
+  it('does not delete a note restored between the purge select and delete', async () => {
+    const alice = await person('alice');
+    const note = await createNote(alice, { title: 'Restored' });
+    const noteId = note.note.id as string;
+    await alice.http.patch(`/api/v1/notes/${noteId}`, { trashed: true });
+    await t.db.db
+      .update(notes)
+      .set({ trashedAt: new Date(Date.now() - 31 * 24 * 3600 * 1000) })
+      .where(eq(notes.id, noteId));
+    let selected = false;
+    const store = new AttachmentStore(t.dataDir, 'note-files');
+    await purgeNotes(t.db.db, store, new Date(), {
+      afterTrashSelected: async (tx) => {
+        selected = true;
+        // The restore won the race: the row no longer matches the delete's predicate.
+        await tx.update(notes).set({ trashedAt: null }).where(eq(notes.id, noteId));
+      },
+    });
+    expect(selected).toBe(true);
+    expect(
+      (await t.db.db.select().from(notes).where(eq(notes.id, noteId))).map((n) => n.id),
+    ).toEqual([noteId]);
   });
 
   it('refuses project-limited tokens and enforces the notes scopes', async () => {
@@ -671,6 +814,247 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     ).toBe(201);
   });
 
+  it('holds back linked tasks and full notes from tokens without the read scopes', async () => {
+    const alice = await person('alice');
+    const project = newId();
+    const task = newId();
+    await alice.sync.ok(
+      cmd('project_add', { id: project, name: 'P' }),
+      cmd('task_add', { id: task, projectId: project, content: 'Task' }),
+    );
+    const note = await createNote(alice, {
+      title: 'Linked',
+      body: `[task](bokydo:task/${task})`,
+    });
+    const noteId = note.note.id as string;
+
+    const withTasks = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'tasks',
+      scopes: ['notes:read', 'notes:write', 'tasks:read'],
+      expiresInDays: 1,
+    });
+    expect(
+      (await bearer(withTasks.token).get(`/api/v1/notes/${noteId}`)).json().note.linkedTasks,
+    ).toMatchObject([{ id: task }]);
+
+    const notesOnly = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'notes',
+      scopes: ['notes:read'],
+      expiresInDays: 1,
+    });
+    expect(
+      (await bearer(notesOnly.token).get(`/api/v1/notes/${noteId}`)).json().note.linkedTasks,
+    ).toEqual([]);
+    // It can still read the note itself.
+    expect((await bearer(notesOnly.token).get(`/api/v1/notes/${noteId}`)).json().note.body).toBe(
+      `[task](bokydo:task/${task})`,
+    );
+
+    // A write-only token gets only the identity of a note it may not read in full.
+    const writeOnly = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'write',
+      scopes: ['notes:write'],
+      expiresInDays: 1,
+    });
+    const created = await bearer(writeOnly.token).post('/api/v1/notes', { title: 'Write only' });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toEqual({
+      note: { id: expect.any(String), updatedAt: expect.any(String) },
+    });
+    const createdId = created.json().note.id as string;
+    const patched = await bearer(writeOnly.token).patch(`/api/v1/notes/${createdId}`, {
+      title: 'Changed',
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toEqual({
+      note: { id: createdId, updatedAt: expect.any(String) },
+    });
+
+    // Linking a task tells the caller about task visibility, so a token must hold tasks:read.
+    const denied = await bearer(notesOnly.token).put(`/api/v1/notes/${noteId}/tasks/${task}`);
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toEqual({ error: 'insufficient_scope' });
+    expect(
+      (await bearer(withTasks.token).put(`/api/v1/notes/${noteId}/tasks/${task}`)).statusCode,
+    ).toBe(204);
+  });
+
+  it('allows notes-scoped tokens on the file routes and refuses project-limited ones', async () => {
+    const alice = await person('alice');
+    const project = newId();
+    await alice.sync.ok(cmd('project_add', { id: project, name: 'P' }));
+    const note = await createNote(alice, { title: 'Files' });
+    const noteId = note.note.id as string;
+    const notesToken = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'notes-files',
+      scopes: ['notes:read', 'notes:write'],
+      expiresInDays: 1,
+    });
+    const uploaded = await bearer(notesToken.token).request({
+      method: 'POST',
+      url: `/api/v1/notes/${noteId}/files`,
+      headers: { 'content-type': 'application/octet-stream', 'x-filename': 'a.png' },
+      payload: PNG,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const fileId = uploaded.json().id as string;
+    const fetched = await bearer(notesToken.token).get(`/api/v1/note-files/${fileId}`);
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.rawPayload.equals(PNG)).toBe(true);
+
+    const limited = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'limited-files',
+      scopes: ['notes:read', 'notes:write'],
+      expiresInDays: 1,
+      projectIds: [project],
+    });
+    const limitedUpload = await bearer(limited.token).request({
+      method: 'POST',
+      url: `/api/v1/notes/${noteId}/files`,
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: PNG,
+    });
+    expect(limitedUpload.statusCode).toBe(403);
+    expect(limitedUpload.json()).toEqual({ error: 'project_limited_token' });
+    const limitedDownload = await bearer(limited.token).get(`/api/v1/note-files/${fileId}`);
+    expect(limitedDownload.statusCode).toBe(403);
+    expect(limitedDownload.json()).toEqual({ error: 'project_limited_token' });
+  });
+
+  it('claims only the note’s own files, including the 600th reference', async () => {
+    const alice = await person('alice');
+    const bob = await person('bob');
+    const note = await createNote(alice, { title: 'Many files' });
+    const other = await createNote(alice, { title: 'Other note' });
+    const bobNote = await createNote(bob, { title: 'Bob note' });
+    const noteId = note.note.id as string;
+    const ids = Array.from({ length: 600 }, () => newId());
+    const fileRow = (id: string, noteId: string, ownerUserId: string) => ({
+      id,
+      noteId,
+      ownerUserId,
+      filename: 'f',
+      contentType: 'application/octet-stream',
+      size: 0,
+      sha256: 'x',
+      status: 'ready' as const,
+    });
+    await t.db.db.insert(noteFiles).values(ids.map((id) => fileRow(id, noteId, alice.id)));
+    const foreign = newId();
+    const foreignOwner = newId();
+    await t.db.db
+      .insert(noteFiles)
+      .values([
+        fileRow(foreign, other.note.id as string, alice.id),
+        fileRow(foreignOwner, bobNote.note.id as string, bob.id),
+      ]);
+
+    const body = [
+      ...ids.map((id) => `![f](/api/v1/note-files/${id})`),
+      `![x](/api/v1/note-files/${foreign})`,
+      `![y](/api/v1/note-files/${foreignOwner})`,
+    ].join('\n');
+    expect((await alice.http.patch(`/api/v1/notes/${noteId}`, { body })).statusCode).toBe(200);
+
+    const mine = await t.db.db.select().from(noteFiles).where(eq(noteFiles.noteId, noteId));
+    expect(mine).toHaveLength(600);
+    expect(mine.every((row) => row.referenced && row.unreferencedAt === null)).toBe(true);
+    const theirs = await t.db.db
+      .select()
+      .from(noteFiles)
+      .where(eq(noteFiles.noteId, other.note.id as string));
+    expect(theirs.map((row) => ({ referenced: row.referenced }))).toEqual([{ referenced: false }]);
+    const bobs = await t.db.db
+      .select()
+      .from(noteFiles)
+      .where(eq(noteFiles.noteId, bobNote.note.id as string));
+    expect(bobs.map((row) => row.referenced)).toEqual([false]);
+  });
+
+  it('rejects more than 1000 distinct note and task links in one body', async () => {
+    const alice = await person('alice');
+    const note = await createNote(alice, { title: 'Links' });
+    const noteId = note.note.id as string;
+    const write = (count: number) =>
+      Array.from(
+        { length: count },
+        (_, i) => `[n](${(i % 2 ? 'bokydo:note/' : 'bokydo:task/') + newId()})`,
+      ).join('\n');
+    const atLimit = write(1000);
+    expect((await alice.http.patch(`/api/v1/notes/${noteId}`, { body: atLimit })).statusCode).toBe(
+      200,
+    );
+    const tooMany = await alice.http.patch(`/api/v1/notes/${noteId}`, { body: write(1001) });
+    expect(tooMany.statusCode).toBe(400);
+    expect(tooMany.json()).toEqual({ error: 'too_many_links' });
+    // The rejected save rolled back: the body still holds the previous links.
+    expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.body).toBe(atLimit);
+
+    const created = await alice.http.post('/api/v1/notes', {
+      title: 'Too many',
+      body: write(1001),
+    });
+    expect(created.statusCode).toBe(400);
+    expect(created.json()).toEqual({ error: 'too_many_links' });
+  });
+
+  it('pages notes with equal updated_at without duplicates or misses', async () => {
+    const alice = await person('alice');
+    const created: string[] = [];
+    for (let i = 0; i < 5; i++)
+      created.push((await createNote(alice, { title: `Note ${i}` })).note.id as string);
+    await t.db.db
+      .update(notes)
+      .set({ updatedAt: new Date('2026-06-01T12:00:00.000Z') })
+      .where(eq(notes.ownerUserId, alice.id));
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 5; page++) {
+      const listed = await listNotes(
+        alice,
+        `?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      );
+      expect(listed.status).toBe(200);
+      expect(listed.notes.length).toBeLessThanOrEqual(2);
+      seen.push(...listed.notes.map((note) => note.id as string));
+      cursor = listed.nextCursor;
+      if (!cursor) break;
+    }
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen).size).toBe(5);
+    expect(seen.sort()).toEqual(created.sort());
+  });
+
+  it('hides soft-deleted tasks from note links in both directions', async () => {
+    const alice = await person('alice');
+    const project = newId();
+    const task = newId();
+    await alice.sync.ok(
+      cmd('project_add', { id: project, name: 'P' }),
+      cmd('task_add', { id: task, projectId: project, content: 'Doomed' }),
+    );
+    const note = await createNote(alice, {
+      title: 'Linked',
+      body: `[task](bokydo:task/${task})`,
+    });
+    const noteId = note.note.id as string;
+    expect(note.note.linkedTasks).toMatchObject([{ id: task }]);
+    expect((await alice.http.get(`/api/v1/tasks/${task}/notes`)).json().notes).toMatchObject([
+      { id: noteId },
+    ]);
+
+    await alice.sync.ok(cmd('task_delete', { id: task }));
+    expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.linkedTasks).toEqual([]);
+    expect((await alice.http.get(`/api/v1/tasks/${task}/notes`)).statusCode).toBe(404);
+    // Saving the same body again drops the now-invisible body link.
+    expect(
+      (await alice.http.patch(`/api/v1/notes/${noteId}`, { body: `[task](bokydo:task/${task})` }))
+        .statusCode,
+    ).toBe(200);
+    expect(await t.db.db.select().from(noteTaskLinks)).toEqual([]);
+  });
+
   it('accepts bodies at the 512 KiB limit, including JSON escaping and non-ASCII', async () => {
     const alice = await person('alice');
     const ascii = 'a'.repeat(512 * 1024);
@@ -687,6 +1071,16 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     const withQuotes = await createNote(alice, { title: 'Quotes', body: escaped });
     expect(withQuotes.status).toBe(201);
     expect(withQuotes.note.body).toBe(escaped);
+
+    // 512 KiB of control characters is ~3 MiB of JSON escapes: the route's own 6 MiB limit
+    // lets it through to the decoded UTF-8 check.
+    const controls = '\u0001'.repeat(512 * 1024);
+    const controlBody = await createNote(alice, { title: 'Controls', body: controls });
+    expect(controlBody.status).toBe(201);
+    expect(controlBody.note.body).toBe(controls);
+    expect(
+      (await createNote(alice, { title: 'Controls+', body: `${controls}\u0001` })).status,
+    ).toBe(400);
 
     expect((await createNote(alice, { title: 't'.repeat(201) })).status).toBe(400);
     expect((await createNote(alice, { title: 't'.repeat(200) })).status).toBe(201);

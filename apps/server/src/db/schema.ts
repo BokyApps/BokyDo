@@ -7,6 +7,7 @@ import {
   check,
   customType,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -14,6 +15,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
   type AnyPgColumn,
@@ -1072,7 +1074,10 @@ export const notes = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
-    index('notes_owner_updated_idx').on(t.ownerUserId, desc(t.updatedAt)),
+    // Exactly the list order (pinned first, then newest first with the id as the tie-breaker).
+    index('notes_owner_list_idx').on(t.ownerUserId, desc(t.pinned), desc(t.updatedAt), desc(t.id)),
+    // Lets `note_files` reference the pair, so a file can never point at another owner's note.
+    unique('notes_id_owner_unique').on(t.id, t.ownerUserId),
     index('notes_tags_idx').using('gin', t.tags),
     index('notes_search_idx').using('gin', t.search),
     check('notes_title_check', sql`char_length(${t.title}) <= 200`),
@@ -1123,16 +1128,16 @@ export const noteTaskLinks = pgTable(
 
 /**
  * Files attached to a note (`<dataDir>/note-files`). They follow the attachment rules: streamed
- * to disk under a UUID, type sniffed from the bytes, owner-only. An upload is pending
- * (`referenced` false) until a saved body names it, and pending files are purged after 24 h.
+ * to disk under a UUID, type sniffed from the bytes, owner-only. An upload is `uploading` while
+ * it streams (its reserved size counts against the quota) and becomes `ready` on success. A
+ * ready upload is pending (`referenced` false) until a saved body names it; `unreferenced_at`
+ * records when that happened, so the 24 h purge runs from the removal, not the upload.
  */
 export const noteFiles = pgTable(
   'note_files',
   {
     id: uuid('id').primaryKey(),
-    noteId: uuid('note_id')
-      .notNull()
-      .references(() => notes.id, { onDelete: 'cascade' }),
+    noteId: uuid('note_id').notNull(),
     ownerUserId: uuid('owner_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -1140,15 +1145,34 @@ export const noteFiles = pgTable(
     contentType: text('content_type').notNull(),
     size: integer('size').notNull(),
     sha256: text('sha256').notNull(),
+    status: text('status', { enum: ['uploading', 'ready'] })
+      .notNull()
+      .default('ready'),
     referenced: boolean('referenced').notNull().default(false),
+    /**
+     * When the file last stopped being referenced (or, for a new upload, when it was inserted).
+     * Null while referenced. The pending purge measures its 24 h from here.
+     */
+    unreferencedAt: timestamp('unreferenced_at', { withTimezone: true }).defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    // The pair, not just the id: a file can only ever belong to a note of its own owner, even
+    // when a client re-creates a deleted note id.
+    foreignKey({
+      name: 'note_files_note_owner_fk',
+      columns: [t.noteId, t.ownerUserId],
+      foreignColumns: [notes.id, notes.ownerUserId],
+    }).onDelete('cascade'),
     index('note_files_note_idx').on(t.noteId),
     index('note_files_owner_idx').on(t.ownerUserId),
     index('note_files_pending_idx')
-      .on(t.createdAt)
+      .on(t.unreferencedAt)
       .where(sql`not ${t.referenced}`),
+    index('note_files_uploading_idx')
+      .on(t.createdAt)
+      .where(sql`${t.status} = 'uploading'`),
+    check('note_files_status_check', sql`${t.status} in ('uploading', 'ready')`),
     check('note_files_size_check', sql`${t.size} >= 0`),
   ],
 );
