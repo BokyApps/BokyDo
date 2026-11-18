@@ -1,15 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { parseNoteBody } from './ast.js';
 import type { LoadedImage } from './images.js';
+import { ExportDeadline, ExportTimeoutError } from './limits.js';
 import { buildPdf, pdfSafe } from './pdf.js';
-import { collect, PNG_1X1 } from './test-support.js';
+import { PNG_1X1, PNG_RGB, collect } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
+const ALPHA_ID = '66666666-6666-4666-8666-666666666666';
 const SALT = 'A'.repeat(22);
 const IV = 'B'.repeat(16);
 
 const images = new Map<string, LoadedImage>([
-  [PNG_ID, { id: PNG_ID, filename: 'shot.png', type: 'png', width: 1, height: 1, bytes: PNG_1X1 }],
+  [PNG_ID, { id: PNG_ID, filename: 'shot.png', type: 'png', width: 1, height: 1, bytes: PNG_RGB }],
+  // An alpha PNG: pdfkit would decode it through png-js, so the renderer must refuse it.
+  [
+    ALPHA_ID,
+    { id: ALPHA_ID, filename: 'alpha.png', type: 'png', width: 1, height: 1, bytes: PNG_1X1 },
+  ],
+]);
+
+const fileNames = new Map([
+  [PNG_ID, 'shot.png'],
+  [ALPHA_ID, 'alpha.png'],
 ]);
 
 const BODY = [
@@ -113,12 +125,7 @@ function pdfText(pdf: Buffer): string {
 async function render(body = BODY, title = 'Quarterly plan') {
   const doc = parseNoteBody(body);
   const pdf = await collect(
-    buildPdf(
-      title,
-      doc.blocks,
-      { images, fileNames: new Map([[PNG_ID, 'shot.png']]) },
-      { compress: false },
-    ),
+    buildPdf(title, doc.blocks, { images, fileNames }, { compress: false }),
   );
   return { pdf, text: pdfText(pdf) };
 }
@@ -150,11 +157,35 @@ describe('note export PDF', () => {
     expect(text).toContain('value');
   });
 
-  it('creates a link annotation and an embed link', async () => {
-    const { pdf, text } = await render();
+  it('creates one link annotation per contiguous link run, not per word', async () => {
+    const { pdf } = await render(
+      'See [the whole annual report page](https://example.com/page) for details.\n',
+    );
     const raw = pdf.toString('latin1');
     expect(raw).toContain('/URI (https://example.com/page)');
-    expect(raw).toContain('/URI (https://www.youtube.com/watch?v=dQw4w9WgXcQ)');
+    const annotations = raw.match(/\/Subtype \/Link/g) ?? [];
+    expect(annotations).toHaveLength(1);
+  });
+
+  it('refuses a link annotation explosion before the stream is closed', () => {
+    const body = Array.from(
+      { length: 5 },
+      (_, index) => `[link ${index}](https://example.com/${index}) and more text.`,
+    ).join('\n\n');
+    const doc = parseNoteBody(body);
+    expect(() =>
+      buildPdf(
+        'Links',
+        doc.blocks,
+        { images: new Map(), fileNames: new Map() },
+        { compress: false, maxLinkAnnotations: 2 },
+      ),
+    ).toThrow(/link annotations/);
+  });
+
+  it('creates an embed link and shows its label', async () => {
+    const { pdf, text } = await render();
+    expect(pdf.toString('latin1')).toContain('/URI (https://www.youtube.com/watch?v=dQw4w9WgXcQ)');
     expect(text).toContain('Watch this');
   });
 
@@ -174,12 +205,48 @@ describe('note export PDF', () => {
     expect(content.includes('\nf\n')).toBe(true);
   });
 
-  it('embeds a PNG note file and names the ones it cannot embed', async () => {
+  it('embeds a validated RGB PNG and names the ones it cannot embed', async () => {
     const { pdf, text } = await render();
     const raw = pdf.toString('latin1');
     expect(raw).toContain('/Subtype /Image');
+    // A PNG with alpha must never reach png-js: pdfkit would decode it in a zlib callback.
+    expect(raw).toContain('/DeviceRGB');
     expect(text).toContain('[image:');
     expect(text).toContain('missing');
+  });
+
+  it('renders an alpha PNG as text even when a caller hands it over unvalidated', async () => {
+    const body = `![alpha](/api/v1/note-files/${ALPHA_ID}?inline=1)\n`;
+    const { pdf, text } = await render(body);
+    expect(pdf.toString('latin1')).not.toContain('/Subtype /Image');
+    expect(text).toContain('[image: alpha]');
+  });
+
+  it('renders a note-file link as the file’s name, not its label', async () => {
+    const body = `[the label](/api/v1/note-files/${PNG_ID})\n`;
+    const { text } = await render(body);
+    expect(text).toContain('shot.png');
+    expect(text).not.toContain('the label');
+  });
+
+  it('renders an image inside a paragraph as text', async () => {
+    const body = `before ![inline shot](/api/v1/note-files/${PNG_ID}?inline=1) after\n`;
+    const { text } = await render(body);
+    expect(text).toContain('[image: inline shot]');
+    expect(text).toContain('before');
+    expect(text).toContain('after');
+  });
+
+  it('wraps cell text into content-sized columns and breaks table rows across pages', async () => {
+    const cell = 'a long cell that has to wrap several times inside its column';
+    const rows = Array.from({ length: 60 }, (_, index) => `| row ${index} | ${cell} |`);
+    const body = ['| first | second |', '| ----- | ------ |', ...rows].join('\n');
+    const { pdf, text } = await render(body, 'Table');
+    const pages = pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? [];
+    expect(pages.length).toBeGreaterThan(1);
+    // The header row is repeated on the later pages.
+    expect(text.split('second').length - 1).toBeGreaterThan(1);
+    expect(text).toContain('row 59');
   });
 
   it('replaces characters the built-in fonts cannot draw', async () => {
@@ -199,5 +266,17 @@ describe('note export PDF', () => {
     const { pdf } = await render(body, 'Long');
     const pages = pdf.toString('latin1').match(/\/Type \/Page/g) ?? [];
     expect(pages.length).toBeGreaterThan(1);
+  });
+
+  it('abandons a render that has run past its deadline', () => {
+    const doc = parseNoteBody(BODY);
+    expect(() =>
+      buildPdf(
+        'Late',
+        doc.blocks,
+        { images, fileNames },
+        { compress: false, deadline: new ExportDeadline(0) },
+      ),
+    ).toThrow(ExportTimeoutError);
   });
 });

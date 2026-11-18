@@ -1,5 +1,6 @@
 import { CENSOR_PLACEHOLDER, parseEmbedUrl, redactCensored, safeHref } from '@bokydo/shared';
 import MarkdownIt, { type Token } from 'markdown-it';
+import { TooLargeError } from './limits.js';
 
 /**
  * One small document model shared by the three note exporters. The stored note body is
@@ -122,10 +123,9 @@ export type Block =
 
 export interface NoteDocument {
   blocks: Block[];
+  /** markdown-it tokens the body produced, for the export limit; not used by the renderers. */
+  tokenCount: number;
 }
-
-/** Refuse to render past this many blocks: it bounds the CPU a hostile body can cost. */
-export const MAX_BLOCKS = 50_000;
 
 const parser = new MarkdownIt({ html: false, linkify: false, breaks: false });
 
@@ -494,14 +494,22 @@ function parseTable(walker: Walker): TableBlock {
   return { type: 'table', align, header, rows };
 }
 
-/** Parse a stored note body into the shared document model. Censored spans become `█████`. */
-export function parseNoteBody(body: string): NoteDocument {
+/**
+ * Parse a stored note body into the shared document model. Censored spans become `█████`.
+ *
+ * The token count is checked the moment `md.parse` returns, before the walker builds a single
+ * block: markdown-it is linear, but a 512 KiB body of one-character list items still yields
+ * hundreds of thousands of tokens, and the cap has to bite before the model does.
+ */
+export function parseNoteBody(body: string, opts: { maxTokens?: number } = {}): NoteDocument {
   const redacted = redactCensored(body);
   const tokens = parser.parse(redacted, {});
-  return { blocks: parseBlocks(new Walker(tokens)) };
+  if (opts.maxTokens !== undefined && tokens.length > opts.maxTokens)
+    throw new TooLargeError(`note body has more than ${opts.maxTokens} Markdown tokens`);
+  return { blocks: parseBlocks(new Walker(tokens)), tokenCount: tokens.length };
 }
 
-/** Every block, list item and table row, recursively — what `MAX_BLOCKS` is measured against. */
+/** Every block, list item and table row, recursively — what `maxBlocks` is measured against. */
 export function countBlocks(blocks: readonly Block[]): number {
   let total = 0;
   for (const block of blocks) {

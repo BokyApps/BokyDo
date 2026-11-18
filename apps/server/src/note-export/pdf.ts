@@ -1,28 +1,57 @@
 import type { Readable } from 'node:stream';
 import PdfDocument from 'pdfkit';
 import type { Block, ListBlock, Run } from './ast.js';
+import { validateImage } from './image-info.js';
 import type { LoadedImage } from './images.js';
+import { TooLargeError, type ExportDeadline } from './limits.js';
 
 /**
  * PDF export on the built-in PDF fonts (Helvetica/Courier), A4 with 2 cm margins. Those fonts
  * are WinAnsi only, so text outside that range is written as `?` (see docs/note-export.md);
  * censored spans are drawn as a solid bar, task checkboxes as drawn boxes and the play marker
  * of an embed as `»`, so no glyph is invented.
+ *
+ * Images: only the PNG/JPEG classes validated in `image-info.ts` reach this module. An image is
+ * parsed once per file and then reused (`PDFKit` takes a prepared image object), and a file that
+ * `pdfkit` still refuses falls back to its `[image: name]` text rather than losing the document.
  */
 
 export interface PdfContext {
   images: ReadonlyMap<string, LoadedImage>;
   fileNames: ReadonlyMap<string, string>;
+  /** One opened image per note file, so a file placed twice is parsed and embedded once. */
+  prepared?: Map<string, PreparedImage>;
+}
+
+/**
+ * pdfkit's own opened-image object. `@types/pdfkit` describes `image()` as taking a path or
+ * bytes only, but at runtime `image()` uses `src` as the image when it has `width` and `height`
+ * (`if (src.width && src.height) image = src`), which is how one file is embedded only once.
+ */
+export interface PreparedImage {
+  width: number;
+  height: number;
+  label: string;
+  obj: unknown;
+  embed(doc: PdfDoc): void;
+}
+
+interface PdfDocRuntime extends PdfDoc {
+  openImage(src: Buffer): PreparedImage;
 }
 
 export interface PdfRenderOptions {
   /** Tests read the content streams directly, so they turn compression off. */
   compress?: boolean;
+  /** Abandon the render between blocks once the export has taken too long. */
+  deadline?: ExportDeadline;
+  /** Annotations in one PDF, after contiguous link runs are coalesced. */
+  maxLinkAnnotations?: number;
 }
 
 type PdfDoc = PDFKit.PDFDocument;
-type PdfDocConstructor = new (options?: PDFKit.PDFDocumentOptions) => PdfDoc;
-const createPdfDocument = PdfDocument as unknown as PdfDocConstructor;
+type DocConstructor = new (options?: PDFKit.PDFDocumentOptions) => PdfDoc;
+const createPdfDocument = PdfDocument as unknown as DocConstructor;
 
 const BODY_SIZE = 11;
 const CODE_SIZE = 9;
@@ -30,6 +59,9 @@ const HEADING_SIZES = [22, 18, 15.5, 13.5, 12, 11] as const;
 const LINK_COLOR = '#1A56DB';
 const TEXT_COLOR = '#000000';
 const LINE_FACTOR = 1.4;
+const TABLE_PAD = 4;
+const TABLE_MIN_COLUMN = 24;
+const DEFAULT_MAX_LINK_ANNOTATIONS = 20_000;
 
 /**
  * Code points in WinAnsiEncoding (cp1252): ASCII, Latin-1 and the characters cp1252 puts in
@@ -115,12 +147,18 @@ class PdfRenderer {
   private y: number;
   private colourValue = TEXT_COLOR;
   private readonly spaceWidths = new Map<string, number>();
+  private readonly prepared: Map<string, PreparedImage>;
+  private linkAnnotations = 0;
+  private readonly maxLinkAnnotations: number;
 
   constructor(
     private readonly doc: PdfDoc,
     private readonly ctx: PdfContext,
+    private readonly opts: PdfRenderOptions = {},
   ) {
     this.y = doc.page.margins.top;
+    this.prepared = ctx.prepared ?? new Map();
+    this.maxLinkAnnotations = opts.maxLinkAnnotations ?? DEFAULT_MAX_LINK_ANNOTATIONS;
   }
 
   render(title: string, blocks: readonly Block[]): void {
@@ -184,6 +222,10 @@ class PdfRenderer {
 
   private ensure(height: number): void {
     if (this.y + height <= this.bottom) return;
+    this.addPage();
+  }
+
+  private addPage(): void {
     this.doc.addPage();
     this.y = this.top;
   }
@@ -217,7 +259,9 @@ class PdfRenderer {
           ? courier(opts.bold || run.bold === true, opts.italic || run.italic === true)
           : helix(opts.bold || run.bold === true, opts.italic || run.italic === true);
       const href = run.href ?? null;
-      for (const part of pdfSafe(run.text).split(/(\s+)/)) {
+      // A note-file link has no destination outside the app, so it shows the file's name.
+      const text = run.fileId ? (this.ctx.fileNames.get(run.fileId) ?? run.text) : run.text;
+      for (const part of pdfSafe(text).split(/(\s+)/)) {
         if (part === '') continue;
         if (/^\s+$/.test(part)) push({ kind: 'space', width: this.space(font, opts.size) });
         else push(this.textAtom(part, font, opts.size, href, run.strike === true));
@@ -294,14 +338,32 @@ class PdfRenderer {
     return chunks;
   }
 
-  private draw(atoms: readonly Atom[], x: number, y: number): number {
+  /**
+   * Draw one line of atoms at `x`, `y`. Link annotations are coalesced: a contiguous run of
+   * atoms with the same destination (spaces included) becomes one annotation, not one per word.
+   */
+  private draw(atoms: readonly Atom[], x: number, y: number, lineHeight: number): number {
     let cursor = x;
+    let run: { href: string; x: number } | null = null;
+    const flushLink = (end: number) => {
+      if (!run) return;
+      if (this.linkAnnotations >= this.maxLinkAnnotations)
+        throw new TooLargeError(
+          `PDF would need more than ${this.maxLinkAnnotations} link annotations`,
+        );
+      this.linkAnnotations++;
+      this.doc.link(run.x, y, Math.max(1, end - run.x), lineHeight, run.href);
+      run = null;
+    };
     for (const atom of atoms) {
       if (atom.kind === 'space') {
         cursor += atom.width;
         continue;
       }
       if (atom.kind === 'break') continue;
+      const href = atom.kind === 'text' ? atom.href : null;
+      if (run && run.href !== href) flushLink(cursor);
+      if (!run && href) run = { href, x: cursor };
       if (atom.kind === 'censor') {
         this.fillRect(cursor, y + atom.size * 0.15, atom.width, atom.size * 0.72, TEXT_COLOR);
         cursor += atom.width;
@@ -323,11 +385,12 @@ class PdfRenderer {
       this.doc.font(atom.font).fontSize(atom.size);
       this.doc.text(atom.text, cursor, y, {
         lineBreak: false,
-        ...(atom.href ? { link: atom.href, underline: true } : {}),
+        ...(atom.href ? { underline: true } : {}),
         ...(atom.strike ? { strike: true } : {}),
       });
       cursor += atom.width;
     }
+    flushLink(cursor);
     this.colour(TEXT_COLOR);
     return cursor;
   }
@@ -348,8 +411,8 @@ class PdfRenderer {
     const lineHeight = Math.round(opts.size * LINE_FACTOR);
     lines.forEach((line, index) => {
       this.ensure(lineHeight);
-      if (index === 0 && bullet) this.draw(bullet.atoms, this.left + indent, this.y);
-      this.draw(line, this.left + indent + markerWidth, this.y);
+      if (index === 0 && bullet) this.draw(bullet.atoms, this.left + indent, this.y, lineHeight);
+      this.draw(line, this.left + indent + markerWidth, this.y, lineHeight);
       this.y += lineHeight;
     });
     this.y += after;
@@ -363,6 +426,7 @@ class PdfRenderer {
   }
 
   private block(block: Block, opts: { indent: number; italic: boolean; listLevel: number }): void {
+    this.opts.deadline?.check();
     switch (block.type) {
       case 'heading': {
         if (this.y > this.top) this.y += 10;
@@ -434,7 +498,7 @@ class PdfRenderer {
       const chunks = atom.width > width ? this.splitWord(atom, width) : [atom];
       for (const chunk of chunks) {
         this.ensure(lineHeight);
-        this.draw([chunk], this.left + indent + 12, this.y);
+        this.draw([chunk], this.left + indent + 12, this.y, lineHeight);
         this.y += lineHeight;
       }
     }
@@ -466,7 +530,7 @@ class PdfRenderer {
         });
       } else {
         this.ensure(BODY_SIZE * LINE_FACTOR);
-        this.draw(markerAtoms, this.left + indent, this.y);
+        this.draw(markerAtoms, this.left + indent, this.y, Math.round(BODY_SIZE * LINE_FACTOR));
         this.y += BODY_SIZE * LINE_FACTOR;
         if (first) rest.unshift(first);
       }
@@ -476,53 +540,162 @@ class PdfRenderer {
     this.y += 4;
   }
 
+  /** Atoms for one table cell, wrapped to its column. */
+  private cellLines(runs: readonly Run[], width: number, head: boolean): Atom[][] {
+    return this.wrap(
+      this.atomize(runs, { size: BODY_SIZE, bold: head, italic: false }),
+      Math.max(12, width - TABLE_PAD * 2),
+    );
+  }
+
+  /**
+   * Column widths from the content: each column asks for its natural width, clamped between a
+   * minimum (a column of `1`s still needs room for `1`) and 60 % of the text column (one long
+   * cell must not squeeze every other column to nothing), then the table is scaled to fill the
+   * text column.
+   */
+  private tableWidths(block: Extract<Block, { type: 'table' }>, columns: number): number[] {
+    const maximum = Math.max(TABLE_MIN_COLUMN, this.width * 0.6);
+    const natural = Array.from({ length: columns }, () => TABLE_MIN_COLUMN);
+    const measureRow = (cells: readonly Run[][], head: boolean) => {
+      for (let index = 0; index < columns; index++) {
+        const atoms = this.atomize(cells[index] ?? [], {
+          size: BODY_SIZE,
+          bold: head,
+          italic: false,
+        });
+        const used = atoms.reduce((sum, atom) => sum + atomWidth(atom), 0);
+        const width = Math.min(maximum, used + TABLE_PAD * 2);
+        natural[index] = Math.max(natural[index] ?? TABLE_MIN_COLUMN, width);
+      }
+    };
+    measureRow(block.header, true);
+    for (const row of block.rows) measureRow(row, false);
+    const total = natural.reduce((sum, value) => sum + value, 0) || 1;
+    const scale = this.width / total;
+    const widths = natural.map((value) => Math.max(TABLE_MIN_COLUMN, Math.floor(value * scale)));
+    const used = widths.reduce((sum, value) => sum + value, 0);
+    // Rounding leaves a pixel or two over; give it to the widest column so the table is square.
+    let widest = 0;
+    for (let index = 1; index < columns; index++)
+      if ((widths[index] ?? 0) > (widths[widest] ?? 0)) widest = index;
+    widths[widest] = Math.max(1, (widths[widest] ?? 0) + (this.width - used));
+    return widths;
+  }
+
+  /** One row segment (a full row, or the part of one that fits) with its box and grid lines. */
+  private tableSegment(
+    cells: readonly Atom[][][],
+    widths: readonly number[],
+    from: number,
+    count: number,
+    head: boolean,
+    lineHeight: number,
+  ): void {
+    const height = count * lineHeight + TABLE_PAD * 2;
+    if (head) this.fillRect(this.left, this.y, this.width, height, '#F2F2F2');
+    let x = this.left;
+    for (let index = 0; index < widths.length; index++) {
+      const lines = (cells[index] ?? []).slice(from, from + count);
+      lines.forEach((line, offset) =>
+        this.draw(line, x + TABLE_PAD, this.y + TABLE_PAD + offset * lineHeight, lineHeight),
+      );
+      x += widths[index] ?? 0;
+    }
+    this.doc.lineWidth(0.5).strokeColor('#B0B0B0');
+    this.doc.rect(this.left, this.y, this.width, height).stroke();
+    let gridX = this.left;
+    for (let index = 0; index < widths.length - 1; index++) {
+      gridX += widths[index] ?? 0;
+      this.doc
+        .moveTo(gridX, this.y)
+        .lineTo(gridX, this.y + height)
+        .stroke();
+    }
+    this.colourValue = TEXT_COLOR;
+    this.y += height;
+  }
+
+  /**
+   * A table: wrapped cells in content-sized columns, rows broken across pages (the box is drawn
+   * per segment) and the header row repeated at the top of every page the table continues on.
+   */
   private table(block: Extract<Block, { type: 'table' }>): void {
     const columns = Math.max(1, block.header.length, ...block.rows.map((row) => row.length));
-    const columnWidth = this.width / columns;
-    const cellWidth = Math.max(24, columnWidth - 8);
+    const widths = this.tableWidths(block, columns);
     const lineHeight = Math.round(BODY_SIZE * LINE_FACTOR);
-    [block.header, ...block.rows].forEach((row, rowIndex) => {
-      const head = rowIndex === 0;
-      const prepared = Array.from({ length: columns }, (_, index) =>
-        this.wrap(
-          this.atomize(row[index] ?? [], { size: BODY_SIZE, bold: head, italic: false }),
-          cellWidth,
-        ),
+    const prepare = (cells: readonly Run[][], head: boolean) =>
+      Array.from({ length: columns }, (_, index) =>
+        this.cellLines(cells[index] ?? [], widths[index] ?? this.width, head),
       );
-      const lines = Math.max(1, ...prepared.map((cell) => cell.length));
-      const height = lines * lineHeight + 8;
-      this.ensure(height);
-      if (head) this.fillRect(this.left, this.y, this.width, height, '#F2F2F2');
-      prepared.forEach((cell, index) => {
-        const x = this.left + index * columnWidth + 4;
-        cell.forEach((line, lineIndex) => this.draw(line, x, this.y + 4 + lineIndex * lineHeight));
-      });
-      this.doc.lineWidth(0.5).strokeColor('#B0B0B0');
-      this.doc.rect(this.left, this.y, this.width, height).stroke();
-      for (let index = 1; index < columns; index++) {
-        const x = this.left + index * columnWidth;
-        this.doc
-          .moveTo(x, this.y)
-          .lineTo(x, this.y + height)
-          .stroke();
+    const header = prepare(block.header, true);
+    const headerLines = Math.max(1, ...header.map((cell) => cell.length));
+    const repeatHeader = () => {
+      // A header taller than a page cannot be repeated without looping; skip it there.
+      if (headerLines * lineHeight + TABLE_PAD * 2 > this.bottom - this.top) return;
+      this.tableSegment(header, widths, 0, headerLines, true, lineHeight);
+    };
+    this.ensure(headerLines * lineHeight + TABLE_PAD * 2);
+    this.tableSegment(header, widths, 0, headerLines, true, lineHeight);
+    for (const row of block.rows) {
+      const cells = prepare(row, false);
+      const total = Math.max(1, ...cells.map((cell) => cell.length));
+      let from = 0;
+      let fresh = false;
+      while (from < total) {
+        let room = Math.floor((this.bottom - this.y - TABLE_PAD * 2) / lineHeight);
+        if (room < 1) {
+          if (fresh)
+            room = 1; // a page too short for one line: draw it rather than loop
+          else {
+            this.addPage();
+            repeatHeader();
+            fresh = true;
+            continue;
+          }
+        }
+        const take = Math.min(total - from, room);
+        this.tableSegment(cells, widths, from, take, false, lineHeight);
+        from += take;
+        fresh = false;
+        if (from < total) {
+          this.addPage();
+          repeatHeader();
+          fresh = true;
+        }
       }
-      this.colourValue = TEXT_COLOR;
-      this.y += height;
-    });
+      this.opts.deadline?.check();
+    }
     this.y += 8;
+  }
+
+  /** The file's prepared PDF image, opened once per file so repeated placements reuse it. */
+  private preparedImage(image: LoadedImage): PreparedImage | null {
+    const cached = this.prepared.get(image.id);
+    if (cached) return cached;
+    // Last line of defence: pdfkit MUST NOT see a PNG whose alpha/tRNS/interlaced class png-js
+    // inflates inside a zlib callback. The loader already filtered, but a caller could not have.
+    if (!validateImage(image.bytes, 'pdf')) return null;
+    // `openImage` is pdfkit's own parser entry point; the validated class never inflates here.
+    const opened = (this.doc as PdfDocRuntime).openImage(image.bytes);
+    this.prepared.set(image.id, opened);
+    return opened;
+  }
+
+  private imageText(alt: string, fileId: string | null, indent: number, italic: boolean): void {
+    const name = alt || (fileId ? this.ctx.fileNames.get(fileId) : null) || 'file';
+    this.writeInline(
+      [{ kind: 'text', text: `[image: ${name}]` }],
+      { size: BODY_SIZE, bold: false, italic },
+      indent,
+      6,
+    );
   }
 
   private image(block: Extract<Block, { type: 'image' }>, indent: number, italic: boolean): void {
     const image = block.fileId ? this.ctx.images.get(block.fileId) : undefined;
     if (!image) {
-      const name =
-        block.alt || (block.fileId ? this.ctx.fileNames.get(block.fileId) : null) || 'file';
-      this.writeInline(
-        [{ kind: 'text', text: `[image: ${name}]` }],
-        { size: BODY_SIZE, bold: false, italic },
-        indent,
-        6,
-      );
+      this.imageText(block.alt, block.fileId, indent, italic);
       return;
     }
     const maxWidth = Math.max(40, this.width - indent);
@@ -531,11 +704,24 @@ class PdfRenderer {
     const width = Math.max(1, image.width * ratio);
     const height = Math.max(1, image.height * ratio);
     this.ensure(height + 12);
-    this.doc.image(image.bytes, this.left + indent + (maxWidth - width) / 2, this.y, {
-      width,
-      height,
-    });
-    this.y += height + 12;
+    const prepared = this.preparedImage(image);
+    if (!prepared) {
+      this.imageText(block.alt, block.fileId, indent, italic);
+      return;
+    }
+    try {
+      this.doc.image(
+        prepared as unknown as Buffer,
+        this.left + indent + (maxWidth - width) / 2,
+        this.y,
+        { width, height },
+      );
+      this.y += height + 12;
+    } catch {
+      // pdfkit refused the bytes. A picture is not worth losing the export over, so the reader
+      // gets the name instead.
+      this.imageText(block.alt, block.fileId, indent, italic);
+    }
   }
 }
 
@@ -552,6 +738,14 @@ export function buildPdf(
     compress: opts.compress ?? true,
     info: { Title: title, Author: 'BokyDo', Creator: 'BokyDo' },
   });
-  new PdfRenderer(doc, ctx).render(title, blocks);
+  // A pdfkit error must never be an unhandled 'error' event on a stream nothing is reading yet;
+  // the route listens too and destroys the response.
+  doc.on('error', () => undefined);
+  try {
+    new PdfRenderer(doc, ctx, opts).render(title, blocks);
+  } catch (err) {
+    doc.destroy();
+    throw err;
+  }
   return doc as unknown as Readable;
 }

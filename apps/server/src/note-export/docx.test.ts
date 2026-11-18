@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseNoteBody } from './ast.js';
 import { buildDocx } from './docx.js';
 import type { LoadedImage } from './images.js';
+import { ExportDeadline, ExportTimeoutError } from './limits.js';
 import { collect, PNG_1X1, readZipEntries, zipText } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
@@ -138,5 +139,48 @@ describe('note export DOCX', () => {
     for (const entry of readZipEntries(buffer).values())
       expect(entry.toString('latin1')).not.toContain('censored');
     expect(xml).not.toContain(salt);
+  });
+
+  it('numbers an ordered list from its own start, not from 1', async () => {
+    const { buffer, xml } = await render('7. seven\n8. eight\n\nmiddle\n\n1. again\n');
+    const numbering = zipText(buffer, 'word/numbering.xml');
+    expect(numbering).toContain('<w:start w:val="7"/>');
+    // The concrete list Word sees carries the override too, which is what makes it print 7.
+    expect(numbering).toContain('<w:startOverride w:val="7"/>');
+    // Each list is its own numbering instance, so the second list starts again at 1.
+    const ids = [...xml.matchAll(/<w:numId w:val="(\d+)"\/>/g)].map((match) => match[1]);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('embeds a file placed twice once, and keeps inline images inline', async () => {
+    const body = [
+      `![one](/api/v1/note-files/${PNG_ID}?inline=1)`,
+      '',
+      `![two](/api/v1/note-files/${PNG_ID}?inline=1)`,
+      '',
+      `before ![inline](/api/v1/note-files/${PNG_ID}?inline=1) after`,
+    ].join('\n');
+    const { buffer, xml } = await render(body, 'Pictures');
+    const media = [...readZipEntries(buffer).keys()].filter((name) =>
+      name.startsWith('word/media/'),
+    );
+    expect(media).toHaveLength(1);
+    // `<w:drawing>` occurrences: two blocks and one run inside a paragraph.
+    expect((xml.match(/<w:drawing>/g) ?? []).length).toBe(3);
+  });
+
+  it('abandons a render that has run past its deadline', () => {
+    const doc = parseNoteBody(BODY);
+    expect(() =>
+      buildDocx(
+        'Late',
+        doc.blocks,
+        { images, fileNames: filenames },
+        {
+          deadline: new ExportDeadline(0),
+        },
+      ),
+    ).toThrow(ExportTimeoutError);
   });
 });
