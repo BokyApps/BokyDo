@@ -546,6 +546,9 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
     expect(await t.db.db.select().from(users).where(eq(users.id, alice.id))).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.fields.fileId).toBe(fileId);
+    // Only the error code is logged: the message would carry the absolute storage path.
+    expect(warnings[0]?.fields.code).toBe('EISDIR');
+    expect(JSON.stringify(warnings[0]?.fields)).not.toContain('/');
     expect(warnings[0]?.message).toContain('stray-file sweep');
     // The display filename is never logged, only the id.
     expect(JSON.stringify(warnings.map((warning) => warning.fields))).not.toContain('private.txt');

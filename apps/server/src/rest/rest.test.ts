@@ -210,7 +210,8 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
     const createNote = spec.body.paths['/api/v1/notes'].post;
     // A create answers with the full note or the write-only receipt, and a retry is 200 vs 409.
     expect(createNote.responses['201'].content['application/json'].schema.oneOf).toHaveLength(2);
-    expect(createNote.responses['200']).toBeDefined();
+    // The idempotent retry answers with the same body as the first create.
+    expect(createNote.responses['200'].content['application/json'].schema.oneOf).toHaveLength(2);
     expect(createNote.responses['409'].description).toContain('id_conflict');
     expect(createNote.responses['403'].description).toContain('project_limited_token');
     expect(

@@ -194,6 +194,21 @@ describe.skipIf(!TEST_DATABASE_URL)('MCP notes', () => {
     expect(created.isError).toBeFalsy();
     expect(text(created)).toContain('"id"');
     expect(text(created)).not.toContain('"body"');
+    // Whether a body is censored is itself something only a reader may learn.
+    const createdId = /"id":\s*"([0-9a-f-]{36})"/.exec(text(created))?.[1] ?? '';
+    expect(createdId).not.toBe('');
+    for (const [tool, args] of [
+      ['update_note', { id: createdId, body: 'changed' }],
+      ['trash_note', { id: createdId }],
+    ] as const) {
+      const refused = await call(writeOnly, tool, args);
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toContain('notes:read');
+    }
+    // Metadata changes stay open to a write-only token.
+    expect(
+      (await call(writeOnly, 'update_note', { id: createdId, title: 'Renamed' })).isError,
+    ).toBeFalsy();
 
     // `sync` covers every scope, notes included, and gets the full note back.
     const sync = await token(alice, ['sync']);

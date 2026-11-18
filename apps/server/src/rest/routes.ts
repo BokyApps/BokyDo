@@ -203,7 +203,11 @@ interface RestOperation {
   /** Media types a raw response may use; defaults to `application/octet-stream`. */
   responseMediaTypes?: string[];
   /** Extra statuses, or overriding descriptions for the ones every operation has. */
-  responses?: Record<string, { description: string }>;
+  /**
+   * Extra statuses, or overriding descriptions for the ones every operation has. `success: true`
+   * gives the status the same body as the main success response (an idempotent retry's 200).
+   */
+  responses?: Record<string, { description: string; success?: true }>;
 }
 
 const habitResource = z.object({
@@ -404,6 +408,7 @@ export const REST_OPERATIONS: RestOperation[] = [
       '200': {
         description:
           'The note already exists with this id and exactly this content: an idempotent retry',
+        success: true,
       },
       '409': {
         description:
@@ -487,8 +492,14 @@ export const REST_OPERATIONS: RestOperation[] = [
         description:
           '`uploads_disabled` when this instance disables uploads, `project_limited_token` for a project-limited token, or `insufficient_scope` without notes:write',
       },
-      '413': { description: '`too_large`: the file is over `attachments.maxSizeMb` or your quota' },
-      '429': { description: '`rate_limited` (120 uploads an hour) or `limit_exceeded` (quota)' },
+      '413': {
+        description:
+          '`too_large`: the file is over `attachments.maxSizeMb`, or over the bytes left in your note-file quota',
+      },
+      '429': {
+        description:
+          '`rate_limited` (120 uploads an hour), or `limit_exceeded` when you already have the maximum number of note files or no quota bytes left',
+      },
     },
   },
   {
@@ -508,6 +519,7 @@ export const REST_OPERATIONS: RestOperation[] = [
       'image/webp',
       'application/octet-stream',
     ],
+    responses: { '403': notesForbidden },
   },
 ];
 
@@ -598,7 +610,14 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
         '401': { description: 'Missing, malformed or unknown bearer token' },
         '403': { description: 'The token does not carry the required scope' },
         '404': { description: 'No such resource, or it is not visible to you' },
-        ...op.responses,
+        ...Object.fromEntries(
+          Object.entries(op.responses ?? {}).map(([status, { description, success }]) => [
+            status,
+            success && responseContent
+              ? { description, content: responseContent }
+              : { description },
+          ]),
+        ),
       },
     };
   }
