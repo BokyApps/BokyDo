@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -49,12 +49,16 @@ async function unzip(body: Buffer): Promise<Record<string, string>> {
   const dir = await mkdtemp(path.join(tmpdir(), 'bokydo-zip-'));
   const file = path.join(dir, 'x.zip');
   await writeFile(file, body);
-  const out = execFileSync('python3', [
-    '-c',
-    'import zipfile,json,sys\nz=zipfile.ZipFile(sys.argv[1])\nassert z.testzip() is None\nprint(json.dumps({n: z.read(n).decode("utf-8","replace") for n in z.namelist()}))',
-    file,
-  ]);
-  return JSON.parse(out.toString()) as Record<string, string>;
+  try {
+    const out = execFileSync('python3', [
+      '-c',
+      'import zipfile,json,sys\nz=zipfile.ZipFile(sys.argv[1])\nassert z.testzip() is None\nprint(json.dumps({n: z.read(n).decode("utf-8","replace") for n in z.namelist()}))',
+      file,
+    ]);
+    return JSON.parse(out.toString()) as Record<string, string>;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 beforeEach(async () => {
