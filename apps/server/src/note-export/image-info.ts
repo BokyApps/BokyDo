@@ -7,11 +7,12 @@ import type { Readable } from 'node:stream';
  * rendered as its name instead, so a crafted header cannot make the exporter allocate more than
  * the budget.
  *
- * A header is not enough for `pdfkit`: its `PNGImage` hands the IDAT stream to png-js, which
- * *decodes* alpha, `tRNS` and interlaced PNGs inside an asynchronous zlib callback. A throw in
- * that callback is not a stream error — it escapes to the process. So a PNG is embedded only
- * after a full structural walk with a CRC-32 check on every chunk, and only the class `pdfkit`
- * passes through verbatim (see `pngFitsPdfkit`). Everything else is exported as its name.
+ * A header is not enough for `pdfkit`: for some PNG classes its `PNGImage` hands the IDAT stream
+ * to png-js, which *decodes* it inside an asynchronous zlib callback — alpha (colour types 4 and
+ * 6), indexed colour with `tRNS`, and interlaced files. A throw in that callback is not a stream
+ * error: it escapes to the process. So a PNG is embedded only after a full structural walk with
+ * a CRC-32 check on every chunk, and only in the class `pdfkit` passes through verbatim (see
+ * `PngStructure.pdfSafe`). Everything else is exported as its name.
  */
 
 export type ImageType = 'png' | 'jpeg';
@@ -83,8 +84,10 @@ export interface PngStructure {
   /**
    * The class `pdfkit`'s PNGImage passes through untouched — no inflate, no pixel decode:
    * 8-bit greyscale or truecolour (colour types 0 and 2), not interlaced, no `tRNS`, no `PLTE`.
-   * Any other PNG makes png-js inflate the data inside a zlib callback, and `PLTE` would make
-   * `embed()` declare an `Indexed` colour space over pass-through truecolour data.
+   * Colour types 4 and 6, indexed colour with `tRNS` and interlaced files make png-js inflate the
+   * data inside a zlib callback; `tRNS` on grey/truecolour only adds a `/Mask` but is refused as
+   * well, and `PLTE` would make `embed()` declare an `Indexed` colour space over pass-through
+   * truecolour data.
    */
   pdfSafe: boolean;
 }

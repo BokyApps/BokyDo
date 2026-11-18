@@ -161,9 +161,12 @@ it. A bad CRC, a truncated chunk, a missing `IDAT`, trailing bytes and absurd di
 refused.
 
 That is necessary because `pdfkit`'s `PNGImage` does not pass every PNG through: for alpha
-(colour types 4 and 6), `tRNS` and interlaced files it calls png-js `decodePixels`, which inflates
-the data inside an asynchronous zlib callback — a throw there is not a stream error, it escapes to
-the process. For the class it does pass through (8-bit greyscale or truecolour, colour type 0 or 2,
+(colour types 4 and 6), indexed colour with `tRNS`, and interlaced files it calls png-js
+`decodePixels`, which inflates the data inside an asynchronous zlib callback — a throw there is
+not a stream error, it escapes to the process. A `tRNS` on greyscale/truecolour only adds a
+`/Mask` and `PLTE` only changes the declared colour space, but both are refused too: the first
+because the rule is a narrow allow-list, the second because the pass-through data would be
+labelled `Indexed`. For the class it does pass through (8-bit greyscale or truecolour, colour type 0 or 2,
 non-interlaced, no `tRNS`, no `PLTE`) `embed()` ends the XObject with `imgData` — the raw `IDAT`
 bytes — and a `DecodeParms` predictor; it never inflates the data (`node_modules/pdfkit/js/pdfkit.js`,
 `class PNGImage`, `embed()`: `if (isInterlaced && true) return this.decodeData(); … this.finalize()`,
