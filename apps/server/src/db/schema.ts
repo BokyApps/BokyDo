@@ -1,10 +1,11 @@
-import { sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import type { Due, WebhookDeliveryPayload, WebhookEventName } from '@bokydo/shared';
 import {
   bigint,
   bigserial,
   boolean,
   check,
+  customType,
   date,
   index,
   integer,
@@ -1025,4 +1026,129 @@ export const habitCheckIns = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.habitId, t.date] })],
+);
+
+// ---------------------------------------------------------------------------------------------
+// Notes (ADR 0025): personal Markdown notes with tags, links to notes and tasks, and files.
+// ---------------------------------------------------------------------------------------------
+
+/** Postgres full-text vectors are not a drizzle column type; a generated one needs only this. */
+const tsvector = customType<{ data: string }>({
+  dataType: () => 'tsvector',
+});
+
+/**
+ * A note is owned by one user, like a habit. `trashed_at` marks the third state (active,
+ * archived or trashed); `search` is generated from the derived, censor-free `search_text`, so
+ * censored spans can never be searched. Files live in `note_files`, links in the two link
+ * tables, all of which cascade with the note.
+ */
+export const notes = pgTable(
+  'notes',
+  {
+    id: uuid('id').primaryKey(),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull().default(''),
+    body: text('body').notNull().default(''),
+    tags: text('tags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    state: text('state', { enum: ['active', 'archived'] })
+      .notNull()
+      .default('active'),
+    pinned: boolean('pinned').notNull().default(false),
+    trashedAt: timestamp('trashed_at', { withTimezone: true }),
+    /** Title, tags and body after censor tokens, URLs and Markdown punctuation are removed. */
+    searchText: text('search_text').notNull().default(''),
+    search: tsvector('search').generatedAlwaysAs(sql`to_tsvector('simple', "search_text")`),
+    /**
+     * Millisecond precision, unlike the other tables: a list cursor is a JS `Date`, so a
+     * microsecond timestamp would round down and could skip a note at a page boundary.
+     */
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('notes_owner_updated_idx').on(t.ownerUserId, desc(t.updatedAt)),
+    index('notes_tags_idx').using('gin', t.tags),
+    index('notes_search_idx').using('gin', t.search),
+    check('notes_title_check', sql`char_length(${t.title}) <= 200`),
+    check('notes_body_check', sql`octet_length(${t.body}) <= 524288`),
+    check('notes_tags_check', sql`cardinality(${t.tags}) <= 20`),
+    check('notes_state_check', sql`${t.state} in ('active', 'archived')`),
+  ],
+);
+
+/** Note → note links derived from `bokydo:note/<uuid>` in a body; rebuild on every save. */
+export const noteLinks = pgTable(
+  'note_links',
+  {
+    fromNoteId: uuid('from_note_id')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    toNoteId: uuid('to_note_id')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.fromNoteId, t.toNoteId] }),
+    index('note_links_to_idx').on(t.toNoteId),
+  ],
+);
+
+/**
+ * Note ↔ task links. `body` rows are rebuilt from the Markdown on save; `manual` rows come from
+ * linking a note in a task's detail panel and are removed on unlink. Both cascade with the task.
+ */
+export const noteTaskLinks = pgTable(
+  'note_task_links',
+  {
+    noteId: uuid('note_id')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['body', 'manual'] }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.noteId, t.taskId, t.source] }),
+    index('note_task_links_task_idx').on(t.taskId),
+    check('note_task_links_source_check', sql`${t.source} in ('body', 'manual')`),
+  ],
+);
+
+/**
+ * Files attached to a note (`<dataDir>/note-files`). They follow the attachment rules: streamed
+ * to disk under a UUID, type sniffed from the bytes, owner-only. An upload is pending
+ * (`referenced` false) until a saved body names it, and pending files are purged after 24 h.
+ */
+export const noteFiles = pgTable(
+  'note_files',
+  {
+    id: uuid('id').primaryKey(),
+    noteId: uuid('note_id')
+      .notNull()
+      .references(() => notes.id, { onDelete: 'cascade' }),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    filename: text('filename').notNull(),
+    contentType: text('content_type').notNull(),
+    size: integer('size').notNull(),
+    sha256: text('sha256').notNull(),
+    referenced: boolean('referenced').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('note_files_note_idx').on(t.noteId),
+    index('note_files_owner_idx').on(t.ownerUserId),
+    index('note_files_pending_idx')
+      .on(t.createdAt)
+      .where(sql`not ${t.referenced}`),
+    check('note_files_size_check', sql`${t.size} >= 0`),
+  ],
 );

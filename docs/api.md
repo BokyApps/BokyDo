@@ -33,6 +33,8 @@ allowed only if the token holds every scope it needs:
 | `comments:write` | Add, change and delete comments                                   |
 | `habits:read`    | Read your personal habits, progress, streaks and check-in history |
 | `habits:write`   | Create, update, delete and check in your personal habits          |
+| `notes:read`     | Read your personal notes, tags and files                          |
+| `notes:write`    | Add, change, trash and delete your personal notes and their files |
 
 `sync` is full account access and covers all current REST and MCP permissions. Other tokens need
 each permission an operation requires. AI features are retired, and new tokens cannot request an
@@ -45,8 +47,9 @@ A token missing a scope gets `403 {"error":"insufficient_scope"}`; a bad or unkn
 A personal access token can also be **limited to some projects** ("Only the projects I choose").
 Everything outside them answers `404`, as if it did not exist, on REST and MCP alike. A limited
 token can't create projects (`403`), change sharing, or touch labels, filters or settings; tick
-sub-projects and the Inbox explicitly if it should reach them. Personal habits are account-wide and cannot be accessed with a project-limited token. Full access (`sync`) can't be
-limited. See [ADR 0019](adr/0019-project-limited-tokens.md).
+sub-projects and the Inbox explicitly if it should reach them. Personal habits and notes are account-wide and cannot be accessed with a project-limited token.
+Full access (`sync`) can't be limited. See
+[ADR 0019](adr/0019-project-limited-tokens.md).
 
 ### MCP (Streamable HTTP)
 
@@ -158,6 +161,36 @@ Daily targets are 1; weekly targets are 1–7. Check-ins use the owner's local d
 or invalid dates, and repeating the same completed state never increments it twice. Summaries
 include current progress, streak and 14 days of history. A stable creation UUID makes retries
 safe; another user's habit always appears not found.
+
+## Notes
+
+Notes are personal Markdown documents, separate from tasks (ADR 0025). They take `notes:read` and
+`notes:write`; `sync` covers both. Project-limited tokens cannot access them, even with the notes
+scopes, and answer `403 {"error":"project_limited_token"}`. Another user's note, file or linked
+task always answers `404`, as if it did not exist.
+
+| Method | Path                                | Scope         | Notes                                                                                           |
+| ------ | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/notes`                     | `notes:read`  | `q`, `tag`, `state=active\|archived\|trashed` (default `active`), `limit` (≤ 100), `cursor`.    |
+| GET    | `/api/v1/notes/tags`                | `notes:read`  | Distinct tags and counts of your non-trashed notes.                                             |
+| GET    | `/api/v1/notes/{id}`                | `notes:read`  | One note with its body, backlinks, visible linked tasks and files.                              |
+| POST   | `/api/v1/notes`                     | `notes:write` | `{ "title": "…", "body": "…", "tags": [], "pinned": false }` (optional stable UUID `id`).       |
+| PATCH  | `/api/v1/notes/{id}`                | `notes:write` | Any of `title`, `body`, `tags`, `pinned`, `state` (`active`/`archived`), `trashed`.             |
+| DELETE | `/api/v1/notes/{id}`                | `notes:write` | Deletes it and its files forever; answers `204`.                                                |
+| PUT    | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Links the task manually; idempotent, answers `204`.                                             |
+| DELETE | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Removes the manual link; answers `204`.                                                         |
+| GET    | `/api/v1/tasks/{taskId}/notes`      | `notes:read`  | Your own notes linked to a task you can see.                                                    |
+| POST   | `/api/v1/notes/{id}/files`          | `notes:write` | Raw `application/octet-stream` body, filename in `X-Filename`; answers the stored file.         |
+| GET    | `/api/v1/note-files/{id}`           | `notes:read`  | Downloads a file; `?inline=1` renders PNG, JPEG, GIF and WebP inline, everything else is saved. |
+
+A body is at most 512 KiB of UTF-8. A title is at most 200 characters. Tags are trimmed,
+lower-cased and de-duplicated on save: each is 1–50 characters with no `#`, `,` or whitespace, and
+a note holds at most 20. Lists put pinned notes first and then newest first, with an opaque cursor.
+`q=` matches full words and title substrings; censored spans, URLs and Markdown punctuation are
+never indexed. Trashed notes disappear from lists unless `state=trashed` and are purged after 30
+days. Note files follow the attachment rules: the type is sniffed from the bytes, uploads honour
+`attachments.maxSizeMb` (0 disables them), each user has 1 GiB and 2,000 files, and uploads are
+rate-limited to 120 an hour. Note writes publish live update hints to the owner's open tabs.
 
 ## Live updates and browser notifications
 

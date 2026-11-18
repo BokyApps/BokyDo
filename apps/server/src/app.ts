@@ -48,6 +48,7 @@ import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerHabitRoutes } from './habits/routes.js';
+import { registerNoteRoutes } from './notes/routes.js';
 import { registerImportRoutes } from './import/routes.js';
 import { TodoistImporter } from './import/todoist-import.js';
 import { fireDueReminders } from './reminders/reminders.js';
@@ -99,6 +100,8 @@ export interface AppServices {
   importer: TodoistImporter;
   /** Remove unused or orphaned attachment files (runs hourly; callable from tests). */
   purgeAttachments?: () => Promise<void>;
+  /** Remove expired note files and trashed notes (runs hourly; callable from tests). */
+  purgeNotes?: () => Promise<void>;
 }
 
 declare module 'fastify' {
@@ -211,6 +214,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   // Todoist is on the public internet; the token goes nowhere else.
   const attachmentStore = new AttachmentStore(deps.dataDir);
+  const noteFileStore = new AttachmentStore(deps.dataDir, 'note-files');
   const importer = new TodoistImporter({
     db,
     sync,
@@ -329,6 +333,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
   registerHabitRoutes(app, { db, settings, events });
+  services.purgeNotes = await registerNoteRoutes(app, {
+    db,
+    settings,
+    events,
+    store: noteFileStore,
+  });
   registerImportRoutes(app, importer);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,
