@@ -90,8 +90,9 @@ export function createNote(body: NoteCreateRequest): Promise<{ note: Note }> {
   return api<{ note: Note }>('POST', '/api/v1/notes', body);
 }
 
-export function patchNote(id: string, patch: NotePatch): Promise<unknown> {
-  return api('PATCH', pathFor(id), patch);
+/** A PATCH answers the stored note, including the new revision every save must move forward. */
+export function patchNote(id: string, patch: NotePatch): Promise<{ note: Note }> {
+  return api<{ note: Note }>('PATCH', pathFor(id), patch);
 }
 
 export function deleteNote(id: string): Promise<null> {
@@ -218,6 +219,32 @@ export function diffNotePatch(baseline: NoteDraft, current: NoteDraft): NotePatc
 /** A 404 from a note PATCH: the note is gone, so the queue stops and the draft stays visible. */
 export function isNoteGoneError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
+}
+
+/**
+ * A 409 `stale_revision` from a note PATCH: another tab saved first, so this draft's premise no
+ * longer holds. The autosave stops and the page fetches the latest note before deciding.
+ */
+export function isStaleRevisionError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.code === 'stale_revision';
+}
+
+const CENSOR_SPAN_PATTERN = /\{\{censored:[^{}]*\}\}/gi;
+
+/** Every censor token in a Markdown body (`{{censored:…}}`, prefix case-insensitive). */
+export function censorTokensIn(body: string): string[] {
+  return Array.from(body.matchAll(CENSOR_SPAN_PATTERN), (match) => match[0]);
+}
+
+/**
+ * Whether replacing `localBody` with `remoteBody` would bring back censored text: the remote body
+ * carries a censor token this draft does not. That means the text was censored elsewhere after
+ * this tab loaded, so "Keep mine" needs an explicit confirmation. Token text must match exactly;
+ * a different token is a different span.
+ */
+export function restoresCensoredText(remoteBody: string, localBody: string): boolean {
+  const local = new Set(censorTokensIn(localBody));
+  return censorTokensIn(remoteBody).some((token) => !local.has(token));
 }
 
 /** Loading/error/ready for the note view: a background refetch error must not unmount the draft. */

@@ -9,6 +9,7 @@ function makeSaver(over: Partial<DraftSaver> = {}): DraftSaver & {
   return {
     hasUnsavedWork: () => true,
     pendingPatch: () => ({ body: 'unsaved' }),
+    baseRevision: () => 'rev-1',
     flush: vi.fn(async () => true),
     stop: vi.fn(),
     ...over,
@@ -36,7 +37,7 @@ describe('P2: beforeunload / pagehide guards', () => {
     stopClean();
   });
 
-  it('sends a keepalive PATCH with the latest patch on pagehide', () => {
+  it('sends a keepalive PATCH with the latest patch and its revision', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
     const stop = installDraftGuards(makeSaver(), 'note-1');
     window.dispatchEvent(new Event('pagehide'));
@@ -46,7 +47,10 @@ describe('P2: beforeunload / pagehide guards', () => {
     expect(url).toBe('/api/v1/notes/note-1');
     expect(init?.method).toBe('PATCH');
     expect(init?.keepalive).toBe(true);
-    expect(JSON.parse(String(init?.body))).toEqual({ body: 'unsaved' });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      body: 'unsaved',
+      expectedUpdatedAt: 'rev-1',
+    });
   });
 
   it('sends nothing when everything is acknowledged', () => {
