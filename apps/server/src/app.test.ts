@@ -44,6 +44,9 @@ describe.skipIf(!TEST_DATABASE_URL)('HTTP app', () => {
     expect(csp).toContain("script-src 'self'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
+    // Only the two note-embed origins may be framed (ADR 0025).
+    expect(csp).toContain('frame-src https://www.youtube-nocookie.com https://drive.google.com;');
+    expect(headers['cross-origin-embedder-policy']).toBe('require-corp');
     expect(csp).not.toContain('unsafe-inline');
     expect(csp).not.toContain('unsafe-eval');
     expect(headers['x-content-type-options']).toBe('nosniff');
