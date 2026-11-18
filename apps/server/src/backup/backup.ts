@@ -54,6 +54,11 @@ export interface BackupServiceDeps {
   sql: Sql;
   dataDir: string;
   secretsDir: string;
+  /**
+   * Test seam: runs after the database snapshot (which fixed the set of files to archive) and
+   * before those files are read, so a test can remove bytes the snapshot still expects.
+   */
+  afterSnapshot?: () => Promise<void>;
 }
 
 /**
@@ -156,6 +161,13 @@ export class BackupService {
     try {
       const enc = await BackupEncryptor.create(out, passphrase, VERSION);
       const archive = new ArchiveWriter(enc);
+      /**
+       * The files to archive, taken from the same snapshot as the tables they belong to. Walking
+       * the directories instead would silently drop a file whose row the snapshot holds but whose
+       * bytes a purge removed in the meantime — and add bytes no row ever claimed.
+       */
+      let attachmentIds: string[] = [];
+      let noteFileIds: string[] = [];
       // One read-only snapshot: every table as of the same moment.
       await this.deps.sql.begin('isolation level repeatable read read only', async (tx) => {
         const migrations = await tx<{ hash: string }[]>`
@@ -167,6 +179,17 @@ export class BackupService {
         )
           .map((t) => t.name)
           .filter((t) => !EXCLUDED_TABLES.has(t));
+        // Older schemas may predate either table; then their directory has nothing to archive.
+        if (tables.includes('attachments'))
+          attachmentIds = (
+            await tx<{ id: string }[]>`
+              select id from attachments where deleted_at is null order by id`
+          ).map((row) => row.id);
+        if (tables.includes('note_files'))
+          noteFileIds = (
+            await tx<{ id: string }[]>`
+              select id from note_files where status = 'ready' order by id`
+          ).map((row) => row.id);
         const manifest: Manifest = {
           format: 'bokydo-backup-manifest',
           app: VERSION,
@@ -180,34 +203,27 @@ export class BackupService {
           await archive.entry(`db/${t}`, readable as AsyncIterable<Buffer>);
         }
       });
+      await this.deps.afterSnapshot?.();
       for (const f of SECRET_FILES) {
         await archive.entry(
           `secrets/${f}`,
           await readSecretFile(path.join(this.deps.secretsDir, f)),
         );
       }
-      const attachmentsDir = path.join(this.deps.dataDir, 'attachments');
-      let files: string[] = [];
-      try {
-        files = await readdir(attachmentsDir);
-      } catch {
-        // no attachments yet
-      }
-      for (const f of files.filter((n) => /^[0-9a-f-]{36}$/.test(n))) {
-        await archive.entry(`attachments/${f}`, createReadStream(path.join(attachmentsDir, f)));
-      }
-      // Note files live beside attachments but in their own directory; they are archived the
-      // same way (UUID names only) and restored into their own staging directory.
-      const noteFilesDir = path.join(this.deps.dataDir, 'note-files');
-      let noteFiles: string[] = [];
-      try {
-        noteFiles = await readdir(noteFilesDir);
-      } catch {
-        // no note files yet
-      }
-      for (const f of noteFiles.filter((n) => /^[0-9a-f-]{36}$/.test(n))) {
-        await archive.entry(`note-files/${f}`, createReadStream(path.join(noteFilesDir, f)));
-      }
+      // Note files live beside attachments but in their own directory; restore puts each back
+      // into its own staging directory.
+      await this.archiveFiles(
+        archive,
+        path.join(this.deps.dataDir, 'attachments'),
+        'attachments',
+        attachmentIds,
+      );
+      await this.archiveFiles(
+        archive,
+        path.join(this.deps.dataDir, 'note-files'),
+        'note-files',
+        noteFileIds,
+      );
       await archive.end();
       await enc.end();
       await rename(part, final);
@@ -219,6 +235,34 @@ export class BackupService {
     const info = (await this.list()).find((b) => b.name === name);
     if (!info) throw new Error('backup vanished');
     return info;
+  }
+
+  /**
+   * Archive exactly `ids` from `dir` as `<prefix>/<id>`. The list comes from the database
+   * snapshot, so a row whose bytes cannot be read fails the backup — the instance changed while
+   * the snapshot was being taken and a retry will see a consistent state — instead of producing a
+   * silently incomplete archive. Only an empty list may find no directory at all.
+   */
+  private async archiveFiles(
+    archive: ArchiveWriter,
+    dir: string,
+    prefix: string,
+    ids: readonly string[],
+  ): Promise<void> {
+    for (const id of ids) {
+      if (!/^[0-9a-f-]{36}$/.test(id)) throw new BackupError('invalid');
+      const stream = createReadStream(path.join(dir, id));
+      // Only read errors become `busy`; a failure of the archive or encryption layer is not
+      // disguised as a transient one.
+      const guarded = (async function* (): AsyncGenerator<Buffer> {
+        try {
+          for await (const chunk of stream) yield chunk as Buffer;
+        } catch {
+          throw new BackupError('busy');
+        }
+      })();
+      await archive.entry(`${prefix}/${id}`, guarded);
+    }
   }
 
   /** Store an uploaded backup file (checked to look like one) so it can be restored by name. */

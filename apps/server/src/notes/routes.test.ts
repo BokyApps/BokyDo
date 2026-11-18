@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AttachmentStore } from '../attachments/store.js';
 import { noteFiles, noteLinks, noteTaskLinks, notes } from '../db/schema.js';
@@ -347,15 +347,29 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     );
     expect(second.notes.map((n) => n.id)).toEqual([a.note.id]);
     expect(second.nextCursor).toBeNull();
-    expect((await listNotes(alice, '?cursor=not-a-cursor')).status).toBe(400);
-
-    // Cursors must carry the canonical ISO instant they were issued with.
+    // A supplied cursor must decode strictly: every one of these is a 400, never a silent first
+    // page or a page from an instant the caller did not ask for.
     const decoded = JSON.parse(
       Buffer.from(first.nextCursor!, 'base64url').toString('utf8'),
     ) as Record<string, unknown>;
-    for (const u of ['2026-01-02T00:00:00Z', '2026-01-02T00:00:00.000+00:00', 'not a date']) {
-      const cursor = Buffer.from(JSON.stringify({ ...decoded, u })).toString('base64url');
-      expect((await listNotes(alice, `?cursor=${encodeURIComponent(cursor)}`)).status).toBe(400);
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const rejected = [
+      '', // supplied but empty
+      'not-a-cursor',
+      `${first.nextCursor}=`, // padded
+      `${first.nextCursor}*`, // outside the base64url alphabet
+      encode([decoded.p, decoded.u, decoded.i]), // not an object
+      encode({ ...decoded, extra: true }), // a key a cursor never carries
+      encode({ p: decoded.p, u: decoded.u }), // a missing key
+      encode({ ...decoded, p: 'true' }), // wrong types
+      encode({ ...decoded, i: 'not-a-uuid' }),
+      ...['2026-01-02T00:00:00Z', '2026-01-02T00:00:00.000+00:00', 'not a date'].map((u) =>
+        encode({ ...decoded, u }),
+      ),
+    ];
+    for (const cursor of rejected) {
+      const res = await listNotes(alice, `?cursor=${encodeURIComponent(cursor)}`);
+      expect(res.status, cursor).toBe(400);
     }
   });
 
@@ -418,6 +432,23 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect(
       (await bob.http.get(`/api/v1/notes/${bobNote.note.id as string}`)).json().note.backlinks,
     ).toEqual([]);
+
+    // Even a link row written straight into the table is not shown: the backlink query joins the
+    // source note on (id, owner_user_id = caller), not on the id alone.
+    const bobNoteId = bobNote.note.id as string;
+    await t.db.db.insert(noteLinks).values({ fromNoteId: bobNoteId, toNoteId: targetId });
+    const backlinks = (await alice.http.get(`/api/v1/notes/${targetId}`)).json().note.backlinks as {
+      id: string;
+    }[];
+    expect(backlinks).toEqual([{ id: sourceId, title: 'Source' }]);
+    expect(backlinks.map((link) => link.id)).not.toContain(bobNoteId);
+    expect(
+      (await bob.http.get(`/api/v1/notes/${targetId}`)).statusCode,
+      'Bob cannot read Alice’s note at all',
+    ).toBe(404);
+    await t.db.db
+      .delete(noteLinks)
+      .where(and(eq(noteLinks.fromNoteId, bobNoteId), eq(noteLinks.toNoteId, targetId)));
 
     // A trashed target stops resolving, and starts again once restored.
     await alice.http.patch(`/api/v1/notes/${targetId}`, { trashed: true });
@@ -617,6 +648,38 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect(await readdir(dir).catch(() => [])).toEqual([]);
   });
 
+  it('removes the row and the bytes when upload finalization fails', async () => {
+    const alice = await person('alice');
+    const note = await createNote(alice, { title: 'Finalize' });
+    const noteId = note.note.id as string;
+    const dir = path.join(t.dataDir, 'note-files');
+    // Inject the failure exactly where the route writes the final `ready` row.
+    await t.db.sql.unsafe(`
+      create function test_fail_note_file_ready() returns trigger language plpgsql as $$
+      begin
+        raise exception 'injected finalization failure';
+      end $$;
+      create trigger test_fail_note_file_ready before update on note_files
+        for each row when (old.status = 'uploading' and new.status = 'ready')
+        execute function test_fail_note_file_ready()`);
+    try {
+      const failed = await upload(alice, noteId, PNG);
+      expect(failed.status).toBe(500);
+      expect(failed.body).toEqual({ error: 'internal_error' });
+      // The fresh read finds the row still `uploading`, so no row and no bytes are kept.
+      expect(await t.db.db.select().from(noteFiles)).toEqual([]);
+      expect(await readdir(dir).catch(() => [])).toEqual([]);
+    } finally {
+      await t.db.sql.unsafe(`
+        drop trigger if exists test_fail_note_file_ready on note_files;
+        drop function if exists test_fail_note_file_ready()`);
+    }
+    // The same upload succeeds once finalization can write the row.
+    const retried = await upload(alice, noteId, PNG);
+    expect(retried.status).toBe(201);
+    expect(await readdir(dir)).toEqual([retried.body.id]);
+  });
+
   it('lets exactly one of two concurrent uploads take the last quota slot', async () => {
     t = await appWithQuota({ bytes: PNG.length + 40, count: 10 });
     const alice = await person('alice');
@@ -752,6 +815,11 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     const alice = await person('alice');
     const note = await createNote(alice, { title: 'Restored' });
     const noteId = note.note.id as string;
+    const uploaded = await upload(alice, noteId, PNG, { filename: 'keep.png' });
+    const fileId = uploaded.body.id as string;
+    await alice.http.patch(`/api/v1/notes/${noteId}`, {
+      body: `![keep](/api/v1/note-files/${fileId})`,
+    });
     await alice.http.patch(`/api/v1/notes/${noteId}`, { trashed: true });
     await t.db.db
       .update(notes)
@@ -762,7 +830,8 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     await purgeNotes(t.db.db, store, new Date(), {
       afterTrashSelected: async (tx) => {
         selected = true;
-        // The restore won the race: the row no longer matches the delete's predicate.
+        // The restore won the race: the row no longer matches the purge's predicate. Since the
+        // files are only deleted for ids re-checked after this hook, the note keeps its bytes.
         await tx.update(notes).set({ trashedAt: null }).where(eq(notes.id, noteId));
       },
     });
@@ -770,6 +839,11 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect(
       (await t.db.db.select().from(notes).where(eq(notes.id, noteId))).map((n) => n.id),
     ).toEqual([noteId]);
+    expect(
+      (await t.db.db.select().from(noteFiles).where(eq(noteFiles.id, fileId))).map((f) => f.id),
+    ).toEqual([fileId]);
+    expect(await readdir(path.join(t.dataDir, 'note-files'))).toContain(fileId);
+    expect((await download(alice, fileId)).statusCode).toBe(200);
   });
 
   it('refuses project-limited tokens and enforces the notes scopes', async () => {
@@ -866,8 +940,23 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
       note: { id: createdId, updatedAt: expect.any(String) },
     });
 
-    // Linking a task tells the caller about task visibility, so a token must hold tasks:read.
-    const denied = await bearer(notesOnly.token).put(`/api/v1/notes/${noteId}/tasks/${task}`);
+    // Listing a task's notes names the task, so that route needs tasks:read as well: a token with
+    // notes:read alone is refused rather than told whether the task exists.
+    const taskNotes = await bearer(notesOnly.token).get(`/api/v1/tasks/${task}/notes`);
+    expect(taskNotes.statusCode).toBe(403);
+    expect(taskNotes.json()).toEqual({ error: 'insufficient_scope' });
+    expect(
+      (await bearer(withTasks.token).get(`/api/v1/tasks/${task}/notes`)).json().notes,
+    ).toMatchObject([{ id: noteId }]);
+
+    // Linking a task tells the caller about task visibility, so a token must hold tasks:read even
+    // when it holds the notes write scope the route itself asks for.
+    const writer = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'writer',
+      scopes: ['notes:write'],
+      expiresInDays: 1,
+    });
+    const denied = await bearer(writer.token).put(`/api/v1/notes/${noteId}/tasks/${task}`);
     expect(denied.statusCode).toBe(403);
     expect(denied.json()).toEqual({ error: 'insufficient_scope' });
     expect(

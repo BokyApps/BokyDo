@@ -422,8 +422,9 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: notes with bearer tokens', () => {
         .statusCode,
     ).toBe(204);
 
-    // Another user's token, even with both note scopes, sees nothing of Alice's.
-    const bob = bearer(await notesToken('bob', ['notes:read', 'notes:write']));
+    // Another user's token, with every note scope and the task scope the task route also needs,
+    // sees nothing of Alice's.
+    const bob = bearer(await notesToken('bob', ['notes:read', 'notes:write', 'tasks:read']));
     expect((await get(bob, `/api/v1/notes/${noteId}`)).status).toBe(404);
     expect((await get(bob, '/api/v1/notes')).body.notes).toEqual([]);
     expect((await get(bob, `/api/v1/tasks/${taskId}/notes`)).status).toBe(404);
