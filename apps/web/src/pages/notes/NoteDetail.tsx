@@ -1,10 +1,18 @@
 import type { Note, NotePatch } from '@bokydo/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useBlocker, useNavigate } from '@tanstack/react-router';
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Page } from '../../components/ViewHeader.js';
-import { Alert, Button, IconButton, Popover, Spinner, inputClass } from '../../components/ui.js';
+import {
+  Alert,
+  Button,
+  Dialog,
+  IconButton,
+  Popover,
+  Spinner,
+  inputClass,
+} from '../../components/ui.js';
 import {
   ArchiveIcon,
   DownloadIcon,
@@ -14,12 +22,16 @@ import {
 } from '../../components/icons.js';
 import { ApiError } from '../../lib/api.js';
 import { useConfirm } from '../../lib/confirm.js';
+import { DraftLeaveGuard, installDraftGuards } from '../../lib/note-draft-guards.js';
 import {
+  bodyLinksTask,
   deleteNote,
+  isNoteGoneError,
   linkNoteTask,
   noteErrorMessage,
-  noteExportPath,
+  noteExportAvailability,
   noteFilePath,
+  noteLoadPhase,
   noteQuery,
   notesKeys,
   patchNote,
@@ -33,13 +45,17 @@ import {
 import { NoteAutosave, type SaveStatus } from '../../lib/notes-autosave.js';
 import {
   CensorFlow,
-  lockCensors,
+  censorWithBodyPause,
+  lockCensored,
   onCensorLock,
   type CensorPrompts,
 } from '../../lib/notes-censor.js';
 import type { RevealAnchor } from '../../components/notes/callbacks.js';
 import type { RevealState } from '../../components/notes/RevealOverlay.js';
-import { RevealController } from '../../components/notes/reveal-controller.js';
+import {
+  RevealController,
+  installRevealDismissal,
+} from '../../components/notes/reveal-controller.js';
 import { useSyncState } from '../../lib/sync.js';
 import { useToast } from '../../lib/toasts.js';
 import { liveTasks } from '../../lib/views.js';
@@ -59,8 +75,16 @@ export function NoteDetail({ noteId }: { noteId: string }) {
   const query = useQuery(noteQuery(noteId));
   const navigate = useNavigate();
 
-  if (query.isPending) return <Spinner />;
-  if (query.isError) {
+  // A background refetch error must not unmount the editor and lose the draft: only a first load
+  // without data shows the error page (review: "a background refetch error must not unmount").
+  const phase = noteLoadPhase(query);
+  if (phase === 'ready' && query.data) {
+    // Keyed by id so switching notes remounts with a fresh draft, while a background refetch of the
+    // same note only refreshes read-only data (backlinks, files, linked tasks) without clobbering it.
+    return <NoteDetailInner key={query.data.id} note={query.data} />;
+  }
+  if (phase === 'loading') return <Spinner />;
+  if (phase === 'error') {
     return (
       <Page>
         <Alert>
@@ -75,10 +99,7 @@ export function NoteDetail({ noteId }: { noteId: string }) {
       </Page>
     );
   }
-  if (!query.data) return null;
-  // Keyed by id so switching notes remounts with a fresh draft, while a background refetch of the
-  // same note only refreshes read-only data (backlinks, files, linked tasks) without clobbering it.
-  return <NoteDetailInner key={query.data.id} note={query.data} />;
+  return null;
 }
 
 function NoteDetailInner({ note }: { note: Note }) {
@@ -128,6 +149,9 @@ function NoteDetailInner({ note }: { note: Note }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [reveal]);
+  // Review fix: a pending or visible reveal is cancelled when the window loses focus or the page
+  // is hidden, so plaintext cannot survive in a background tab.
+  useEffect(() => installRevealDismissal(reveal), [reveal]);
   useEffect(() => {
     if (!revealState) return;
     const timer = window.setTimeout(() => reveal.close(), 60_000);
@@ -147,7 +171,8 @@ function NoteDetailInner({ note }: { note: Note }) {
           },
           onStatus: setStatus,
           onError: (err) => {
-            if (err instanceof ApiError && err.status === 404) {
+            if (isNoteGoneError(err)) {
+              // The effect on `gone` stops the queue; the draft stays visible for copying.
               setGone(true);
             } else if (err instanceof ApiError && err.status === 409) {
               void client.invalidateQueries({ queryKey: notesKeys.detail(note.id) });
@@ -164,23 +189,53 @@ function NoteDetailInner({ note }: { note: Note }) {
         toNoteDraft(note),
       ),
   );
-
+  // A 404 stops the queue for good; the draft (and the editor) stay on screen.
+  useEffect(() => {
+    if (gone) autosave.stop();
+  }, [gone, autosave]);
+  // Dirty is tracked as state so the Export menu (and the router blocker) re-render when the
+  // controller's view of the draft changes; reading the controller during render alone would be
+  // one render behind.
+  const [dirty, setDirty] = useState(false);
   useEffect(() => {
     if (gone) return;
     autosave.update(draft);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the controller's state
+    setDirty(autosave.isDirty());
   }, [draft, autosave, gone]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the controller's state
+    setDirty(autosave.isDirty());
+  }, [status, autosave]);
   useEffect(() => () => void autosave.flush(), [autosave]);
 
-  // A lock clears the key cache, closes any reveal overlay, discards pending unlocks (editor
-  // remount) and password inputs. pagehide -> lockCensors() reaches this listener too.
+  // Navigation: flush first, block only when saving failed (Retry / explicit discard below).
+  const [guard] = useState(() => new DraftLeaveGuard(autosave));
+  const blocker = useBlocker({
+    shouldBlockFn: () => guard.shouldBlock(),
+    withResolver: true,
+    // The tab-close prompt is owned by installDraftGuards; one prompt is enough.
+    enableBeforeUnload: false,
+  });
+  const [retrying, setRetrying] = useState(false);
+  useEffect(() => installDraftGuards(autosave, note.id), [autosave, note.id]);
+
+  // A lock clears the key cache, closes any reveal overlay, discards pending unlocks and
+  // password inputs. Lock/sign-out/pagehide/hidden all reach this listener; only the explicit
+  // Lock and pagehide remount the editor (a tab switch must not lose the cursor).
   useEffect(
     () =>
-      onCensorLock(() => {
-        setLockKey((k) => k + 1);
+      onCensorLock((reason) => {
         reveal.close();
+        if (reason === 'manual' || reason === 'pagehide' || reason === 'signout') {
+          setLockKey((k) => k + 1);
+        }
       }),
     [reveal],
   );
+
+  // Note change: this instance is keyed by note id, so unmounting means "another note (or none)".
+  useEffect(() => () => lockCensored('note-change'), []);
 
   // --- structural mutations (state / trash / delete / links) -----------------------------------
   const refresh = useCallback(
@@ -195,6 +250,8 @@ function NoteDetailInner({ note }: { note: Note }) {
   const remove = useMutation({
     mutationFn: () => deleteNote(note.id),
     onSuccess: () => {
+      // Deleted on purpose: stop the queue so the navigation is not blocked by a 404 save.
+      guard.discard();
       void refresh();
       void navigate({ to: '/notes' });
     },
@@ -257,7 +314,13 @@ function NoteDetailInner({ note }: { note: Note }) {
     },
     [navigate],
   );
-  const onCensor = useCallback((plaintext: string) => flow.onCensor(plaintext), [flow]);
+  // Review fix (P1): PAUSE the body autosave synchronously, before the password prompt opens and
+  // before any await, so the plaintext draft cannot be PATCHed behind the dialog. The token
+  // revision that follows a successful censor is saved immediately (no debounce window).
+  const onCensor = useCallback(
+    (plaintext: string) => censorWithBodyPause(autosave, flow, plaintext),
+    [autosave, flow],
+  );
   // Fire-and-forget reveal: the page unlocks and shows the overlay; nothing is returned to the editor.
   const onReveal = useCallback(
     (token: string, anchor: RevealAnchor) => {
@@ -278,12 +341,23 @@ function NoteDetailInner({ note }: { note: Note }) {
 
   const trashed = note.state === 'trashed';
   const saveLabel = gone
-    ? t('notes.gone', { defaultValue: 'This note no longer exists.' })
+    ? t('notes.gone', { defaultValue: 'This note was deleted — copy your text' })
     : status === 'saving'
       ? t('notes.saving', { defaultValue: 'Saving…' })
       : status === 'error'
         ? t('notes.saveError', { defaultValue: 'Save failed — retrying on next edit' })
         : t('notes.saved', { defaultValue: 'Saved' });
+  const retrySave = async () => {
+    setRetrying(true);
+    try {
+      const saved = await autosave.flush();
+      // A flush is silent (no status callback), so mirror the result for the Export menu here.
+      setDirty(autosave.isDirty());
+      if (saved && blocker.status === 'blocked') blocker.proceed();
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <Page wide>
@@ -294,11 +368,16 @@ function NoteDetailInner({ note }: { note: Note }) {
         <span className="ml-auto text-xs text-muted" aria-live="polite" role="status">
           {saveLabel}
         </span>
+        {status === 'error' && !gone && (
+          <Button variant="secondary" onClick={() => void retrySave()} busy={retrying}>
+            {t('notes.retrySave', { defaultValue: 'Retry save' })}
+          </Button>
+        )}
       </div>
 
       {gone && (
         <Alert>
-          {t('notes.gone', { defaultValue: 'This note no longer exists.' })}{' '}
+          {t('notes.gone', { defaultValue: 'This note was deleted — copy your text' })}{' '}
           <Button variant="secondary" onClick={toList}>
             {t('notes.back', { defaultValue: 'Back to notes' })}
           </Button>
@@ -346,7 +425,7 @@ function NoteDetailInner({ note }: { note: Note }) {
         <Button variant="ghost" className="text-danger" onClick={() => void onDeleteForever()}>
           {t('notes.delete', { defaultValue: 'Delete forever' })}
         </Button>
-        <Button variant="secondary" onClick={lockCensors} className="ml-1">
+        <Button variant="secondary" onClick={() => lockCensored('manual')} className="ml-1">
           {t('notes.lock', { defaultValue: 'Lock censored text' })}
         </Button>
         <Popover
@@ -370,18 +449,40 @@ function NoteDetailInner({ note }: { note: Note }) {
                     : format === 'docx'
                       ? t('notes.export.word', { defaultValue: 'Word' })
                       : t('notes.export.pdf', { defaultValue: 'PDF' });
-                return (
+                // Review fix (P1): never export stale Markdown. While the controller is dirty or
+                // saving there is no href at all and the item is marked unavailable; a completed
+                // save re-renders this menu with the working links.
+                const availability = noteExportAvailability(note.id, format, {
+                  dirty,
+                  saving: status === 'saving',
+                });
+                return availability.href ? (
                   <a
                     key={format}
-                    href={noteExportPath(note.id, format)}
+                    href={availability.href}
                     download
                     onClick={close}
                     className="rounded-md px-3 py-1.5 text-left hover:bg-surface-alt"
                   >
                     {label}
                   </a>
+                ) : (
+                  <span
+                    key={format}
+                    aria-disabled="true"
+                    className="cursor-not-allowed rounded-md px-3 py-1.5 text-left text-muted"
+                  >
+                    {label}
+                  </span>
                 );
               })}
+              {dirty || status === 'saving' ? (
+                <p className="px-3 pt-1 text-xs text-muted" role="status">
+                  {t('notes.export.waitForSave', {
+                    defaultValue: 'Waiting for the note to finish saving…',
+                  })}
+                </p>
+              ) : null}
             </div>
           )}
         </Popover>
@@ -433,6 +534,7 @@ function NoteDetailInner({ note }: { note: Note }) {
       <LinkedFrom note={note} />
       <LinkedTasks
         note={note}
+        body={draft.body}
         onLink={() => setLinkTaskOpen(true)}
         onUnlink={(id) => unlinkTask.mutate(id)}
       />
@@ -447,6 +549,38 @@ function NoteDetailInner({ note }: { note: Note }) {
         onClose={() => setLinkTaskOpen(false)}
       />
       {passwordDialog}
+
+      {blocker.status === 'blocked' && (
+        <Dialog
+          open
+          onClose={() => blocker.reset()}
+          title={t('notes.leaveTitle', { defaultValue: 'Your latest changes are not saved' })}
+        >
+          <p className="text-sm text-muted">
+            {t('notes.leaveMessage', {
+              defaultValue:
+                "The note couldn't be saved. Retry, or discard your changes and leave this note.",
+            })}
+          </p>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" onClick={() => blocker.reset()}>
+              {t('notes.leaveStay', { defaultValue: 'Stay on this note' })}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                guard.discard();
+                blocker.proceed();
+              }}
+            >
+              {t('notes.leaveDiscard', { defaultValue: 'Discard changes and leave' })}
+            </Button>
+            <Button onClick={() => void retrySave()} busy={retrying}>
+              {t('common.retry', { defaultValue: 'Try again' })}
+            </Button>
+          </div>
+        </Dialog>
+      )}
     </Page>
   );
 }
@@ -480,10 +614,13 @@ function LinkedFrom({ note }: { note: Note }) {
 
 function LinkedTasks({
   note,
+  body,
   onLink,
   onUnlink,
 }: {
   note: Note;
+  /** The live draft body: provenance is derived from the text, not from a stale snapshot. */
+  body: string;
   onLink: () => void;
   onUnlink: (id: string) => void;
 }) {
@@ -503,28 +640,49 @@ function LinkedTasks({
         </p>
       ) : (
         <ul className="flex flex-wrap gap-2 text-sm">
-          {note.linkedTasks.map((task) => (
-            <li
-              key={task.id}
-              className="inline-flex items-center gap-2 rounded-md border border-line px-2 py-1"
-            >
-              <button
-                type="button"
-                className={`text-left hover:text-accent ${task.completed ? 'text-muted line-through' : ''}`}
-                onClick={() => void navigate({ to: '/task/$taskId', params: { taskId: task.id } })}
+          {note.linkedTasks.map((task) => {
+            // P5: Unlink only removes a MANUAL link; a body link would be re-derived on the next
+            // save, so the no-op is replaced by telling the reader where the link lives.
+            const inBody = bodyLinksTask(body, task.id);
+            return (
+              <li
+                key={task.id}
+                className="inline-flex items-center gap-2 rounded-md border border-line px-2 py-1"
               >
-                <LinkIcon /> {task.content}
-              </button>
-              <button
-                type="button"
-                aria-label={t('notes.unlinkTask', { defaultValue: 'Unlink task' })}
-                className="text-muted hover:text-danger"
-                onClick={() => onUnlink(task.id)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  className={`text-left hover:text-accent ${task.completed ? 'text-muted line-through' : ''}`}
+                  onClick={() =>
+                    void navigate({ to: '/task/$taskId', params: { taskId: task.id } })
+                  }
+                >
+                  <LinkIcon /> {task.content}
+                </button>
+                {inBody ? (
+                  <span className="text-xs text-muted">
+                    {t('notes.linkedInBody', { defaultValue: 'Linked in the note text' })} —{' '}
+                    {t('notes.unlinkBodyHint', {
+                      defaultValue: 'remove the link from the note text to unlink.',
+                    })}
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-xs text-muted">
+                      {t('notes.linkedManual', { defaultValue: 'Linked manually' })}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={t('notes.unlinkTask', { defaultValue: 'Unlink task' })}
+                      className="text-muted hover:text-danger"
+                      onClick={() => onUnlink(task.id)}
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

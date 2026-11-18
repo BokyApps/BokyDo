@@ -105,3 +105,102 @@ describe('autosave debounce / diff / flush', () => {
     expect(save).not.toHaveBeenCalled();
   });
 });
+
+const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
+
+describe('P1: the censor prompt pauses the body autosave', () => {
+  it('never PATCHes the plaintext: pause cancels the debounce, the token flush is immediate', async () => {
+    const { save, controller } = setup();
+    controller.update(draft({ body: 'TOPSECRET' }));
+    await vi.advanceTimersByTimeAsync(300); // still inside the debounce window
+    controller.pauseBody(); // page.onCensor: synchronously BEFORE the password prompt
+    await vi.advanceTimersByTimeAsync(2000); // the user takes 2 s to type the password
+    expect(save).not.toHaveBeenCalled();
+
+    controller.flushNextUpdate(); // censor succeeded: the next revision is urgent
+    controller.resumeBody();
+    controller.update(draft({ body: TOKEN })); // the editor applied the token
+    await vi.advanceTimersByTimeAsync(0); // no debounce: saved on the next turn
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ body: TOKEN });
+    expect(JSON.stringify(save.mock.calls)).not.toContain('TOPSECRET');
+  });
+
+  it('a cancelled prompt resumes normally and saves the (unchanged) draft', async () => {
+    const { save, controller } = setup();
+    controller.update(draft({ body: 'still plain' }));
+    controller.pauseBody();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(save).not.toHaveBeenCalled();
+    controller.resumeBody();
+    await vi.advanceTimersByTimeAsync(800);
+    expect(save).toHaveBeenCalledWith({ body: 'still plain' });
+  });
+
+  it('isDirty/pendingPatch reflect the unsaved draft', () => {
+    const { controller } = setup();
+    expect(controller.isDirty()).toBe(false);
+    controller.update(draft({ body: 'B2' }));
+    expect(controller.isDirty()).toBe(true);
+    expect(controller.pendingPatch()).toEqual({ body: 'B2' });
+    expect(controller.hasUnsavedWork()).toBe(true);
+  });
+});
+
+describe('P2: flush drains (in-flight save, then the latest patch)', () => {
+  it('waits for the save in flight and sends the newest draft before resolving', async () => {
+    const resolvers: (() => void)[] = [];
+    const save = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const onStatus = vi.fn();
+    const controller = new NoteAutosave({ save, onStatus, delayMs: 800 }, draft());
+
+    controller.update(draft({ body: 'B1' }));
+    await vi.advanceTimersByTimeAsync(800);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenLastCalledWith({ body: 'B1' });
+
+    controller.update(draft({ body: 'B2' }));
+    let settled = false;
+    const flushed = controller.flush().then((ok) => {
+      settled = ok;
+      return ok;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(save).toHaveBeenCalledTimes(1); // still waiting for B1
+    expect(settled).toBe(false);
+
+    resolvers[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith({ body: 'B2' });
+    expect(settled).toBe(false); // B2 is not acknowledged yet
+
+    resolvers[1]!();
+    expect(await flushed).toBe(true);
+    expect(controller.isDirty()).toBe(false);
+  });
+
+  it('resolves false on failure and keeps the draft dirty', async () => {
+    const save = vi.fn(async () => {
+      throw new Error('network');
+    });
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+    const controller = new NoteAutosave({ save, onStatus, onError, delayMs: 800 }, draft());
+    controller.update(draft({ body: 'B2' }));
+    expect(await controller.flush()).toBe(false);
+    expect(controller.isDirty()).toBe(true);
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it('resolves true without a request when nothing changed', async () => {
+    const { save, controller } = setup();
+    expect(await controller.flush()).toBe(true);
+    expect(save).not.toHaveBeenCalled();
+  });
+});

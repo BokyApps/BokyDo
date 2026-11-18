@@ -211,6 +211,79 @@ export function diffNotePatch(baseline: NoteDraft, current: NoteDraft): NotePatc
 // API error messages (upload limits, missing notes, conflicts). Falls back to the generic map.
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Page-level decisions kept pure so they can be unit-tested without React
+// ---------------------------------------------------------------------------------------------
+
+/** A 404 from a note PATCH: the note is gone, so the queue stops and the draft stays visible. */
+export function isNoteGoneError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
+
+/** Loading/error/ready for the note view: a background refetch error must not unmount the draft. */
+export type NoteLoadPhase = 'loading' | 'error' | 'ready';
+
+export function noteLoadPhase(query: {
+  isPending: boolean;
+  isError: boolean;
+  data: Note | undefined;
+}): NoteLoadPhase {
+  if (query.data) return 'ready';
+  if (query.isError) return 'error';
+  return 'loading';
+}
+
+/**
+ * Export links are only offered once every change is acknowledged: a dirty or saving controller
+ * means the server's Markdown is older than what is on screen. No href while unavailable, so the
+ * browser cannot start a download for stale content.
+ */
+export function noteExportAvailability(
+  noteId: string,
+  format: 'md' | 'docx' | 'pdf',
+  state: { dirty: boolean; saving: boolean },
+): { href: string | null; disabled: boolean } {
+  const ready = !state.dirty && !state.saving;
+  return { href: ready ? noteExportPath(noteId, format) : null, disabled: !ready };
+}
+
+/**
+ * Whether the note BODY links to this task (`[label](bokydo:task/<id>)`), i.e. whether the task
+ * link is derived from the text rather than made manually. Fenced code blocks and inline code
+ * spans are skipped so a code sample cannot pretend to be a link. One forward pass, no regex
+ * backtracking over the body.
+ */
+export function bodyLinksTask(body: string, taskId: string): boolean {
+  const needle = `bokydo:task/${taskId.toLowerCase()}`;
+  const lower = body.toLowerCase();
+  if (!lower.includes(needle)) return false;
+  // Blank out fenced blocks and inline code spans without changing the string's length.
+  const lines = lower.split('\n');
+  let fence: string | null = null;
+  const stripped = lines.map((line) => {
+    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (marker && marker.startsWith(fence)) fence = null;
+      return '';
+    }
+    if (marker) {
+      fence = marker;
+      return '';
+    }
+    return line.replace(/`[^`\n]*`/g, (span) => ' '.repeat(span.length));
+  });
+  const text = stripped.join('\n');
+  // `](` starts the destination; the id must end at a `)`, a space (a link title) or the end.
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(`](${needle}`, from);
+    if (at === -1) return false;
+    const end = text.charAt(at + 2 + needle.length);
+    if (end === '' || end === ')' || /\s/.test(end)) return true;
+    from = at + 1;
+  }
+}
+
 export function noteErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     const maxMb = (err.body as { maxMb?: number } | null)?.maxMb;

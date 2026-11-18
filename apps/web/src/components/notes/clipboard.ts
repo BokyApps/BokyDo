@@ -64,11 +64,14 @@ export function refuseCutIfCensored(slice: Slice, notify: () => void): boolean {
 }
 
 /**
- * Review fix (drag/cut): `transformCopied` must not rewrite an internal drag's slice, or moving a
- * censored span would replace it with the `█████` placeholder. During a drag started inside the
- * editor the slice is passed through untouched (ProseMirror re-inserts the real node on an
- * in-editor drop); ordinary Copy/Cut still export only the placeholder. `dragstart`/`dragend`
- * flip the flag; a drag that leaves the editor is ended by `drop`/`dragend` as well.
+ * Review fix (outbound drag / copy): the DataTransfer must never contain a censor token, not even
+ * for an internal drag. ProseMirror keeps the real slice in `view.dragging.slice` for an in-editor
+ * drop and applies `transformCopied` only to the text it serialises into `text/plain` and
+ * `text/html`, so always censoring the serialised copy is safe: moving an atom inside the editor
+ * still moves the real node, while any drag that leaves the editor carries `█████` only.
+ *
+ * The controller is kept (dragstart/dragend still mark state) so the decision stays unit-testable
+ * and a drag is never mistaken for an ordinary copy. `transformCopied` ignores the flag by design.
  */
 export interface DragCopyController {
   markDragStart(): void;
@@ -90,7 +93,9 @@ export function createDragCopyController(): DragCopyController {
       return dragging;
     },
     transformCopied(slice: Slice, schema: Schema): Slice {
-      return dragging ? slice : censorSlice(slice, schema);
+      // Always the placeholder. `view.dragging.slice` (ProseMirror's in-memory drag slice) is not
+      // derived from this return value, so an internal drop still inserts the real token.
+      return censorSlice(slice, schema);
     },
   };
 }

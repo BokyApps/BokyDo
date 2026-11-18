@@ -57,3 +57,25 @@ export class RevealController {
     this.set(null);
   }
 }
+
+/**
+ * Review fix: a revealed plaintext must not outlive the window's focus. Losing focus or hiding
+ * the page cancels both the overlay and any unlock still in flight (the request id is bumped).
+ * Returns its own teardown so a component can install it in an effect.
+ */
+export function installRevealDismissal(
+  controller: Pick<RevealController, 'close'>,
+  win: Window = window,
+  doc: Document = document,
+): () => void {
+  const onBlur = () => controller.close();
+  const onVisibility = () => {
+    if (doc.visibilityState === 'hidden') controller.close();
+  };
+  win.addEventListener('blur', onBlur);
+  doc.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    win.removeEventListener('blur', onBlur);
+    doc.removeEventListener('visibilitychange', onVisibility);
+  };
+}

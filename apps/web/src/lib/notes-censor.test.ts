@@ -23,7 +23,14 @@ vi.mock('./censor.js', () => {
 });
 
 import { CensorError, censor, uncensor, censorKeys } from './censor.js';
-import { CensorFlow, lockCensors, onCensorLock, type CensorPrompts } from './notes-censor.js';
+import {
+  CensorFlow,
+  PasswordPromptQueue,
+  censorWithBodyPause,
+  lockCensored,
+  onCensorLock,
+  type CensorPrompts,
+} from './notes-censor.js';
 
 const mockCensor = vi.mocked(censor);
 const mockUncensor = vi.mocked(uncensor);
@@ -150,14 +157,121 @@ describe('censor flow state machine', () => {
     expect(mockTryUnlock).toHaveBeenCalledWith('TOKEN');
   });
 
-  it('lockCensors clears the key cache and notifies listeners', () => {
+  it('lockCensored clears the key cache and notifies listeners with the reason', () => {
     const listener = vi.fn();
     const off = onCensorLock(listener);
-    lockCensors();
+    lockCensored('manual');
     expect(mockClear).toHaveBeenCalledOnce();
     expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith('manual');
     off();
-    lockCensors();
+    lockCensored('pagehide');
     expect(listener).toHaveBeenCalledOnce(); // unsubscribed
+  });
+});
+
+describe('P3: capture the lock generation before the first await', () => {
+  it('censor: a lock while the password prompt is open encrypts nothing and returns null', async () => {
+    const askPassword = vi.fn(async () => {
+      lockCensored('pagehide');
+      return 'pw';
+    });
+    const flow = new CensorFlow(prompts({ askPassword }), { warned: false });
+    expect(await flow.onCensor('secret')).toBeNull();
+    expect(mockCensor).not.toHaveBeenCalled();
+  });
+
+  it('censor: a lock while encrypting does not return a token', async () => {
+    let release!: (token: string) => void;
+    mockCensor.mockImplementation(() => new Promise<string>((resolve) => (release = resolve)));
+    const flow = new CensorFlow(prompts(), { warned: false });
+    const pending = flow.onCensor('secret');
+    await flush();
+    lockCensored('manual');
+    release('TOKEN');
+    expect(await pending).toBeNull();
+  });
+
+  it('Remove: a lock while the confirmation dialog is open stops the whole flow', async () => {
+    const confirmRemove = vi.fn(async () => {
+      lockCensored('signout');
+      return true;
+    });
+    const flow = new CensorFlow(prompts({ confirmRemove }), { warned: false });
+    expect(await flow.onUncensor('TOKEN')).toBeNull();
+    expect(mockTryUnlock).not.toHaveBeenCalled();
+    expect(mockUncensor).not.toHaveBeenCalled();
+  });
+
+  it('Reveal: a lock while the password prompt is open reveals nothing', async () => {
+    const askPassword = vi.fn(async () => {
+      lockCensored('hidden');
+      return 'pw';
+    });
+    const flow = new CensorFlow(prompts({ askPassword }), { warned: false });
+    expect(await flow.onReveal('TOKEN')).toBeNull();
+    expect(mockUncensor).not.toHaveBeenCalled();
+  });
+});
+
+describe('P1: the body autosave is paused before the censor prompt opens', () => {
+  it('pauses synchronously, flushes the token revision and resumes', async () => {
+    const events: string[] = [];
+    const autosave = {
+      pauseBody: vi.fn(() => events.push('pause')),
+      resumeBody: vi.fn(() => events.push('resume')),
+      flushNextUpdate: vi.fn(() => events.push('flush-next')),
+    };
+    const flow = {
+      onCensor: vi.fn(async () => {
+        events.push('prompt');
+        return 'TOKEN';
+      }),
+    };
+    expect(await censorWithBodyPause(autosave, flow, 'secret')).toBe('TOKEN');
+    // pause happens before the prompt, and the token revision is marked urgent before resume.
+    expect(events).toEqual(['pause', 'prompt', 'flush-next', 'resume']);
+  });
+
+  it('resumes without a flush when the prompt is cancelled', async () => {
+    const autosave = { pauseBody: vi.fn(), resumeBody: vi.fn(), flushNextUpdate: vi.fn() };
+    const flow = { onCensor: vi.fn(async () => null) };
+    expect(await censorWithBodyPause(autosave, flow, 'secret')).toBeNull();
+    expect(autosave.resumeBody).toHaveBeenCalledOnce();
+    expect(autosave.flushNextUpdate).not.toHaveBeenCalled();
+  });
+
+  it('resumes when censoring throws', async () => {
+    const autosave = { pauseBody: vi.fn(), resumeBody: vi.fn(), flushNextUpdate: vi.fn() };
+    const flow = {
+      onCensor: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    };
+    await expect(censorWithBodyPause(autosave, flow, 'secret')).rejects.toThrow('boom');
+    expect(autosave.resumeBody).toHaveBeenCalledOnce();
+    expect(autosave.flushNextUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('P4: password prompts are serialised (supersede, never overwrite)', () => {
+  it('a second prompt resolves the first as cancelled', async () => {
+    const queue = new PasswordPromptQueue();
+    const first = queue.ask();
+    const second = queue.ask();
+    expect(await first.promise).toBeNull();
+    expect(queue.activeId).toBe(second.id);
+    expect(queue.settle(first.id, 'stale')).toBe(false);
+    expect(queue.settle(second.id, 'pw')).toBe(true);
+    expect(await second.promise).toBe('pw');
+    expect(queue.activeId).toBeNull();
+  });
+
+  it('cancelAll resolves the open prompt as cancelled; settling it later is a no-op', async () => {
+    const queue = new PasswordPromptQueue();
+    const prompt = queue.ask();
+    queue.cancelAll();
+    expect(await prompt.promise).toBeNull();
+    expect(queue.settle(prompt.id, 'pw')).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import type { Editor } from '@tiptap/core';
 import { useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { NoteCallbacks } from './callbacks.js';
-import { censorSelection } from './censor-command.js';
+import { censorSelection, censorableSelection } from './censor-command.js';
 import { parseEmbedUrl } from './embed.js';
 import { classifyHref } from './markdown.js';
 
@@ -142,7 +142,8 @@ export function Toolbar({
       setEmbedError(true);
       return;
     }
-    const label = embedLabel.trim().replace(/[\][()\r\n]/g, '');
+    // Labels are escaped by the Markdown writer (E5), so `]`, `[` and `\` survive the round trip.
+    const label = embedLabel.trim();
     editor.chain().focus().insertContent({ type: 'embed', attrs: { label, url } }).run();
     setEmbedOpen(false);
     setEmbedError(false);
@@ -201,14 +202,33 @@ export function Toolbar({
       );
       return;
     }
+    // Reject before opening the password prompt: a token inside a code block, an embed or another
+    // atom cannot survive a reload as an atom, so it must never be reported as a success.
+    if (!censorableSelection(editor, from, to)) {
+      setCensorError(
+        t('notes.editor.censorUnsupported', {
+          defaultValue:
+            'Only text in a paragraph, heading, list, quote or table cell can be censored — not a code block, an embed or another atom.',
+        }),
+      );
+      return;
+    }
     setCensorError(null);
     // censorSelection makes the editor read-only while the password prompt is open, aborts if the
-    // document changed (stale selection), and wipes undo history so plaintext can't be restored.
+    // document changed (stale selection), verifies the token survives a save, and wipes undo
+    // history so plaintext can't be restored.
     const outcome = await censorSelection(editor, from, to, callbacks.onCensor);
     if (outcome === 'aborted') {
       setCensorError(
         t('notes.editor.censorAborted', {
           defaultValue: 'The note changed while censoring. Nothing was changed — please try again.',
+        }),
+      );
+    } else if (outcome === 'unsupported') {
+      setCensorError(
+        t('notes.editor.censorUnsupported', {
+          defaultValue:
+            'Only text in a paragraph, heading, list, quote or table cell can be censored — not a code block, an embed or another atom.',
         }),
       );
     }

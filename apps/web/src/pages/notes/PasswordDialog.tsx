@@ -1,55 +1,65 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Dialog, TextField } from '../../components/ui.js';
-import { onCensorLock, type PasswordPromptOptions } from '../../lib/notes-censor.js';
+import {
+  PasswordPromptQueue,
+  onCensorLock,
+  type PasswordPromptOptions,
+} from '../../lib/notes-censor.js';
 
 /**
  * Promise-based password prompt for the censor flow. The password lives only in this dialog's
  * local state (type=password, autocomplete off) and is never stored; a lock clears the input and
  * resolves the pending prompt with null so no password lingers in memory.
+ *
+ * Prompts are serialised by {@link PasswordPromptQueue}: a new prompt while one is open supersedes
+ * the old one (which resolves as cancelled) instead of overwriting its resolver and hanging the
+ * first operation.
  */
 export function usePasswordPrompt(): {
   askPassword: (opts: PasswordPromptOptions) => Promise<string | null>;
   dialog: ReactNode;
 } {
-  const [prompt, setPrompt] = useState<(PasswordPromptOptions & { seq: number }) | null>(null);
-  const resolver = useRef<((value: string | null) => void) | null>(null);
-  const seq = useRef(0);
+  const [prompt, setPrompt] = useState<(PasswordPromptOptions & { id: number }) | null>(null);
+  const [queue] = useState(() => new PasswordPromptQueue());
 
   const askPassword = useCallback(
-    (opts: PasswordPromptOptions) =>
-      new Promise<string | null>((resolve) => {
-        resolver.current = resolve;
-        seq.current += 1;
-        setPrompt({ ...opts, seq: seq.current });
-      }),
-    [],
+    (opts: PasswordPromptOptions) => {
+      const request = queue.ask();
+      setPrompt({ ...opts, id: request.id });
+      void request.promise.then((value) => {
+        // Only the prompt that is still showing may close itself.
+        setPrompt((current) => (current && current.id === request.id ? null : current));
+        return value;
+      });
+      return request.promise;
+    },
+    [queue],
   );
 
-  const finish = useCallback((value: string | null) => {
-    const resolve = resolver.current;
-    resolver.current = null;
-    setPrompt(null);
-    resolve?.(value);
-  }, []);
+  const finish = useCallback(
+    (id: number, value: string | null) => {
+      if (queue.settle(id, value)) setPrompt(null);
+    },
+    [queue],
+  );
 
   useEffect(
     () =>
       onCensorLock(() => {
         // Close and wipe the password inputs; resolve so the flow never hangs.
+        queue.cancelAll();
         setPrompt(null);
-        resolver.current?.(null);
-        resolver.current = null;
       }),
-    [],
+    [queue],
   );
 
   const dialog = prompt ? (
     <PasswordDialog
-      key={prompt.seq}
+      key={prompt.id}
       opts={prompt}
-      onSubmit={finish}
-      onCancel={() => finish(null)}
+      onSubmit={(password) => finish(prompt.id, password)}
+      onCancel={() => finish(prompt.id, null)}
     />
   ) : null;
   return { askPassword, dialog };

@@ -1,22 +1,21 @@
 import { useParams } from '@tanstack/react-router';
 import { useEffect } from 'react';
-import { lockCensors } from '../lib/notes-censor.js';
+import { lockCensored } from '../lib/notes-censor.js';
 import { NoteDetail } from './notes/NoteDetail.js';
 import { NotesList } from './notes/NotesList.js';
 
 /**
- * `/notes` (list) and `/notes/$noteId` (editor) share one lazy route component. One pagehide
- * listener clears the censor key cache, password inputs and any open reveal overlay for the whole
- * notes section; Lock and sign-out clear them too (see notes-censor.ts / AppShell).
+ * `/notes` (list) and `/notes/$noteId` (editor) share one lazy route component.
+ *
+ * Leaving the notes section locks every censored span (keys, open password prompts, reveal
+ * overlays) through the single `lockCensored` entry point. The app-level `pagehide` /
+ * `visibilitychange → hidden` listener lives once in AppShell, so it also covers token pages and
+ * task pages; this page only owns its own unmount.
  */
 export function NotesPage() {
   const { noteId } = useParams({ strict: false });
 
-  useEffect(() => {
-    const onHide = () => lockCensors();
-    window.addEventListener('pagehide', onHide);
-    return () => window.removeEventListener('pagehide', onHide);
-  }, []);
+  useEffect(() => () => lockCensored('unmount'), []);
 
   return noteId ? <NoteDetail noteId={noteId} /> : <NotesList />;
 }
