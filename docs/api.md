@@ -167,7 +167,16 @@ safe; another user's habit always appears not found.
 Notes are personal Markdown documents, separate from tasks (ADR 0025). They take `notes:read` and
 `notes:write`; `sync` covers both. Project-limited tokens cannot access them, even with the notes
 scopes, and answer `403 {"error":"project_limited_token"}`. Another user's note, file or linked
-task always answers `404`, as if it did not exist.
+task always answers `404`, as if it did not exist. A token without `tasks:read` gets no task data
+from a note, and linking a note to a task needs `tasks:read` as well as `notes:write`, because the
+answer reveals whether the task exists.
+
+MCP exposes `list_notes`, `get_note`, `create_note`, `update_note`, `archive_note`, `trash_note`,
+`link_note_to_task` and `unlink_note_from_task`. A note body comes back with every censored span
+as `█████`, never as its ciphertext token, and `update_note` refuses a body that would drop one,
+because an AI client has no key and so could never re-create it. `link_note_to_task` also needs
+`tasks:read`, and a write-only token gets only a changed note's id and timestamp back, not its
+body.
 
 | Method | Path                                | Scope         | Notes                                                                                           |
 | ------ | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------- |

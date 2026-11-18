@@ -1,7 +1,9 @@
 import { and, count, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { audit } from '../audit.js';
+import type { AttachmentStore } from '../attachments/store.js';
 import type { Database } from '../db/client.js';
 import {
+  noteFiles,
   projectMembers,
   projects,
   tasks,
@@ -85,19 +87,20 @@ export async function deletionBlockers(
 
 /**
  * Delete an account (GDPR erasure). Refused while it has blockers. Removes the user and, through
- * the foreign keys, everything only they had: their projects and tasks, labels, filters,
- * reminders, sessions, passkeys, tokens, app authorizations, AI keys, push subscriptions and
- * notifications. In projects that live on, their tasks and comments stay with no author, their
- * assignments lapse and collaborators' devices are told. Attachment files of deleted projects are
- * removed by the hourly attachment purge. The audit log keeps an `account.deleted` entry with the
- * user's id only.
+ * the foreign keys, everything only they had: their projects and tasks, notes and note files,
+ * labels, filters, reminders, sessions, passkeys, tokens, app authorizations, AI keys, push
+ * subscriptions and notifications. Note files are deleted from disk straight away, not left for
+ * the stray-file purge. In projects that live on, their tasks and comments stay with no author,
+ * their assignments lapse and collaborators' devices are told. Attachment files of deleted
+ * projects are removed by the hourly attachment purge. The audit log keeps an `account.deleted`
+ * entry with the user's id only.
  */
 export async function deleteAccount(
-  deps: { db: Database; sync: SyncService },
+  deps: { db: Database; sync: SyncService; noteFileStore: AttachmentStore },
   userId: string,
   actor: { userId: string; ip: string | null },
 ): Promise<{ deleted: true } | { deleted: false; blockers: DeletionBlockers }> {
-  return deps.sync.write(async (tx, changes) => {
+  const outcome = await deps.sync.write(async (tx, changes) => {
     // Serialise with admin promotions/demotions so the last-admin check can't race.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('bokydo:admins'))`);
     const blockers = await deletionBlockers(tx, userId);
@@ -156,6 +159,12 @@ export async function deleteAccount(
         ),
       );
 
+    // Rows cascade with the user, but the bytes on disk do not: remember them before deleting.
+    const files = await tx
+      .select({ id: noteFiles.id })
+      .from(noteFiles)
+      .where(eq(noteFiles.ownerUserId, userId));
+
     await audit(tx, {
       action: 'account.deleted',
       actorType: 'user',
@@ -166,6 +175,9 @@ export async function deleteAccount(
       meta: { by: actor.userId === userId ? 'self' : 'admin' },
     });
     await tx.delete(users).where(eq(users.id, userId));
-    return { deleted: true as const };
+    return { deleted: true as const, fileIds: files.map((f) => f.id) };
   });
+  if (!outcome.deleted) return outcome;
+  for (const id of outcome.fileIds) await deps.noteFileStore.remove(id);
+  return { deleted: true };
 }

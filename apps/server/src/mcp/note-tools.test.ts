@@ -1,0 +1,218 @@
+import type { ApiScope } from '@bokydo/shared';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { newId } from '../db/ids.js';
+import { notes, oauthClients, oauthGrants } from '../db/schema.js';
+import { createUser, TEST_HOST, testApp, type TestApp } from '../test/app.js';
+import { TEST_DATABASE_URL } from '../test/db.js';
+import { cmd, id, SyncUser } from '../test/sync.js';
+
+const BASE = 'https://tasks.example.com';
+/** A syntactically valid v1 span; its ciphertext is not a word anyone could search for. */
+const censorToken = `{{censored:v1:${'A'.repeat(22)}:${'B'.repeat(16)}:c2VjcmV0cGhyYXNl}}`;
+let t: TestApp;
+let alice: string;
+let bob: string;
+let limitedProject: string;
+let taskId: string;
+let seq = 0;
+
+async function token(userId: string, scopes: ApiScope[], projectIds: string[] | null = null) {
+  return (
+    await t.app.services.apiTokens.createPat(userId, {
+      name: 'note-test',
+      scopes,
+      projectIds,
+      expiresInDays: 1,
+    })
+  ).token;
+}
+
+async function oauthToken(userId: string, scopes: ApiScope[]) {
+  const clientId = `bkdc_${'c'.repeat(22)}`;
+  await t.db.db
+    .insert(oauthClients)
+    .values({
+      id: clientId,
+      name: 'note client',
+      redirectUris: ['https://client.example/callback'],
+      registeredVia: 'dynamic',
+    })
+    .onConflictDoNothing();
+  const grantId = newId();
+  await t.db.db
+    .insert(oauthGrants)
+    .values({ id: grantId, clientId, userId, scopes, audience: 'mcp' });
+  const issued = await t.db.db.transaction((tx) =>
+    t.app.services.apiTokens.issue(tx, { id: grantId, userId, scopes, audience: 'mcp' }),
+  );
+  return issued.access_token;
+}
+
+async function rpc(bearer: string, method: string, params: Record<string, unknown> = {}) {
+  return t.app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: {
+      host: TEST_HOST,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: `Bearer ${bearer}`,
+    },
+    payload: { jsonrpc: '2.0', id: ++seq, method, params },
+  });
+}
+
+async function call(bearer: string, name: string, args: Record<string, unknown> = {}) {
+  const response = await rpc(bearer, 'tools/call', { name, arguments: args });
+  expect(response.statusCode).toBe(200);
+  return response.json().result as {
+    content: { text: string }[];
+    isError?: boolean;
+    structuredContent?: unknown;
+  };
+}
+
+const text = (result: { content: { text: string }[] }) => result.content[0]?.text ?? '';
+
+async function toolNames(bearer: string): Promise<string[]> {
+  const listed = await rpc(bearer, 'tools/list');
+  return (listed.json().result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
+}
+
+describe.skipIf(!TEST_DATABASE_URL)('MCP notes', () => {
+  beforeEach(async () => {
+    t = await testApp();
+    await t.app.services.settings.update(
+      { 'instance.publicUrl': BASE, 'instance.defaultTimezone': 'UTC' },
+      { userId: null, ip: null },
+    );
+    await t.app.services.settings.markSetupComplete({ userId: null, ip: null });
+    alice = await createUser(t.db, { username: 'note-alice', password: 'x'.repeat(12) });
+    bob = await createUser(t.db, { username: 'note-bob', password: 'x'.repeat(12) });
+    limitedProject = id();
+    taskId = id();
+    await new SyncUser(t.app.services.sync, alice).ok(
+      cmd('project_add', { id: limitedProject, name: 'Limited' }),
+      cmd('task_add', { id: taskId, projectId: limitedProject, content: 'Linked task' }),
+    );
+  });
+  afterEach(async () => t.close());
+
+  it('lists, reads, creates, updates, archives and trashes, with owner isolation', async () => {
+    const rw = await token(alice, ['notes:read', 'notes:write', 'tasks:read']);
+    const created = await call(rw, 'create_note', {
+      title: 'First note',
+      body: `Visible ${censorToken}`,
+      tags: ['Work'],
+    });
+    expect(created.isError).toBeFalsy();
+    const noteId = (created.structuredContent as { note: { id: string } }).note.id;
+    // An MCP client gets the placeholder, never the ciphertext token.
+    expect(text(created)).toContain('█████');
+    expect(text(created)).not.toContain('{{censored:v1');
+    expect(text(created)).not.toContain('c2VjcmV0cGhyYXNl');
+    expect(JSON.stringify(created.structuredContent)).not.toContain('{{censored:v1');
+
+    const got = await call(rw, 'get_note', { id: noteId });
+    expect(got.isError).toBeFalsy();
+    expect(text(got)).toContain('"tags": [');
+    expect(text(got)).toContain('"work"');
+    expect(text(got)).toContain('█████');
+    expect(text(got)).not.toContain('{{censored:v1');
+
+    expect((await call(rw, 'update_note', { id: noteId, title: 'Renamed' })).isError).toBeFalsy();
+    // Dropping a censored span would destroy text no client can re-create: refuse it.
+    const dropped = await call(rw, 'update_note', { id: noteId, body: 'Visible only' });
+    expect(dropped.isError).toBe(true);
+    expect(text(dropped)).toContain('censored');
+    // Keeping the token verbatim is fine.
+    expect(
+      (await call(rw, 'update_note', { id: noteId, body: `More text ${censorToken}` })).isError,
+    ).toBeFalsy();
+
+    const listed = await call(rw, 'list_notes', { q: 'Renamed' });
+    expect(text(listed)).toContain('Renamed');
+    expect(text(listed)).toContain('"snippet"');
+    expect(text(listed)).not.toContain('{{censored:v1');
+    expect((await call(rw, 'list_notes', { tag: 'work' })).isError).toBeFalsy();
+    expect(text(await call(rw, 'list_notes', { tag: 'no-such-tag' }))).not.toContain(noteId);
+
+    expect((await call(rw, 'archive_note', { id: noteId })).isError).toBeFalsy();
+    expect(text(await call(rw, 'list_notes', { state: 'archived' }))).toContain(noteId);
+    expect(text(await call(rw, 'list_notes'))).not.toContain(noteId);
+    expect((await call(rw, 'archive_note', { id: noteId, archived: false })).isError).toBeFalsy();
+
+    expect((await call(rw, 'trash_note', { id: noteId })).isError).toBeFalsy();
+    expect(text(await call(rw, 'list_notes', { state: 'trashed' }))).toContain(noteId);
+    expect((await call(rw, 'trash_note', { id: noteId, trashed: false })).isError).toBeFalsy();
+
+    const bobToken = await token(bob, ['notes:read', 'notes:write', 'tasks:read']);
+    expect((await call(bobToken, 'get_note', { id: noteId })).isError).toBe(true);
+    expect(text(await call(bobToken, 'list_notes'))).not.toContain(noteId);
+
+    // Manual note ↔ task links, limited to tasks the caller can still see.
+    expect((await call(rw, 'link_note_to_task', { noteId, taskId })).isError).toBeFalsy();
+    expect(text(await call(rw, 'get_note', { id: noteId }))).toContain(taskId);
+    // A notes-only token reads the note but never task text through it.
+    const notesOnly = await token(alice, ['notes:read']);
+    expect(text(await call(notesOnly, 'get_note', { id: noteId }))).not.toContain(taskId);
+    expect((await call(bobToken, 'link_note_to_task', { noteId, taskId })).isError).toBe(true);
+    expect((await call(rw, 'unlink_note_from_task', { noteId, taskId })).isError).toBeFalsy();
+    expect(text(await call(rw, 'get_note', { id: noteId }))).not.toContain(taskId);
+
+    expect(await t.db.db.select().from(notes)).toHaveLength(1);
+  });
+
+  it('requires note scopes and never exposes account-wide tools to project-limited tokens', async () => {
+    const readOnly = await token(alice, ['notes:read']);
+    const names = await toolNames(readOnly);
+    expect(names).toContain('list_notes');
+    expect(names).toContain('get_note');
+    expect(names).not.toContain('create_note');
+    expect((await call(readOnly, 'create_note', { title: 'nope' })).isError).toBe(true);
+
+    const taskOnly = await token(alice, ['tasks:read']);
+    expect((await call(taskOnly, 'list_notes')).isError).toBe(true);
+
+    // A write-only token may create a note, but the answer is not a note body it cannot read.
+    const writeOnly = await token(alice, ['notes:write']);
+    const writeOnlyNames = await toolNames(writeOnly);
+    expect(writeOnlyNames).toContain('create_note');
+    // Linking reveals whether a task is visible, so it needs task read access too.
+    expect(writeOnlyNames).not.toContain('link_note_to_task');
+    const created = await call(writeOnly, 'create_note', { title: 'Write only', body: 'body' });
+    expect(created.isError).toBeFalsy();
+    expect(text(created)).toContain('"id"');
+    expect(text(created)).not.toContain('"body"');
+
+    // `sync` covers every scope, notes included, and gets the full note back.
+    const sync = await token(alice, ['sync']);
+    expect(
+      text(await call(sync, 'create_note', { title: 'Sync note', body: 'Sync body' })),
+    ).toContain('Sync body');
+
+    const limited = await token(alice, ['notes:read', 'notes:write'], [limitedProject]);
+    expect(await toolNames(limited)).not.toContain('list_notes');
+    expect((await call(limited, 'list_notes')).isError).toBe(true);
+    // The REST routes refuse project-limited tokens the same way habits do.
+    const rest = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/notes',
+      headers: { host: TEST_HOST, authorization: `Bearer ${limited}` },
+    });
+    expect(rest.statusCode).toBe(403);
+    expect(rest.json()).toEqual({ error: 'project_limited_token' });
+  });
+
+  it('supports OAuth note scopes and denies task-only tokens', async () => {
+    const read = await oauthToken(alice, ['notes:read']);
+    const names = await toolNames(read);
+    expect(names).toContain('list_notes');
+    expect(names).not.toContain('create_note');
+
+    const write = await oauthToken(alice, ['notes:read', 'notes:write']);
+    const created = await call(write, 'create_note', { title: 'From OAuth', body: 'Hello' });
+    expect(created.isError).toBeFalsy();
+    expect(text(created)).toContain('From OAuth');
+  });
+});
