@@ -383,6 +383,7 @@
       "censor": {
         "censor": "Censor",
         "confirmPassword": "Confirm password",
+        "cutBlocked": "Censored text can't be cut; delete it or remove the censor first.",
         "mismatch": "Passwords do not match.",
         "password": "Password",
         "remove": "Remove censor",
@@ -403,6 +404,7 @@
         "bulletList": "Bullet list",
         "cancel": "Cancel",
         "censor": "Censor selection",
+        "censorAborted": "The note changed while censoring. Nothing was changed — please try again.",
         "censorClose": "Close",
         "censoredAriaLabel": "Censored text",
         "censorEmpty": "Select some text to censor first.",
@@ -425,6 +427,7 @@
         "heading2": "Heading 2",
         "heading3": "Heading 3",
         "horizontalRule": "Divider",
+        "invalidSource": "This note's Markdown can't be shown in the editor. Fix it in the source view below.",
         "italic": "Italic",
         "link": "Add link",
         "linkInvalid": "Only http(s), mailto, or BokyDo links are allowed.",

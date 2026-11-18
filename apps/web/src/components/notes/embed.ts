@@ -94,3 +94,40 @@ export function browserSupportsCredentialless(): boolean {
     typeof HTMLIFrameElement !== 'undefined' && supportsCredentialless(HTMLIFrameElement.prototype)
   );
 }
+
+/**
+ * Review fix: a `credentialless` iframe is the only way a third-party frame can load under
+ * COEP: require-corp, and it MUST be set before `src` triggers the request. Setting it in a
+ * passive effect after React has already rendered `<iframe src=…>` is too late. We build the
+ * element imperatively and apply every safety attribute (sandbox, referrerpolicy, allow) BEFORE
+ * `src` is applied last. The canonical embed URL is recomputed from the node attribute at click
+ * time. The tiny `IframeLike` interface lets a headless test spy on the attribute order.
+ */
+export interface IframeLike {
+  setAttribute(name: string, value: string): void;
+}
+
+export function applyEmbedIframe(el: IframeLike, embed: ParsedEmbed, title: string): void {
+  const attributes: [string, string][] = [
+    ['credentialless', ''],
+    ['sandbox', 'allow-scripts allow-same-origin allow-presentation allow-popups'],
+    ['referrerpolicy', 'strict-origin-when-cross-origin'],
+    ['allow', 'encrypted-media; picture-in-picture; fullscreen'],
+    ['loading', 'lazy'],
+    ['title', title],
+    ['class', 'bk-embed-frame'],
+    // src is deliberately LAST: credentialless/sandbox must already be set when loading starts.
+    ['src', embed.embedUrl],
+  ];
+  for (const [name, value] of attributes) el.setAttribute(name, value);
+}
+
+export function createEmbedIframe(
+  doc: Document,
+  embed: ParsedEmbed,
+  title: string,
+): HTMLIFrameElement {
+  const el = doc.createElement('iframe');
+  applyEmbedIframe(el, embed, title);
+  return el;
+}

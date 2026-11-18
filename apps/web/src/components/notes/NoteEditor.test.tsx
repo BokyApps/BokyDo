@@ -61,6 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  document.querySelectorAll('[data-testid="reveal-overlay"]').forEach((el) => el.remove());
 });
 
 const toggle = () => container.querySelector('button[aria-pressed]') as HTMLButtonElement;
@@ -149,6 +150,30 @@ describe('NoteEditor markdown toggle & view sync', () => {
       toggle().dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(textarea()!.readOnly).toBe(true);
-    expect(h.editor.setEditable).toHaveBeenCalledWith(false);
+    expect(h.editor.setEditable).toHaveBeenCalledWith(false, false);
+  });
+
+  it('reveal plaintext is portaled outside the editor root DOM', async () => {
+    await act(async () => {
+      root.render(
+        <NoteEditor
+          markdown="hello"
+          onChange={() => {}}
+          revealState={{
+            plaintext: 'TOP SECRET',
+            anchor: { top: 0, left: 0, bottom: 0, right: 0 },
+          }}
+          onCloseReveal={() => {}}
+        />,
+      );
+    });
+    const editorRoot = container.querySelector('.bk-note-editor');
+    expect(editorRoot).not.toBeNull();
+    expect(editorRoot!.textContent).not.toContain('TOP SECRET');
+    const overlay = document.querySelector('[data-testid="reveal-overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(editorRoot!.contains(overlay!)).toBe(false);
+    expect(document.body.contains(overlay!)).toBe(true);
+    expect(overlay!.textContent).toContain('TOP SECRET');
   });
 });

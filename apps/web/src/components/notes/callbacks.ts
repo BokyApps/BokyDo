@@ -1,5 +1,13 @@
 import type { Editor } from '@tiptap/core';
 
+/** Viewport-relative rectangle of the censored trigger, used to position the reveal overlay. */
+export interface RevealAnchor {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}
+
 /** The subset of NoteEditorProps that NodeViews and editor props need at runtime. */
 export interface NoteCallbacks {
   onUploadFile:
@@ -8,8 +16,12 @@ export interface NoteCallbacks {
   searchNotes: ((q: string) => Promise<{ id: string; title: string }[]>) | undefined;
   searchTasks: ((q: string) => Promise<{ id: string; content: string }[]>) | undefined;
   onCensor: ((plaintextMarkdown: string) => Promise<string | null>) | undefined;
-  onReveal: ((token: string) => Promise<string | null>) | undefined;
+  /** CONTRACT CHANGE (review): Reveal is fire-and-forget. It never returns plaintext to the
+   *  editor — the page unlocks and shows a portal overlay outside the editor root. */
+  onReveal: ((token: string, anchor: RevealAnchor) => void) | undefined;
   onUncensor: ((token: string) => Promise<string | null>) | undefined;
+  /** Called when a Cut is refused because the selection contains a censored node. */
+  onProtectedCut: (() => void) | undefined;
 }
 
 export const EMPTY_CALLBACKS: NoteCallbacks = {
@@ -20,6 +32,7 @@ export const EMPTY_CALLBACKS: NoteCallbacks = {
   onCensor: undefined,
   onReveal: undefined,
   onUncensor: undefined,
+  onProtectedCut: undefined,
 };
 
 interface CallbacksRef {

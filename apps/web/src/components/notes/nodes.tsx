@@ -2,11 +2,19 @@ import { Mark, mergeAttributes, Node, type NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getCallbacks } from './callbacks.js';
-import { browserSupportsCredentialless, parseEmbedUrl } from './embed.js';
-import { CENSORED_PLACEHOLDER, classifyHref, markdownToInline } from './markdown.js';
-
-const NOTE_FILE_SRC = /^\/api\/v1\/note-files\/[0-9a-fA-F-]{36}$/;
+import { applyUncensored } from './censor-command.js';
+import { type RevealAnchor, getCallbacks } from './callbacks.js';
+import { browserSupportsCredentialless, createEmbedIframe, parseEmbedUrl } from './embed.js';
+import {
+  CENSORED_PLACEHOLDER,
+  classifyHref,
+  isValidCensorToken,
+  isValidEmbedUrl,
+  isValidInternalChip,
+  isValidNoteFileId,
+  NOTE_FILE_SRC_RE,
+  NOTE_FILE_PREFIX,
+} from './markdown.js';
 
 function domString(value: unknown): string {
   return value == null ? '' : String(value);
@@ -14,13 +22,14 @@ function domString(value: unknown): string {
 
 // ---------------------------------------------------------------------------------------------
 // Link mark (safeHref only). Unsafe hrefs are dropped on parse AND on paste by returning false.
+// Link titles are preserved (review: link titles must not be lost).
 // ---------------------------------------------------------------------------------------------
 
 export const SafeLink = Mark.create({
   name: 'link',
   inclusive: false,
   addAttributes() {
-    return { href: { default: '' } };
+    return { href: { default: '' }, title: { default: null } };
   },
   parseHTML() {
     return [
@@ -30,7 +39,9 @@ export const SafeLink = Mark.create({
           if (typeof el === 'string') return false;
           const href = el.getAttribute('href') ?? '';
           const cls = classifyHref(href);
-          return cls.kind === 'link' ? { href: cls.href } : false;
+          if (cls.kind !== 'link') return false;
+          const title = el.getAttribute('title');
+          return { href: cls.href, ...(title ? { title } : {}) };
         },
       },
     ];
@@ -49,7 +60,7 @@ export const SafeLink = Mark.create({
 });
 
 // ---------------------------------------------------------------------------------------------
-// Note-file image: only /api/v1/note-files/<uuid> is ever rendered as an <img>.
+// Note-file image: only /api/v1/note-files/<uuid>(\?inline=1)? is ever rendered as an <img>.
 // ---------------------------------------------------------------------------------------------
 
 export const NoteImage = Node.create({
@@ -68,22 +79,26 @@ export const NoteImage = Node.create({
         getAttrs: (el) => {
           if (typeof el === 'string') return false;
           const src = el.getAttribute('src') ?? '';
-          const id = el.getAttribute('data-id') ?? '';
-          const cls = classifyHref(src.replace('?inline=1', ''));
-          const fileId =
-            cls.kind === 'file' ? cls.id : NOTE_FILE_SRC.test(id) ? id.slice(-36) : null;
-          return fileId ? { id: fileId, alt: el.getAttribute('alt') ?? '' } : false;
+          const match = NOTE_FILE_SRC_RE.exec(src);
+          const id = match?.[1];
+          if (!id) return false;
+          const dataId = el.getAttribute('data-id');
+          // If a data-id is present it must agree with the (only trusted) src.
+          if (dataId && dataId !== id) return false;
+          return { id, alt: el.getAttribute('alt') ?? '' };
         },
       },
     ];
   },
   renderHTML({ node, HTMLAttributes }) {
+    const id = isValidNoteFileId(node.attrs.id) ? node.attrs.id : '';
+    if (!id) return ['span', { class: 'bk-note-image-missing' }, CENSORED_PLACEHOLDER];
     return [
       'img',
       mergeAttributes(HTMLAttributes, {
         'data-note-image': '1',
-        'data-id': domString(node.attrs.id),
-        src: `/api/v1/note-files/${domString(node.attrs.id)}?inline=1`,
+        'data-id': id,
+        src: `${NOTE_FILE_PREFIX}${id}?inline=1`,
         alt: domString(node.attrs.alt),
         class: 'bk-note-image',
       }),
@@ -107,21 +122,25 @@ export const FileChip = Node.create({
     return [
       {
         tag: 'a[data-file-chip]',
-        getAttrs: (el) =>
-          typeof el === 'string'
-            ? false
-            : { id: el.getAttribute('data-id') ?? '', name: el.textContent ?? '' },
+        getAttrs: (el) => {
+          if (typeof el === 'string') return false;
+          const id = el.getAttribute('data-id') ?? '';
+          if (!isValidNoteFileId(id)) return false;
+          return { id, name: el.textContent ?? '' };
+        },
       },
     ];
   },
   renderHTML({ node, HTMLAttributes }) {
     const name = domString(node.attrs.name) || 'file';
+    const id = isValidNoteFileId(node.attrs.id) ? node.attrs.id : '';
+    if (!id) return ['span', { class: 'bk-file-chip' }, name];
     return [
       'a',
       mergeAttributes(HTMLAttributes, {
         'data-file-chip': '1',
-        'data-id': domString(node.attrs.id),
-        href: `/api/v1/note-files/${domString(node.attrs.id)}`,
+        'data-id': id,
+        href: `${NOTE_FILE_PREFIX}${id}`,
         download: name,
         rel: 'noopener noreferrer',
         class: 'bk-file-chip',
@@ -166,24 +185,25 @@ export const InternalChip = Node.create({
     return [
       {
         tag: 'span[data-internal-chip]',
-        getAttrs: (el) =>
-          typeof el === 'string'
-            ? false
-            : {
-                kind: el.getAttribute('data-kind') === 'task' ? 'task' : 'note',
-                id: el.getAttribute('data-id') ?? '',
-                label: el.getAttribute('data-label') ?? '',
-              },
+        getAttrs: (el) => {
+          if (typeof el === 'string') return false;
+          const kind = el.getAttribute('data-kind') === 'task' ? 'task' : 'note';
+          const id = el.getAttribute('data-id') ?? '';
+          if (!isValidInternalChip(kind, id)) return false;
+          return { kind, id, label: el.getAttribute('data-label') ?? '' };
+        },
       },
     ];
   },
   renderHTML({ node, HTMLAttributes }) {
+    const kind = node.attrs.kind === 'task' ? 'task' : 'note';
+    const id = isValidNoteFileId(node.attrs.id) ? node.attrs.id : '';
     return [
       'span',
       mergeAttributes(HTMLAttributes, {
         'data-internal-chip': '1',
-        'data-kind': domString(node.attrs.kind),
-        'data-id': domString(node.attrs.id),
+        'data-kind': kind,
+        'data-id': id,
         'data-label': domString(node.attrs.label),
         class: 'bk-internal-chip',
       }),
@@ -197,102 +217,71 @@ export const InternalChip = Node.create({
 
 // ---------------------------------------------------------------------------------------------
 // Censored span: inline atom. Its DOM is only ever the █████ block — cleartext never enters the
-// document. "Reveal" shows cleartext in a transient, non-selectable overlay (see below).
+// editor document or DOM. Reveal is fire-and-forget: the page shows the plaintext in a portal
+// overlay outside the editor root (CONTRACT CHANGE), and owns its whole lifecycle.
 // ---------------------------------------------------------------------------------------------
 
-interface RevealOverlayProps {
-  plaintext: string;
-  onClose: () => void;
+function anchorFrom(el: HTMLElement | null): RevealAnchor {
+  const r = el?.getBoundingClientRect();
+  return {
+    top: r?.top ?? 0,
+    left: r?.left ?? 0,
+    bottom: r?.bottom ?? 0,
+    right: r?.right ?? 0,
+  };
 }
 
-/** Presentational overlay, exported for headless tests. Not part of the ProseMirror document. */
-export function RevealOverlay({ plaintext, onClose }: RevealOverlayProps) {
-  const { t } = useTranslation();
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.focus();
-    const timer = window.setTimeout(onClose, 60_000);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [onClose]);
-  return (
-    <div
-      ref={ref}
-      className="bk-reveal-overlay select-none"
-      contentEditable={false}
-      role="status"
-      tabIndex={-1}
-      onBlur={onClose}
-      data-testid="reveal-overlay"
-    >
-      <span className="bk-reveal-text">{plaintext}</span>
-      <button type="button" contentEditable={false} onClick={onClose} className="bk-reveal-close">
-        {t('notes.editor.censorClose', { defaultValue: 'Close' })}
-      </button>
-    </div>
-  );
-}
-
-function CensoredView({ node, editor, getPos, deleteNode }: NodeViewProps) {
+function CensoredView({ node, editor }: NodeViewProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [revealed, setRevealed] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const token = domString(node.attrs.token);
-  const closeReveal = useCallback(() => setRevealed(null), []);
 
-  const reveal = async () => {
+  const reveal = useCallback(() => {
     setMenuOpen(false);
     const cb = getCallbacks(editor);
-    if (!cb.onReveal) return;
-    const plaintext = await cb.onReveal(token);
-    if (plaintext != null) setRevealed(plaintext);
-  };
+    // Never receive plaintext here. The page unlocks and renders the overlay in a portal.
+    cb.onReveal?.(token, anchorFrom(triggerRef.current));
+  }, [editor, token]);
 
-  const removeCensor = async () => {
+  const removeCensor = useCallback(async () => {
     setMenuOpen(false);
     const cb = getCallbacks(editor);
     if (!cb.onUncensor) return;
+    if (!editor.isEditable) return;
+    // The page already asks for confirmation before unlocking; keep that contract. The helper
+    // re-finds the exact token in the CURRENT doc and aborts if it changed/was removed, requires
+    // an editable editor, and keeps history (undo restores the token).
     const plaintext = await cb.onUncensor(token);
     if (plaintext == null) return;
-    const inline = markdownToInline(plaintext);
-    const from = getPos();
-    if (typeof from !== 'number') return;
-    const to = from + node.nodeSize;
-    if (inline.length === 0) {
-      deleteNode();
-    } else {
-      editor.chain().focus().insertContentAt({ from, to }, inline).run();
-    }
-  };
+    applyUncensored(editor, token, plaintext);
+  }, [editor, token]);
 
   return (
     <NodeViewWrapper as="span" className="bk-censored-wrap">
-      <span
+      <button
+        ref={triggerRef}
+        type="button"
         role="img"
         aria-label={t('notes.editor.censoredAriaLabel', { defaultValue: 'Censored text' })}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
         className="bk-censored-block"
         contentEditable={false}
         onClick={() => setMenuOpen((open) => !open)}
       >
         {CENSORED_PLACEHOLDER}
-      </span>
+      </button>
       {menuOpen && (
-        <span className="bk-censor-menu" contentEditable={false}>
-          <button type="button" onClick={() => void reveal()}>
+        <span className="bk-censor-menu" role="menu" contentEditable={false}>
+          <button type="button" role="menuitem" onClick={() => void reveal()}>
             {t('notes.editor.censorReveal', { defaultValue: 'Reveal' })}
           </button>
-          <button type="button" onClick={() => void removeCensor()}>
+          <button type="button" role="menuitem" onClick={() => void removeCensor()}>
             {t('notes.editor.censorRemove', { defaultValue: 'Remove censor' })}
           </button>
         </span>
       )}
-      {revealed !== null && <RevealOverlay plaintext={revealed} onClose={closeReveal} />}
     </NodeViewWrapper>
   );
 }
@@ -310,21 +299,25 @@ export const Censored = Node.create({
     return [
       {
         tag: 'span[data-censored]',
-        getAttrs: (el) =>
-          typeof el === 'string' ? false : { token: el.getAttribute('data-token') ?? '' },
+        getAttrs: (el) => {
+          if (typeof el === 'string') return false;
+          const token = el.getAttribute('data-token') ?? '';
+          // Strict parseToken: a structurally-shaped but crypto-invalid token stays text.
+          return isValidCensorToken(token) ? { token } : false;
+        },
       },
     ];
   },
   renderHTML({ node, HTMLAttributes }) {
-    // Only the placeholder ever reaches the DOM / clipboard HTML — never cleartext.
+    // Only the placeholder (and the ciphertext token) ever reaches the DOM / clipboard HTML.
+    const token = isValidCensorToken(node.attrs.token) ? domString(node.attrs.token) : '';
     return [
       'span',
       mergeAttributes(HTMLAttributes, {
-        'data-censored': '1',
-        'data-token': domString(node.attrs.token),
+        ...(token ? { 'data-censored': '1', 'data-token': token } : {}),
         class: 'bk-censored-block',
         role: 'img',
-        'aria-label': 'Censored text',
+        'aria-label': CENSORED_PLACEHOLDER,
       }),
       CENSORED_PLACEHOLDER,
     ];
@@ -341,14 +334,39 @@ export const Censored = Node.create({
 function EmbedView({ node }: NodeViewProps) {
   const { t } = useTranslation();
   const [playing, setPlaying] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
   const label = domString(node.attrs.label);
   const url = domString(node.attrs.url);
   const embed = parseEmbedUrl(url);
+  const canPlay = browserSupportsCredentialless();
+  const providerLabel =
+    embed?.provider === 'youtube'
+      ? t('notes.editor.embedProviderYoutube', { defaultValue: 'YouTube' })
+      : t('notes.editor.embedProviderDrive', { defaultValue: 'Google Drive' });
+  const frameTitle = label || providerLabel;
+
+  // A changed URL must not inherit the playing state from the previous one.
+  const prevUrl = useRef(url);
+  useEffect(() => {
+    if (prevUrl.current !== url) {
+      prevUrl.current = url;
+      setPlaying(false);
+    }
+  }, [url]);
 
   useEffect(() => {
-    if (playing && iframeRef.current) iframeRef.current.setAttribute('credentialless', '');
-  }, [playing]);
+    const host = hostRef.current;
+    if (!host) return;
+    host.replaceChildren();
+    if (!playing || !canPlay) return;
+    // Recompute the canonical embed URL from the attribute at click time; never trust a stale one.
+    const current = parseEmbedUrl(url);
+    if (!current) return;
+    host.appendChild(createEmbedIframe(document, current, frameTitle));
+    return () => {
+      host.replaceChildren();
+    };
+  }, [playing, canPlay, url, frameTitle]);
 
   if (!embed) {
     // Defensive: an embed node should only ever hold a validated URL. Show a safe link/text.
@@ -359,11 +377,6 @@ function EmbedView({ node }: NodeViewProps) {
     );
   }
 
-  const canPlay = browserSupportsCredentialless();
-  const providerLabel =
-    embed.provider === 'youtube'
-      ? t('notes.editor.embedProviderYoutube', { defaultValue: 'YouTube' })
-      : t('notes.editor.embedProviderDrive', { defaultValue: 'Google Drive' });
   const openLink = (
     <a
       href={embed.openUrl}
@@ -380,16 +393,7 @@ function EmbedView({ node }: NodeViewProps) {
   if (playing && canPlay) {
     return (
       <NodeViewWrapper as="div" className="bk-embed-card" contentEditable={false}>
-        <iframe
-          ref={iframeRef}
-          src={embed.embedUrl}
-          title={label || providerLabel}
-          sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
-          referrerPolicy="strict-origin-when-cross-origin"
-          allow="encrypted-media; picture-in-picture; fullscreen"
-          loading="lazy"
-          className="bk-embed-frame"
-        />
+        <div ref={hostRef} className="bk-embed-frame-host" contentEditable={false} />
         <div className="bk-embed-footer">
           <span className="bk-embed-label">{label || providerLabel}</span>
           {openLink}
@@ -432,26 +436,28 @@ export const Embed = Node.create({
     return [
       {
         tag: 'div[data-embed]',
-        getAttrs: (el) =>
-          typeof el === 'string'
-            ? false
-            : {
-                label: el.getAttribute('data-label') ?? '',
-                url: el.getAttribute('data-url') ?? '',
-              },
+        getAttrs: (el) => {
+          if (typeof el === 'string') return false;
+          const url = el.getAttribute('data-url') ?? '';
+          if (!isValidEmbedUrl(url)) return false;
+          return { label: el.getAttribute('data-label') ?? '', url };
+        },
       },
     ];
   },
   renderHTML({ node, HTMLAttributes }) {
+    const url = domString(node.attrs.url);
+    const label = domString(node.attrs.label);
+    if (!isValidEmbedUrl(url)) return ['div', { class: 'bk-embed-card' }, label || url];
     return [
       'div',
       mergeAttributes(HTMLAttributes, {
         'data-embed': '1',
-        'data-label': domString(node.attrs.label),
-        'data-url': domString(node.attrs.url),
+        'data-label': label,
+        'data-url': url,
         class: 'bk-embed-card',
       }),
-      domString(node.attrs.label) || domString(node.attrs.url),
+      label || url,
     ];
   },
   addNodeView() {
@@ -501,12 +507,8 @@ export const NoteUpload = Node.create({
   parseHTML() {
     return []; // pasted placeholders never persist — they become plain text
   },
-  renderHTML({ node }) {
-    return [
-      'span',
-      { 'data-note-upload': '1', class: 'bk-upload' },
-      node.attrs.status === 'failed' ? 'Upload failed' : 'Uploading…',
-    ];
+  renderHTML() {
+    return ['span', { 'data-note-upload': '1', class: 'bk-upload' }];
   },
   addNodeView() {
     return ReactNodeViewRenderer(NoteUploadView);
