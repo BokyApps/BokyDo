@@ -327,26 +327,49 @@ describe.skipIf(!TEST_DATABASE_URL)('backups and restore', { timeout: 60_000 }, 
     expect(uploaded.statusCode).toBe(201);
     const fileId = uploaded.json().id as string;
 
-    let removed = false;
-    const service = new BackupService({
+    // A purge after the snapshot: row and bytes both gone. The archive would disagree with the
+    // snapshot, so the backup fails as busy and leaves no partial file.
+    const purging = new BackupService({
       sql: t.db.sql,
       dataDir: t.dataDir,
       secretsDir: t.dataDir,
       afterSnapshot: async () => {
-        removed = true;
-        // A purge deleted the bytes after the snapshot fixed the id list that names them.
+        await t.db.db.delete(noteFiles).where(eq(noteFiles.id, fileId));
         await rm(path.join(t.dataDir, 'note-files', fileId));
       },
     });
-    // The row and the archive must agree; a missing expected file fails the backup instead of
-    // producing one that silently lacks it.
-    await expect(service.create(PASSPHRASE)).rejects.toMatchObject({ code: 'busy' });
-    expect(removed).toBe(true);
+    await expect(purging.create(PASSPHRASE)).rejects.toMatchObject({ code: 'busy' });
     expect(
       (await readdir(path.join(t.dataDir, 'backups'))).filter((n) => n.endsWith('.part')),
     ).toEqual([]);
-    // The real service takes the same view while the row still names missing bytes.
-    await expect(t.app.services.backups.create(PASSPHRASE)).rejects.toMatchObject({ code: 'busy' });
+  });
+
+  it('skips and reports a file whose bytes were already lost, instead of failing every backup', async () => {
+    await t.app.services.settings.update(
+      { 'backups.passphrase': PASSPHRASE },
+      { userId: null, ip: null },
+    );
+    const created = await admin.http.post('/api/v1/notes', { title: 'Lost bytes' });
+    const noteId = created.json().note.id as string;
+    const uploaded = await admin.http.request({
+      method: 'POST',
+      url: `/api/v1/notes/${noteId}/files`,
+      headers: { 'content-type': 'application/octet-stream', 'x-filename': 'lost.png' },
+      payload: Buffer.from('lost bytes'),
+    });
+    const fileId = uploaded.json().id as string;
+    // Bytes gone, row still there: lost before any backup, so a retry would never help.
+    await rm(path.join(t.dataDir, 'note-files', fileId));
+    const missing: string[] = [];
+    const service = new BackupService({
+      sql: t.db.sql,
+      dataDir: t.dataDir,
+      secretsDir: t.dataDir,
+      onMissingFile: (kind, id) => missing.push(`${kind}/${id}`),
+    });
+    const info = await service.create(PASSPHRASE);
+    expect(info.name).toBeTruthy();
+    expect(missing).toEqual([`note-files/${fileId}`]);
   });
 
   it('refuses note-file entries that are not plain UUID names', async () => {

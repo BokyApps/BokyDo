@@ -193,7 +193,7 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
       ['/api/v1/notes/{id}', 'delete', ['notes:write']],
       ['/api/v1/notes/{id}/tasks/{taskId}', 'put', ['notes:write', 'tasks:read']],
       ['/api/v1/notes/{id}/tasks/{taskId}', 'delete', ['notes:write']],
-      ['/api/v1/tasks/{taskId}/notes', 'get', ['notes:read']],
+      ['/api/v1/tasks/{taskId}/notes', 'get', ['notes:read', 'tasks:read']],
       ['/api/v1/notes/{id}/files', 'post', ['notes:write']],
       ['/api/v1/note-files/{id}', 'get', ['notes:read']],
     ];

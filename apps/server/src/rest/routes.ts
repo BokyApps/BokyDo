@@ -467,9 +467,9 @@ export const REST_OPERATIONS: RestOperation[] = [
   {
     method: 'get',
     path: '/api/v1/tasks/:taskId/notes',
-    summary: 'Your own notes linked to a task you can see',
+    summary: 'Your own notes linked to a task you can see (also needs tasks:read)',
     tag: 'Notes',
-    scopes: ['notes:read'],
+    scopes: ['notes:read', 'tasks:read'],
     response: taskNotes,
     responses: { '403': notesForbidden },
   },
