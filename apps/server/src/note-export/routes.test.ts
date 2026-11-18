@@ -8,7 +8,6 @@ import { noteFiles, notes } from '../db/schema.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id as newId, SyncUser } from '../test/sync.js';
-import { registerNoteExportRoutes } from './routes.js';
 import { PNG_1X1, readZipEntries, zipText } from './test-support.js';
 
 let t: TestApp;
@@ -21,9 +20,9 @@ const CENSOR = `{{censored:v1:${SALT}:${IV}:c2VjcmV0cGhyYXNl}}`;
 
 beforeEach(async () => {
   t = await testApp({
-    configureForTest: (app, deps) => {
+    // The app registers the export route; the test only needs the same note-files directory.
+    configureForTest: (_app, deps) => {
       store = new AttachmentStore(deps.dataDir, 'note-files');
-      registerNoteExportRoutes(app, { db: deps.db.db, store });
     },
   });
   await t.app.services.settings.markSetupComplete({ userId: null, ip: null });

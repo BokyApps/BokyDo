@@ -113,11 +113,7 @@ function ageUnreferenced(id: string, ms: number) {
 /** Replace the app so a test can inject route registration options. */
 async function appWithQuota(quota: { bytes: number; count: number }): Promise<TestApp> {
   await t?.close();
-  const next = await testApp({
-    configurePluginsForTest: (app) => {
-      app.decorate('noteUploadQuotaForTest', quota);
-    },
-  });
+  const next = await testApp({ noteUploadQuota: quota });
   await next.app.services.settings.markSetupComplete({ userId: null, ip: null });
   return next;
 }
