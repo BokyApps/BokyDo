@@ -190,13 +190,22 @@ describe('source-preservation attributes never leak into the DOM', () => {
   it('src/sep/lead/hash (which may contain censor tokens) are not rendered as HTML attributes', () => {
     const doc = schema.nodeFromJSON(markdownToDoc(`a ${TOKEN} b`));
     const html = serializeFragmentToHtml(doc.content);
-    for (const attr of [' src=', ' sep=', ' lead=', ' hash=', 'data-src', 'data-hash']) {
-      expect(html).not.toContain(attr);
+    for (const attr of [
+      ' src=',
+      ' sep=',
+      ' lead=',
+      ' blockid=',
+      ' previd=',
+      ' nextid=',
+      'data-src',
+      'data-block',
+    ]) {
+      expect(html.toLowerCase()).not.toContain(attr);
     }
     // Only the atom's own data-token (ciphertext) may appear; the verbatim paragraph source
     // (which also contains the token) must never be duplicated into a source-meta attribute.
     const paragraph = html.match(/<p[^>]*>/)?.[0] ?? '';
-    expect(paragraph).not.toMatch(/src=|sep=|lead=|hash=/);
+    expect(paragraph).not.toMatch(/src=|sep=|lead=|blockid=|previd=|nextid=/i);
   });
 });
 

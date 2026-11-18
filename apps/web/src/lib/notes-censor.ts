@@ -1,4 +1,13 @@
+import {
+  censorLockGeneration,
+  lockCensored,
+  onCensorLock,
+  type LockReason,
+} from './censor-lock.js';
 import { CensorError, censor, censorKeys, uncensor } from './censor.js';
+
+export { censorLockGeneration, lockCensored, onCensorLock };
+export type { LockReason };
 
 /**
  * The UI state machine behind the editor's three censor callbacks (ADR 0025 "Censoring" and its
@@ -12,6 +21,8 @@ import { CensorError, censor, censorKeys, uncensor } from './censor.js';
  *  - The "cannot be recovered" warning is shown once per session, before the first censor.
  *  - Remove censor asks for confirmation first.
  *  - A lock/clear while unlocking is treated as "locked -> close silently", never an error.
+ *  - Every flow captures the lock generation BEFORE its first await (Remove before the
+ *    confirmation dialog), so a lock during a prompt can never deliver a plaintext result.
  */
 
 const BAD_PASSWORD = 'Wrong password. Try again.';
@@ -44,26 +55,87 @@ export interface CensorSession {
 const defaultSession: CensorSession = { warned: false };
 
 // ---------------------------------------------------------------------------------------------
-// Lock signal: Lock / pagehide clear the key cache and also close any open password dialog and
-// reveal overlay. Sign-out clears the cache directly in AppShell (the app unmounts there).
+// Password prompts: one at a time; a new prompt supersedes (resolves as cancelled) the old one.
 // ---------------------------------------------------------------------------------------------
 
-const lockListeners = new Set<() => void>();
-
-export function onCensorLock(fn: () => void): () => void {
-  lockListeners.add(fn);
-  return () => {
-    lockListeners.delete(fn);
-  };
+export interface PasswordPromptRequest {
+  id: number;
+  promise: Promise<string | null>;
 }
 
-export function lockCensors(): void {
-  censorKeys.clear();
-  for (const fn of lockListeners) fn();
+/**
+ * Serialises password prompts. A Reveal and a Remove can both want a password (or a second
+ * Reveal can arrive while the first dialog is open); showing two dialogs used to overwrite the
+ * single stored resolver and hang the first operation. Newest wins: the earlier prompt resolves
+ * `null` (cancelled), which every flow already treats as "nothing happened".
+ */
+export class PasswordPromptQueue {
+  private seq = 0;
+  private active: { id: number; resolve: (value: string | null) => void } | null = null;
+
+  ask(): PasswordPromptRequest {
+    this.active?.resolve(null);
+    this.active = null;
+    let resolve!: (value: string | null) => void;
+    const promise = new Promise<string | null>((r) => {
+      resolve = r;
+    });
+    const id = ++this.seq;
+    this.active = { id, resolve };
+    return { id, promise };
+  }
+
+  /** Settle the prompt if it is still the active one; returns whether it was. */
+  settle(id: number, value: string | null): boolean {
+    if (this.active?.id !== id) return false;
+    const { resolve } = this.active;
+    this.active = null;
+    resolve(value);
+    return true;
+  }
+
+  /** Resolve the active prompt as cancelled (lock, unmount). */
+  cancelAll(): void {
+    const active = this.active;
+    this.active = null;
+    active?.resolve(null);
+  }
+
+  get activeId(): number | null {
+    return this.active?.id ?? null;
+  }
 }
 
 function messageFor(err: unknown): string | null {
   return err instanceof CensorError ? (MESSAGES[err.code] ?? null) : null;
+}
+
+/** The autosave surface the censor flow needs; kept structural so the controller stays decoupled. */
+export interface BodyPause {
+  pauseBody(): void;
+  resumeBody(): void;
+  flushNextUpdate(): void;
+}
+
+/**
+ * P1: censor a selection while the body autosave is paused. `pauseBody` runs synchronously before
+ * the prompt is opened (the flow calls `askPassword` before its first await), so a plaintext
+ * revision cannot be PATCHed behind the dialog. On success the token revision is marked urgent;
+ * cancel/failure resumes the normal debounce. Exported for the ordering regression test.
+ */
+export async function censorWithBodyPause(
+  autosave: BodyPause,
+  flow: { onCensor(markdown: string): Promise<string | null> },
+  plaintext: string,
+): Promise<string | null> {
+  autosave.pauseBody();
+  try {
+    const token = await flow.onCensor(plaintext);
+    if (token !== null) autosave.flushNextUpdate();
+    return token;
+  } finally {
+    autosave.resumeBody();
+  }
 }
 
 export class CensorFlow {
@@ -76,15 +148,19 @@ export class CensorFlow {
 
   /** Censor a selection: warn once, ask for a password (+ confirm), return the token or null. */
   async onCensor(plaintext: string): Promise<string | null> {
+    const generation = censorLockGeneration();
     let warning = !this.session.warned;
     this.session.warned = true;
     let error: string | null = null;
     for (;;) {
       const password = await this.prompts.askPassword({ confirm: true, warning, error });
+      // Locked while the prompt was open: close silently, reveal nothing, encrypt nothing.
+      if (censorLockGeneration() !== generation) return null;
       warning = false; // the warning is shown once, even across error retries
       if (password === null) return null;
       try {
-        return await censor(plaintext, password);
+        const token = await censor(plaintext, password);
+        return censorLockGeneration() === generation ? token : null;
       } catch (err) {
         const message = messageFor(err);
         if (message === null) throw err;
@@ -100,7 +176,10 @@ export class CensorFlow {
 
   /** Remove censor: confirm first, then the same explicit unlock flow. */
   async onUncensor(token: string): Promise<string | null> {
+    const generation = censorLockGeneration();
     if (!(await this.prompts.confirmRemove())) return null;
+    // A lock while the confirmation dialog was open voids the whole operation.
+    if (censorLockGeneration() !== generation) return null;
     return this.unlock(token);
   }
 
@@ -117,22 +196,30 @@ export class CensorFlow {
 
   private async runUnlock(token: string): Promise<string | null> {
     const generation = censorKeys.generation;
+    const lock = censorLockGeneration();
     // tryUnlock tries a cached key or up to three remembered passwords, never on render.
     const cached = await censorKeys.tryUnlock(token);
+    if (lock !== censorLockGeneration()) return null;
     if (cached !== null) return cached;
     // Cleared (locked) while deriving: close silently rather than asking for a password.
     if (censorKeys.generation !== generation) return null;
-    return this.promptAndDecrypt(token, generation);
+    return this.promptAndDecrypt(token, generation, lock);
   }
 
-  private async promptAndDecrypt(token: string, generation: number): Promise<string | null> {
+  private async promptAndDecrypt(
+    token: string,
+    generation: number,
+    lock: number,
+  ): Promise<string | null> {
     let error: string | null = null;
     for (;;) {
       const password = await this.prompts.askPassword({ confirm: false, warning: false, error });
+      if (lock !== censorLockGeneration()) return null;
       if (password === null) return null;
       try {
         const plaintext = await uncensor(token, password, censorKeys);
-        if (censorKeys.generation !== generation) return null; // locked while deriving
+        if (lock !== censorLockGeneration()) return null; // locked while deriving
+        if (censorKeys.generation !== generation) return null; // cache cleared while deriving
         return plaintext;
       } catch (err) {
         if (err instanceof CensorError) {

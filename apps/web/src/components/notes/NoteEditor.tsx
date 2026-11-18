@@ -3,6 +3,7 @@ import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
 import { EditorContent, useEditor } from '@tiptap/react';
+import { closeHistory } from '@tiptap/pm/history';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -83,6 +84,30 @@ export function buildExtensions() {
 
 const editorSchema = getSchema(buildExtensions());
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph', content: [] }] };
+
+/**
+ * Close the current undo group before applying an edit made in the Markdown source view, so Undo
+ * after leaving the source view returns to the state before that whole edit (E7). Exported for the
+ * regression test that exercises real history.
+ */
+export function closeHistoryBeforeSourceApply(editor: Editor): void {
+  editor.view.dispatch(closeHistory(editor.state.tr));
+}
+
+/**
+ * E5: `transformCopied` always censors the slice ProseMirror serialises into the DataTransfer, so
+ * a drag can never carry a token. ProseMirror also stores that transformed slice in
+ * `view.dragging`, which an in-editor drop would insert as `█████`; one microtask after the
+ * dragstart event, put the REAL selection slice back. The DataTransfer has already been written
+ * with the placeholder by then, and the drop happens much later.
+ */
+export function retainRealDragSlice(editor: Editor): void {
+  const slice = editor.state.selection.content();
+  queueMicrotask(() => {
+    const dragging = editor.view.dragging;
+    if (dragging) editor.view.dragging = { slice, move: dragging.move };
+  });
+}
 
 export interface ParsedNote {
   doc: JSONContent;
@@ -202,6 +227,8 @@ export function NoteEditor(props: NoteEditorProps) {
   const editorRef = useRef<Editor | null>(null);
   const lastEmitted = useRef<string | null>(null);
   const applyingExternal = useRef(false);
+  // A textarea edit is a distinct history entry: applying it must not merge into earlier steps.
+  const sourceEdit = useRef(false);
   const dragRef = useRef<DragCopyController>(createDragCopyController());
 
   // A fresh callbacks object for the Toolbar each render (it is used in event handlers there).
@@ -244,10 +271,14 @@ export function NoteEditor(props: NoteEditorProps) {
           return true;
         },
         handleDOMEvents: {
-          // Internal drags keep the real censored node (tokens), so moving it does not turn it into
-          // the █████ placeholder. Return false so ProseMirror's own drag handling still runs.
+          // The DataTransfer only ever carries █████ (transformCopied). The in-memory drag slice
+          // ProseMirror uses for an in-editor drop gets the real atom back one microtask later,
+          // so moving a censored span inside the note still moves the token. Return false so
+          // ProseMirror's own drag handling (and DataTransfer writing) still runs.
           dragstart: () => {
             dragRef.current.markDragStart();
+            const current = editorRef.current;
+            if (current) retainRealDragSlice(current);
             return false;
           },
           dragend: () => {
@@ -309,6 +340,13 @@ export function NoteEditor(props: NoteEditorProps) {
     if (docToMarkdown(editor.getJSON()) === markdown) return;
     applyingExternal.current = true;
     try {
+      // Review fix (undo): an edit made in the Markdown source view is a whole-document change.
+      // Close the current history group first so Undo returns to the state before the source
+      // edit instead of merging it into the last WYSIWYG keystrokes.
+      if (sourceEdit.current) {
+        sourceEdit.current = false;
+        closeHistoryBeforeSourceApply(editor);
+      }
       editor.commands.setContent(parsed.doc, { emitUpdate: false });
     } finally {
       applyingExternal.current = false;
@@ -323,6 +361,12 @@ export function NoteEditor(props: NoteEditorProps) {
   const pickFiles = (files: File[]) => {
     const current = editorRef.current;
     if (current) void insertFiles(files, current, callbacks);
+  };
+
+  // Markdown source edits are applied as one undoable step when the view is left (E7).
+  const onSourceChange = (value: string) => {
+    sourceEdit.current = true;
+    onChangeRef.current(value);
   };
 
   // Safe mode: the produced JSON failed schema validation. Show the raw Markdown in the source
@@ -343,7 +387,7 @@ export function NoteEditor(props: NoteEditorProps) {
             value={markdown}
             readOnly={!editable}
             spellCheck={false}
-            onChange={(e) => onChangeRef.current(e.target.value)}
+            onChange={(e) => onSourceChange(e.target.value)}
           />
         </div>
         {overlay}
@@ -376,7 +420,7 @@ export function NoteEditor(props: NoteEditorProps) {
             value={markdown}
             readOnly={!editable}
             spellCheck={false}
-            onChange={(e) => onChangeRef.current(e.target.value)}
+            onChange={(e) => onSourceChange(e.target.value)}
           />
         )}
       </div>

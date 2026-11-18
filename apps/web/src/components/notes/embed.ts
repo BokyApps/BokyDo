@@ -75,8 +75,62 @@ export function parseEmbedUrl(raw: string): ParsedEmbed | null {
   return null;
 }
 
-/** A paragraph consisting solely of `::embed[label](url)`. */
-export const EMBED_LINE = /^::embed\[([^\]]*)\]\((.*)\)$/s;
+/**
+ * A paragraph consisting solely of `::embed[label](url)`.
+ *
+ * The label is parsed by the same grammar that writes it (review: a label with `]` used to break
+ * the note on save): `\\`, `\[` and `\]` are escapes, and any other backslash is literal. Parsing
+ * the RAW paragraph also means an escaped `\::embed[...]` can never come back as an atom.
+ */
+export const EMBED_PREFIX = '::embed[';
+
+export function parseEmbedLine(raw: string): { label: string; url: string } | null {
+  const text = raw.trim();
+  if (!text.startsWith(EMBED_PREFIX)) return null;
+  let i = EMBED_PREFIX.length;
+  let label = '';
+  let closed = false;
+  for (; i < text.length; i++) {
+    const ch = text.charAt(i);
+    if (ch === '\\') {
+      const next = text.charAt(i + 1);
+      if (next === '\\' || next === '[' || next === ']' || next === '(' || next === ')') {
+        label += next;
+        i++;
+      } else {
+        label += ch;
+      }
+      continue;
+    }
+    if (ch === ']') {
+      closed = true;
+      break;
+    }
+    label += ch;
+  }
+  if (!closed || text.charAt(i + 1) !== '(') return null;
+  const rest = text.slice(i + 2);
+  if (!rest.endsWith(')')) return null;
+  const url = rest.slice(0, -1).replace(/\\([\\()])/g, '$1');
+  return url.length ? { label, url } : null;
+}
+
+/** The canonical Markdown for an embed atom; `label` may contain `\`, `[` or `]`. */
+export function formatEmbedLine(label: string, url: string): string {
+  const safeLabel = label.replace(/[\r\n]+/g, ' ').replace(/[\\[\]]/g, '\\$&');
+  return `${EMBED_PREFIX}${safeLabel}](${url})`;
+}
+
+/**
+ * The iframe may only be created for the exact canonical URL the user authorised with their click.
+ * A node whose URL changed afterwards (undo, paste, an edit elsewhere) gets the card again, never
+ * a frame for a URL nobody pressed play on (review: changed embed URL loaded without a click).
+ */
+export function authorisedEmbed(authorised: string | null, rawUrl: string): ParsedEmbed | null {
+  if (!authorised) return null;
+  const parsed = parseEmbedUrl(rawUrl);
+  return parsed && parsed.embedUrl === authorised ? parsed : null;
+}
 
 /**
  * Whether a credentialless iframe can be created. Extracted as a pure decision function so the

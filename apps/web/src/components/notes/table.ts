@@ -1,5 +1,6 @@
-import { mergeAttributes } from '@tiptap/core';
+import { Extension, mergeAttributes, type Editor } from '@tiptap/core';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
+import { TextSelection } from '@tiptap/pm/state';
 
 /**
  * Review fix (CSP `style-src 'self'`): stock TableKit emits inline `style` attributes — the table
@@ -8,6 +9,11 @@ import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table
  * these extensions render no `style` at all, using classes / `data-align` for alignment instead.
  * We extend the individual TableKit nodes (rather than the kit) so we keep `tableRole` and the
  * tableEditing plugin (Tab navigation, cell selection) while overriding the DOM output.
+ *
+ * Review fix (edits vanish): a cell is exactly one paragraph of inline content, never `block+`.
+ * The Markdown table grammar can only represent one line per cell, so a second paragraph, a list
+ * or a nested table inside a cell could never survive a save. Enter inside a cell therefore
+ * inserts a hard break, which is representable as `<br>`.
  */
 
 const ALIGNS = new Set(['left', 'center', 'right']);
@@ -44,12 +50,14 @@ export const SafeTable = Table.extend({
 });
 
 export const SafeTableCell = TableCell.extend({
+  content: 'paragraph',
   addAttributes() {
     return { ...this.parent?.(), align: alignAttribute() };
   },
 });
 
 export const SafeTableHeader = TableHeader.extend({
+  content: 'paragraph',
   addAttributes() {
     return { ...this.parent?.(), align: alignAttribute() };
   },
@@ -57,5 +65,37 @@ export const SafeTableHeader = TableHeader.extend({
 
 export const SafeTableRow = TableRow;
 
+/**
+ * Enter inside a table cell: a new paragraph is impossible by schema, so insert a hard break
+ * instead of letting ProseMirror's `splitBlock` fail silently. Shift/Ctrl-Enter keep their
+ * StarterKit behaviour (also a hard break). Outside a cell this returns false, so normal
+ * paragraph splitting still happens.
+ */
+export function insertHardBreakInCell(editor: Editor): boolean {
+  const { selection } = editor.state;
+  // A CellSelection has no textblock parent to split; let ProseMirror ignore Enter there.
+  if (!(selection instanceof TextSelection)) return false;
+  if (!editor.isActive('tableCell') && !editor.isActive('tableHeader')) return false;
+  return editor.commands.setHardBreak();
+}
+
+export const TableCellEnter = Extension.create({
+  name: 'tableCellEnter',
+  // Core's Keymap (Enter -> splitBlock) is a core extension; a higher priority guarantees this
+  // binding is consulted first, so Enter in a cell never attempts an impossible split.
+  priority: 1000,
+  addKeyboardShortcuts() {
+    return {
+      Enter: () => insertHardBreakInCell(this.editor),
+    };
+  },
+});
+
 /** Style-free replacements for TableKit's table/row/cell/header extensions. */
-export const safeTableExtensions = [SafeTable, SafeTableRow, SafeTableCell, SafeTableHeader];
+export const safeTableExtensions = [
+  SafeTable,
+  SafeTableRow,
+  SafeTableCell,
+  SafeTableHeader,
+  TableCellEnter,
+];

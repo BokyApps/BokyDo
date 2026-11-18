@@ -1,10 +1,21 @@
 import { Mark, mergeAttributes, Node, type NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
-import { applyUncensored } from './censor-command.js';
+import { applyUncensored, clearRemovalMark, markCensoredForRemoval } from './censor-command.js';
 import { type RevealAnchor, getCallbacks } from './callbacks.js';
-import { browserSupportsCredentialless, createEmbedIframe, parseEmbedUrl } from './embed.js';
+import {
+  authorisedEmbed,
+  browserSupportsCredentialless,
+  createEmbedIframe,
+  parseEmbedUrl,
+} from './embed.js';
 import {
   CENSORED_PLACEHOLDER,
   classifyHref,
@@ -231,39 +242,70 @@ function anchorFrom(el: HTMLElement | null): RevealAnchor {
   };
 }
 
-function CensoredView({ node, editor }: NodeViewProps) {
+export function CensoredView({ node, editor, getPos }: NodeViewProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLSpanElement>(null);
   const token = domString(node.attrs.token);
 
-  const reveal = useCallback(() => {
+  const closeMenu = useCallback((restoreFocus: boolean) => {
     setMenuOpen(false);
+    if (restoreFocus) triggerRef.current?.focus();
+  }, []);
+
+  // A menu is a keyboard surface: opening it moves focus to the first item. Escape closes it and
+  // returns focus to the trigger; both are part of E7's "native button semantics".
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+  }, [menuOpen]);
+
+  const reveal = useCallback(() => {
+    closeMenu(true);
     const cb = getCallbacks(editor);
     // Never receive plaintext here. The page unlocks and renders the overlay in a portal.
     cb.onReveal?.(token, anchorFrom(triggerRef.current));
-  }, [editor, token]);
+  }, [closeMenu, editor, token]);
 
   const removeCensor = useCallback(async () => {
-    setMenuOpen(false);
+    closeMenu(true);
     const cb = getCallbacks(editor);
-    if (!cb.onUncensor) return;
-    if (!editor.isEditable) return;
-    // The page already asks for confirmation before unlocking; keep that contract. The helper
-    // re-finds the exact token in the CURRENT doc and aborts if it changed/was removed, requires
-    // an editable editor, and keeps history (undo restores the token).
+    if (!cb.onUncensor || !editor.isEditable) return;
+    const pos = typeof getPos === 'function' ? getPos() : undefined;
+    if (pos == null) return;
+    // Bind Remove to THIS atom with a transient id before the async prompt: if the atom is
+    // deleted meanwhile, the late result aborts instead of applying to an identical token
+    // elsewhere (review: never redirect to a duplicate token).
+    const removeId = markCensoredForRemoval(editor, pos);
+    if (!removeId) return;
+    // The page asks for confirmation before unlocking; keep that contract. History is kept, so
+    // undo restores the token.
     const plaintext = await cb.onUncensor(token);
-    if (plaintext == null) return;
-    applyUncensored(editor, token, plaintext);
-  }, [editor, token]);
+    if (plaintext == null) {
+      clearRemovalMark(editor, removeId);
+      return;
+    }
+    if (!applyUncensored(editor, removeId, plaintext)) clearRemovalMark(editor, removeId);
+  }, [closeMenu, editor, getPos, token]);
 
   return (
-    <NodeViewWrapper as="span" className="bk-censored-wrap">
+    <NodeViewWrapper
+      as="span"
+      className="bk-censored-wrap"
+      onKeyDown={(event: ReactKeyboardEvent) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu(true);
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"
-        role="img"
-        aria-label={t('notes.editor.censoredAriaLabel', { defaultValue: 'Censored text' })}
+        aria-label={t('notes.editor.censoredAriaLabel', {
+          defaultValue: 'Censored text, options',
+        })}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         className="bk-censored-block"
@@ -273,8 +315,8 @@ function CensoredView({ node, editor }: NodeViewProps) {
         {CENSORED_PLACEHOLDER}
       </button>
       {menuOpen && (
-        <span className="bk-censor-menu" role="menu" contentEditable={false}>
-          <button type="button" role="menuitem" onClick={() => void reveal()}>
+        <span ref={menuRef} className="bk-censor-menu" role="menu" contentEditable={false}>
+          <button type="button" role="menuitem" onClick={reveal}>
             {t('notes.editor.censorReveal', { defaultValue: 'Reveal' })}
           </button>
           <button type="button" role="menuitem" onClick={() => void removeCensor()}>
@@ -293,7 +335,11 @@ export const Censored = Node.create({
   atom: true,
   selectable: true,
   addAttributes() {
-    return { token: { default: '' } };
+    return {
+      token: { default: '' },
+      // Transient Remove-censor target binding (never rendered, parsed or saved).
+      removeId: { default: null, parseHTML: () => null, renderHTML: () => ({}) },
+    };
   },
   parseHTML() {
     return [
@@ -331,9 +377,8 @@ export const Censored = Node.create({
 // Embed atom: click-to-load, credentialless iframe, always-present "Open in new tab" link.
 // ---------------------------------------------------------------------------------------------
 
-function EmbedView({ node }: NodeViewProps) {
+export function EmbedView({ node }: NodeViewProps) {
   const { t } = useTranslation();
-  const [playing, setPlaying] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
   const label = domString(node.attrs.label);
   const url = domString(node.attrs.url);
@@ -344,29 +389,24 @@ function EmbedView({ node }: NodeViewProps) {
       ? t('notes.editor.embedProviderYoutube', { defaultValue: 'YouTube' })
       : t('notes.editor.embedProviderDrive', { defaultValue: 'Google Drive' });
   const frameTitle = label || providerLabel;
-
-  // A changed URL must not inherit the playing state from the previous one.
-  const prevUrl = useRef(url);
-  useEffect(() => {
-    if (prevUrl.current !== url) {
-      prevUrl.current = url;
-      setPlaying(false);
-    }
-  }, [url]);
+  // The EXACT canonical URL the user pressed Play on. A node whose URL changes afterwards (an
+  // edit, undo, a paste) gets the card again: nothing is fetched from a URL nobody authorised.
+  const [authorised, setAuthorised] = useState<string | null>(null);
+  const playable = authorisedEmbed(authorised, url);
+  const playing = playable !== null;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     host.replaceChildren();
-    if (!playing || !canPlay) return;
-    // Recompute the canonical embed URL from the attribute at click time; never trust a stale one.
-    const current = parseEmbedUrl(url);
-    if (!current) return;
-    host.appendChild(createEmbedIframe(document, current, frameTitle));
+    if (!canPlay) return;
+    const allowed = authorisedEmbed(authorised, url);
+    if (!allowed) return;
+    host.appendChild(createEmbedIframe(document, allowed, frameTitle));
     return () => {
       host.replaceChildren();
     };
-  }, [playing, canPlay, url, frameTitle]);
+  }, [authorised, canPlay, url, frameTitle]);
 
   if (!embed) {
     // Defensive: an embed node should only ever hold a validated URL. Show a safe link/text.
@@ -376,6 +416,7 @@ function EmbedView({ node }: NodeViewProps) {
       </NodeViewWrapper>
     );
   }
+  const authorise = () => setAuthorised(embed.embedUrl);
 
   const openLink = (
     <a
@@ -409,7 +450,7 @@ function EmbedView({ node }: NodeViewProps) {
         <span className="bk-embed-label">{label || embed.id}</span>
       </div>
       {canPlay ? (
-        <button type="button" className="bk-embed-play" onClick={() => setPlaying(true)}>
+        <button type="button" className="bk-embed-play" onClick={authorise}>
           ▶ {t('notes.editor.embedPlay', { defaultValue: 'Play' })}
         </button>
       ) : (

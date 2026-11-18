@@ -41,6 +41,23 @@ export async function api<T>(
   return data as T;
 }
 
+/**
+ * A PATCH that survives the page going away (`pagehide`). `keepalive` lets the browser finish the
+ * request after the document is gone; the CSRF header is the same one `api` sends. Errors are
+ * ignored by design: there is no UI left to report them to.
+ */
+export function keepalivePatch(path: string, body: unknown): void {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (csrfToken) headers[CSRF_HEADER] = csrfToken;
+  void fetch(path, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
 /** POST a raw body with its own content type; the CSRF header and error type are as in `api`. */
 async function sendRaw<T>(path: string, body: Blob, headers: Record<string, string>): Promise<T> {
   if (csrfToken) headers[CSRF_HEADER] = csrfToken;

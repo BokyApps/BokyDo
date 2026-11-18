@@ -48,11 +48,17 @@ export const CORPUS: [string, string][] = [
 function stripSource(node: JSONContent): JSONContent {
   const copy: JSONContent = { ...node };
   if (copy.attrs) {
-    const { src, sep, lead, hash, ...rest } = copy.attrs as Record<string, unknown>;
+    const { src, sep, lead, blockId, prevId, nextId, removeId, ...rest } = copy.attrs as Record<
+      string,
+      unknown
+    >;
     void src;
     void sep;
     void lead;
-    void hash;
+    void blockId;
+    void prevId;
+    void nextId;
+    void removeId;
     copy.attrs = Object.keys(rest).length ? rest : undefined;
     if (!copy.attrs) delete copy.attrs;
   }

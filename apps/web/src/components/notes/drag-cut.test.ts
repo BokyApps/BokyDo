@@ -34,28 +34,37 @@ function textOf(slice: Slice): string {
   return text;
 }
 
-describe('MED: internal drag keeps the censored token', () => {
-  it('transformCopied passes the slice through untouched while dragging (token preserved)', () => {
+describe('HIGH: an outbound drag exports only the █████ placeholder (E5)', () => {
+  it('transformCopied censors the serialised copy even during an internal drag', () => {
     const controller = createDragCopyController();
+    const source = sliceWithCensored();
     controller.markDragStart();
     expect(controller.dragging).toBe(true);
-    const result = controller.transformCopied(sliceWithCensored(), schema);
-    expect(result).toBe(result); // identity: not rewritten into placeholder text
+    // ProseMirror keeps the REAL slice in `view.dragging.slice` for an in-editor drop; only the
+    // DataTransfer text goes through transformCopied, so this must never carry a token.
+    const outbound = controller.transformCopied(source, schema);
     let hasToken = false;
-    result.content.descendants((node) => {
+    outbound.content.descendants((node) => {
       if (node.type.name === 'censored' && node.attrs.token === TOKEN) hasToken = true;
       return true;
     });
-    expect(hasToken).toBe(true);
-    expect(textOf(result)).not.toContain(CENSORED_PLACEHOLDER);
+    expect(hasToken).toBe(false);
+    expect(textOf(outbound)).toContain(CENSORED_PLACEHOLDER);
+    expect(textOf(outbound)).not.toContain(TOKEN);
+    // The in-memory slice is untouched: the editor still holds the real atom.
+    let sourceHasToken = false;
+    source.content.descendants((node) => {
+      if (node.type.name === 'censored' && node.attrs.token === TOKEN) sourceHasToken = true;
+      return true;
+    });
+    expect(sourceHasToken).toBe(true);
   });
 
-  it('ordinary copy / a drag that ends exports only the █████ placeholder (no token)', () => {
+  it('ordinary copy / a drag that ended also exports only the placeholder', () => {
     const controller = createDragCopyController();
     const copy = controller.transformCopied(sliceWithCensored(), schema);
     expect(textOf(copy)).toContain(CENSORED_PLACEHOLDER);
     expect(textOf(copy)).not.toContain(TOKEN);
-    // dragend resets the flag; a subsequent copy is censored again.
     controller.markDragStart();
     controller.markDragEnd();
     expect(controller.dragging).toBe(false);

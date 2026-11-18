@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import {
+  authorisedEmbed,
   browserSupportsCredentialless,
+  formatEmbedLine,
+  parseEmbedLine,
   parseEmbedUrl,
   supportsCredentialless,
-  EMBED_LINE,
 } from './embed.js';
 
 describe('parseEmbedUrl — allow-listed (good)', () => {
@@ -78,14 +80,66 @@ describe('parseEmbedUrl — rejected (bad)', () => {
   }
 });
 
-describe('EMBED_LINE', () => {
+describe('::embed line grammar (E5: hostile labels round-trip)', () => {
+  const URL = 'https://youtu.be/dQw4w9WgXcQ';
+
   it('matches a paragraph that is solely an embed', () => {
-    const m = EMBED_LINE.exec('::embed[My label](https://youtu.be/dQw4w9WgXcQ)');
-    expect(m?.[1]).toBe('My label');
-    expect(m?.[2]).toBe('https://youtu.be/dQw4w9WgXcQ');
+    expect(parseEmbedLine(`::embed[My label](${URL})`)).toEqual({
+      label: 'My label',
+      url: URL,
+    });
   });
+
   it('does not match a paragraph with trailing text', () => {
-    expect(EMBED_LINE.test('::embed[x](https://youtu.be/dQw4w9WgXcQ) trailing')).toBe(false);
+    expect(parseEmbedLine(`::embed[x](${URL}) trailing`)).toBeNull();
+  });
+
+  it('does not match an escaped or otherwise prefixed line', () => {
+    expect(parseEmbedLine(`\\::embed[x](${URL})`)).toBeNull();
+    expect(parseEmbedLine(`text ::embed[x](${URL})`)).toBeNull();
+    expect(parseEmbedLine(`::embed[x](${URL})`)).not.toBeNull();
+  });
+
+  for (const label of [
+    'a]b',
+    'a[b',
+    'a\\b',
+    'x](https://evil.example)',
+    'ends with a backslash \\',
+    '::embed[in a label]',
+    'a](b)[c]\\',
+  ]) {
+    it(`round-trips a label containing ${JSON.stringify(label)}`, () => {
+      const line = formatEmbedLine(label, URL);
+      // The line is a single Markdown line and parses back to exactly the same label.
+      expect(line).not.toContain('\n');
+      expect(parseEmbedLine(line)).toEqual({ label, url: URL });
+    });
+  }
+
+  it('keeps an empty label empty', () => {
+    const line = formatEmbedLine('', URL);
+    expect(parseEmbedLine(line)).toEqual({ label: '', url: URL });
+  });
+});
+
+describe('authorisedEmbed (E6: a changed URL needs a new click)', () => {
+  const A = 'https://youtu.be/dQw4w9WgXcQ';
+  const B = 'https://youtu.be/aaaaaaaaaaa';
+  const canonicalA = parseEmbedUrl(A)!.embedUrl;
+
+  it('creates a frame only for the canonical URL that was authorised', () => {
+    expect(authorisedEmbed(canonicalA, A)?.embedUrl).toBe(canonicalA);
+    // Any equivalent spelling of the same video is still the authorised URL.
+    expect(
+      authorisedEmbed(canonicalA, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')?.embedUrl,
+    ).toBe(canonicalA);
+  });
+
+  it('returns null when the node URL changed after the click', () => {
+    expect(authorisedEmbed(canonicalA, B)).toBeNull();
+    expect(authorisedEmbed(canonicalA, 'javascript:alert(1)')).toBeNull();
+    expect(authorisedEmbed(null, A)).toBeNull();
   });
 });
 
