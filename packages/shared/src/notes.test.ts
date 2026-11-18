@@ -208,11 +208,62 @@ describe('censor tokens', () => {
       expect(parseCensorToken(bad), bad).toBeNull();
   });
 
-  it('redacts valid tokens only', () => {
+  it('redacts valid tokens and malformed look-alikes alike', () => {
     const text = `before ${token('c2VjcmV0')} after`;
     expect(redactCensored(text)).toBe(`before ${CENSOR_PLACEHOLDER} after`);
-    const malformed = '{{censored:v1:not:a:token}}';
-    expect(redactCensored(malformed)).toBe(malformed);
+    // Lenient on purpose: a hand-edited token must not leak its ciphertext-looking middle.
+    expect(redactCensored('{{censored:v1:not:a:token}}')).toBe(CENSOR_PLACEHOLDER);
+    expect(redactCensored(token('c2VjcmV0'))).toBe(CENSOR_PLACEHOLDER);
+  });
+
+  it('accepts any case and optional whitespace after the braces', () => {
+    for (const text of [
+      '{{CENSORED}}',
+      '{{Censored}}',
+      '{{   censored}}',
+      '{{\n\tCENSORED:v1:x}}',
+      '{{  censored:v1:not:a:token}}',
+      '{{censoredsecret}}',
+      'x{{{censored:y}}z',
+    ])
+      expect(redactCensored(text), text).toContain(CENSOR_PLACEHOLDER);
+    expect(redactCensored('x{{{censored:y}}z')).toBe(`x{${CENSOR_PLACEHOLDER}z`);
+  });
+
+  it('leaves ordinary braces and similar words alone', () => {
+    for (const text of [
+      'a {{ b }} c',
+      '{{canceled}}',
+      '{{ censors }}',
+      'plain {text} and }} stray',
+      '',
+    ])
+      expect(redactCensored(text), text).toBe(text);
+  });
+
+  it('without a closer, redacts to the end of the whitespace-free run', () => {
+    expect(redactCensored('{{censored')).toBe(CENSOR_PLACEHOLDER);
+    expect(redactCensored('{{censored:abc')).toBe(CENSOR_PLACEHOLDER);
+    expect(redactCensored('before {{censored:v1:abc still words')).toBe(
+      `before ${CENSOR_PLACEHOLDER} still words`,
+    );
+    // A closer beyond the 100,000-character window is treated as absent.
+    const far = `{{censored${'a'.repeat(100_001)}}} tail`;
+    expect(redactCensored(far)).toBe(`${CENSOR_PLACEHOLDER} tail`);
+  });
+
+  it('scans a hostile megabyte in well under 200 ms', () => {
+    for (const body of [
+      '{{censored '.repeat(100_000),
+      '{{'.repeat(500_000),
+      `${'{{censored '.repeat(50_000)}${'a'.repeat(500_000)}}}`,
+      `{{censored${'x'.repeat(1024 * 1024)}}}`,
+    ]) {
+      const started = performance.now();
+      const redacted = redactCensored(body);
+      expect(performance.now() - started).toBeLessThan(200);
+      expect(redacted).not.toContain('censored');
+    }
   });
 });
 

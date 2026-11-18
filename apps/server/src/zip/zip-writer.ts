@@ -1,3 +1,4 @@
+import { open, type FileHandle } from 'node:fs/promises';
 import { PassThrough, type Readable } from 'node:stream';
 import { createDeflateRaw, crc32 } from 'node:zlib';
 
@@ -91,6 +92,29 @@ export class ZipWriter {
     entry.writeUInt32LE(localOffset, 42);
     this.central.push(Buffer.concat([entry, fileName]));
     this.count++;
+  }
+
+  /**
+   * Add a file from disk. The file is opened before the entry header is written, so a missing
+   * file returns false and leaves no half-written entry; any other open error throws. Once the
+   * entry has started, a read error rejects: the caller aborts the archive, because a ZIP that
+   * silently drops or truncates a file is worse than a broken download.
+   */
+  async addFile(name: string, filePath: string, opts: { date?: Date } = {}): Promise<boolean> {
+    let handle: FileHandle;
+    try {
+      handle = await open(filePath, 'r');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+    try {
+      // autoClose: false keeps the descriptor ours, so the finally below is the single close.
+      await this.add(name, handle.createReadStream({ autoClose: false }), opts);
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+    return true;
   }
 
   /** Write the central directory and end the stream. */

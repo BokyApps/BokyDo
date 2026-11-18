@@ -1,4 +1,6 @@
 import { and, count, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { unlink } from 'node:fs/promises';
+import path from 'node:path';
 import { audit } from '../audit.js';
 import type { AttachmentStore } from '../attachments/store.js';
 import type { Database } from '../db/client.js';
@@ -27,6 +29,11 @@ export interface DeletionBlockers {
 
 export const hasBlockers = (b: DeletionBlockers) =>
   b.projects.length > 0 || b.workspaces.length > 0 || b.lastAdmin;
+
+/** The little of a Fastify request logger that deletion needs. */
+export interface DeletionLog {
+  warn(fields: Record<string, unknown>, message: string): void;
+}
 
 export async function deletionBlockers(
   db: Database | Tx,
@@ -90,13 +97,20 @@ export async function deletionBlockers(
  * the foreign keys, everything only they had: their projects and tasks, notes and note files,
  * labels, filters, reminders, sessions, passkeys, tokens, app authorizations, AI keys, push
  * subscriptions and notifications. Note files are deleted from disk straight away, not left for
- * the stray-file purge. In projects that live on, their tasks and comments stay with no author,
- * their assignments lapse and collaborators' devices are told. Attachment files of deleted
- * projects are removed by the hourly attachment purge. The audit log keeps an `account.deleted`
- * entry with the user's id only.
+ * the stray-file purge; a file that cannot be unlinked is logged by id and left for that purge.
+ * In projects that live on, their tasks and comments stay with no author, their assignments
+ * lapse and collaborators' devices are told. Attachment files of deleted projects are removed by
+ * the hourly attachment purge. The audit log keeps an `account.deleted` entry with the user's id
+ * only.
  */
 export async function deleteAccount(
-  deps: { db: Database; sync: SyncService; noteFileStore: AttachmentStore },
+  deps: {
+    db: Database;
+    sync: SyncService;
+    noteFileStore: AttachmentStore;
+    /** Request logger; a failed unlink is warned about but never fails the deletion. */
+    log?: DeletionLog;
+  },
   userId: string,
   actor: { userId: string; ip: string | null },
 ): Promise<{ deleted: true } | { deleted: false; blockers: DeletionBlockers }> {
@@ -178,6 +192,37 @@ export async function deleteAccount(
     return { deleted: true as const, fileIds: files.map((f) => f.id) };
   });
   if (!outcome.deleted) return outcome;
-  for (const id of outcome.fileIds) await deps.noteFileStore.remove(id);
+  await removeNoteFiles(deps.noteFileStore, outcome.fileIds, deps.log);
   return { deleted: true };
+}
+
+/**
+ * Remove the bytes of the deleted account's note files, after the rows are gone.
+ *
+ * ENOENT is success: an earlier attempt, a manual clean-up or the hourly stray-file sweep may
+ * already have removed the file. Any other error is logged with the file id only — never the
+ * display filename, which can itself be sensitive — and does not fail the deletion: the account
+ * is already erased, and the stray-file sweep removes files that no row names. The `<id>.part`
+ * of a finished upload is removed as well, in case a crash left one behind.
+ */
+async function removeNoteFiles(
+  store: AttachmentStore,
+  ids: string[],
+  log: DeletionLog | undefined,
+): Promise<void> {
+  for (const id of ids) {
+    // Ids come from `note_files.id`; the shape check keeps a bad row from escaping the directory.
+    if (!/^[0-9a-f-]{36}$/.test(id)) continue;
+    for (const name of [id, `${id}.part`]) {
+      try {
+        await unlink(path.join(store.dir, name));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        log?.warn(
+          { err, fileId: id },
+          'note file could not be removed; left for the stray-file sweep',
+        );
+      }
+    }
+  }
 }

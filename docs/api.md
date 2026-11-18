@@ -172,11 +172,15 @@ from a note, and linking a note to a task needs `tasks:read` as well as `notes:w
 answer reveals whether the task exists.
 
 MCP exposes `list_notes`, `get_note`, `create_note`, `update_note`, `archive_note`, `trash_note`,
-`link_note_to_task` and `unlink_note_from_task`. A note body comes back with every censored span
-as `█████`, never as its ciphertext token, and `update_note` refuses a body that would drop one,
-because an AI client has no key and so could never re-create it. `link_note_to_task` also needs
-`tasks:read`, and a write-only token gets only a changed note's id and timestamp back, not its
-body.
+`link_note_to_task` and `unlink_note_from_task`. A note's title, body, snippet, tags, backlink
+titles, file names and linked task text come back with every censored span as `█████`, never as its
+ciphertext token, in both the text content and `structuredContent`. MCP additionally refuses to
+change a note's body or move it to the trash while its current body contains anything censor-like
+(`{{`, optional whitespace, then `censored` in any case), because an AI client has no key and could
+never re-create it; title, tags, pin and archive/unarchive remain allowed. That protection is
+**MCP-specific**: a REST client with `notes:write` can still edit the body or trash such a note.
+`link_note_to_task` also needs `tasks:read`, and a write-only token gets only a changed note's id
+and timestamp back, not its body.
 
 | Method | Path                                | Scope         | Notes                                                                                           |
 | ------ | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
@@ -200,6 +204,15 @@ never indexed. Trashed notes disappear from lists unless `state=trashed` and are
 days. Note files follow the attachment rules: the type is sniffed from the bytes, uploads honour
 `attachments.maxSizeMb` (0 disables them), each user has 1 GiB and 2,000 files, and uploads are
 rate-limited to 120 an hour. Note writes publish live update hints to the owner's open tabs.
+
+The POST and PATCH answers are either the full note or, for a token without `notes:read`, the
+receipt `{"note":{"id":"…","updatedAt":"…"}}`; the OpenAPI document describes both. Creating with
+an id that already belongs to the same content answers `200`, and one that belongs to another
+account or different content answers `409 {"error":"id_conflict"}`. A file download is
+`image/png`, `image/jpeg`, `image/gif` or `image/webp` when inline, and
+`application/octet-stream` otherwise. An upload answers `413 too_large` past the size limit or
+quota, `429 rate_limited` past 120 an hour, and `403 uploads_disabled` when the instance disables
+uploads.
 
 ## Live updates and browser notifications
 

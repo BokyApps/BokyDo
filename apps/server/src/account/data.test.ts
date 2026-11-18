@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -28,6 +28,8 @@ import { grantProjectAccess } from '../sync/membership.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id, SyncUser } from '../test/sync.js';
+import { deleteAccount } from './deletion.js';
+import { buildExport } from './export.js';
 
 const PASSWORD = 'violin-pancake-orbit-meadow';
 let t: TestApp;
@@ -91,9 +93,10 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
     );
     await grantProjectAccess(t.db.db, shared, alice.id, 'editor');
     const secret = id();
+    const bobTask = id();
     await bob.sync.ok(
       cmd('project_add', { id: secret, name: 'Bob private' }),
-      cmd('task_add', { id: id(), projectId: secret, content: 'bob-only secret' }),
+      cmd('task_add', { id: bobTask, projectId: secret, content: 'bob-only secret' }),
     );
     const attachmentId = newId();
     const store = new AttachmentStore(t.dataDir);
@@ -125,6 +128,7 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
     const activeNote = newId();
     const archivedNote = newId();
     const trashedNote = newId();
+    const bobNote = newId();
     await t.db.db.insert(notes).values([
       {
         id: activeNote,
@@ -147,12 +151,17 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
         body: 'Gone but exported',
         trashedAt: new Date('2026-11-02T00:00:00Z'),
       },
-      { id: newId(), ownerUserId: bob.id, title: 'Bob private note', body: 'bob-only note' },
+      { id: bobNote, ownerUserId: bob.id, title: 'Bob private note', body: 'bob-only note' },
     ]);
     await t.db.db.insert(noteLinks).values({ fromNoteId: activeNote, toNoteId: archivedNote });
+    // Bob's note is Bob's: a link *from* it, even to Alice's note, is not part of her export.
+    await t.db.db.insert(noteLinks).values({ fromNoteId: bobNote, toNoteId: activeNote });
     await t.db.db
       .insert(noteTaskLinks)
       .values({ noteId: activeNote, taskId: done, source: 'manual' });
+    await t.db.db
+      .insert(noteTaskLinks)
+      .values({ noteId: bobNote, taskId: bobTask, source: 'manual' });
     const noteFileId = newId();
     const noteFileStore = new AttachmentStore(t.dataDir, 'note-files');
     await noteFileStore.write(noteFileId, Readable.from([Buffer.from('note file bytes')]), 1024);
@@ -165,6 +174,60 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       size: 15,
       sha256: 'x'.repeat(64),
       referenced: true,
+    });
+    // Stale ownership: Bob's own note file, and an upload that never became ready. Neither may
+    // be exported. (The schema's composite foreign key means a file row can never claim a note
+    // owned by someone else, which is the stronger version of the same guarantee.)
+    const foreignFile = newId();
+    await noteFileStore.write(foreignFile, Readable.from([Buffer.from('bob file')]), 1024);
+    await t.db.db.insert(noteFiles).values({
+      id: foreignFile,
+      noteId: bobNote,
+      ownerUserId: bob.id,
+      filename: 'bob-on-alice.txt',
+      contentType: 'text/plain',
+      size: 8,
+      sha256: 'x'.repeat(64),
+      referenced: true,
+    });
+    const uploadingFile = newId();
+    await noteFileStore.write(
+      uploadingFile,
+      Readable.from([Buffer.from('uploading-bytes-should-not-export')]),
+      1024,
+    );
+    await t.db.db.insert(noteFiles).values({
+      id: uploadingFile,
+      noteId: activeNote,
+      ownerUserId: alice.id,
+      filename: 'uploading.txt',
+      contentType: 'application/octet-stream',
+      size: 7,
+      sha256: 'x'.repeat(64),
+      status: 'uploading',
+      referenced: false,
+    });
+    // Ready rows whose bytes are gone: metadata stays, the entry and a `missingFiles` line say so.
+    const missingNoteFile = newId();
+    await t.db.db.insert(noteFiles).values({
+      id: missingNoteFile,
+      noteId: activeNote,
+      ownerUserId: alice.id,
+      filename: 'gone.txt',
+      contentType: 'text/plain',
+      size: 4,
+      sha256: 'x'.repeat(64),
+      referenced: true,
+    });
+    const missingAttachment = newId();
+    await t.db.db.insert(attachments).values({
+      id: missingAttachment,
+      projectId: mine,
+      uploaderId: alice.id,
+      filename: 'gone.bin',
+      contentType: 'text/plain',
+      size: 4,
+      sha256: 'x'.repeat(64),
     });
 
     const res = await alice.http.request({ method: 'GET', url: '/api/v1/account/export' });
@@ -196,10 +259,11 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       tasks: { content: string; isCompleted: boolean }[];
       projects: { name: string }[];
       personalAccessTokens: { name: string }[];
-      notes: { id: string; title: string; body: string; state: string }[];
+      notes: { id: string; title: string; body: string; state: string; trashedAt: string | null }[];
       noteLinks: { fromNoteId: string; toNoteId: string }[];
       noteTaskLinks: { noteId: string; taskId: string; source: string }[];
       noteFiles: { id: string; noteId: string; file: string }[];
+      missingFiles: { id: string; reason: string }[];
     };
     expect(data.account.username).toBe('alice');
     expect(data.habits.map((h) => h.name)).toEqual(['Alice daily reading']);
@@ -217,21 +281,37 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       'Trashed note',
     ]);
     expect(data.notes.find((n) => n.id === activeNote)?.body).toBe(`Hello ${censorToken}`);
-    expect(data.notes.find((n) => n.id === trashedNote)?.state).toBe('trashed');
+    // The stored state is kept alongside `trashedAt`: a trashed note is still stored as active.
+    expect(data.notes.find((n) => n.id === trashedNote)).toMatchObject({
+      state: 'active',
+      trashedAt: '2026-11-02T00:00:00.000Z',
+    });
+    expect(data.notes.find((n) => n.id === archivedNote)?.state).toBe('archived');
     expect(data.noteLinks).toEqual([{ fromNoteId: activeNote, toNoteId: archivedNote }]);
     expect(data.noteTaskLinks).toEqual([{ noteId: activeNote, taskId: done, source: 'manual' }]);
-    expect(data.noteFiles).toEqual([
-      expect.objectContaining({
-        id: noteFileId,
-        noteId: activeNote,
-        file: `notes/files/${noteFileId}/secret.txt`,
-      }),
-    ]);
+    // Stale ownership, an in-progress upload and Bob's link are all out; a missing file keeps its
+    // metadata in export.json but has no entry in the archive.
+    expect(data.noteFiles.map((f) => f.id).sort()).toEqual([noteFileId, missingNoteFile].sort());
+    expect(data.noteFiles.every((f) => f.id !== foreignFile && f.id !== uploadingFile)).toBe(true);
+    expect(data.missingFiles).toEqual(
+      expect.arrayContaining([
+        { id: missingNoteFile, reason: 'missing' },
+        { id: missingAttachment, reason: 'missing' },
+      ]),
+    );
+    expect(data.missingFiles).toHaveLength(2);
+    expect(names).not.toContain(`notes/files/${missingNoteFile}/gone.txt`);
+    expect(names).not.toContain(`attachments/${missingAttachment}/gone.bin`);
+    expect(names.some((n) => n.includes(foreignFile))).toBe(false);
+    expect(names.some((n) => n.includes(uploadingFile))).toBe(false);
     const everything = JSON.stringify(files);
     for (const leak of [
       'bob-only secret',
       'Bob private habit',
       'bob-only note',
+      'bob-on-alice',
+      'bob file',
+      'uploading-bytes-should-not-export',
       '$argon2',
       'passwordHash',
       'bkd_pat_',
@@ -241,6 +321,43 @@ describe.skipIf(!TEST_DATABASE_URL)('export everything', () => {
       expect(everything, leak).not.toContain(leak);
     // Spreadsheet-safe CSV.
     expect(files['tasks.csv']).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
+  });
+
+  it('aborts the archive when a file read fails mid-stream', async () => {
+    const project = id();
+    await alice.sync.ok(cmd('project_add', { id: project, name: 'Files' }));
+    const attachmentId = newId();
+    await t.db.db.insert(attachments).values({
+      id: attachmentId,
+      projectId: project,
+      uploaderId: alice.id,
+      filename: 'hello.txt',
+      contentType: 'text/plain',
+      size: 16,
+      sha256: 'x'.repeat(64),
+    });
+    // The row exists and its path stats, but reading it fails: a directory in place of the file
+    // gives EISDIR on the first read, after the entry header has already gone out.
+    await mkdir(path.join(t.dataDir, 'attachments', attachmentId), { recursive: true });
+
+    const zip = buildExport(
+      {
+        db: t.db.db,
+        sync: t.app.services.sync,
+        store: new AttachmentStore(t.dataDir),
+        noteFileStore: new AttachmentStore(t.dataDir, 'note-files'),
+        tokens: t.app.services.apiTokens,
+        publicUrl: null,
+      },
+      alice.id,
+    );
+    const error = await new Promise<Error | undefined>((resolve) => {
+      zip.stream.on('data', () => undefined);
+      zip.stream.on('error', (err: Error) => resolve(err));
+      zip.stream.on('end', () => resolve(undefined));
+    });
+    // A broken download, not a valid ZIP with the file quietly missing.
+    expect(error).toBeInstanceOf(Error);
   });
 });
 
@@ -392,6 +509,48 @@ describe.skipIf(!TEST_DATABASE_URL)('account deletion', () => {
       .from(auditLog)
       .where(and(eq(auditLog.action, 'account.deleted'), eq(auditLog.targetId, alice.id)));
     expect(entry?.meta).toEqual({ by: 'self' });
+  });
+
+  it('does not fail deletion when a note file cannot be unlinked, and removes a stale .part', async () => {
+    const noteId = id();
+    const fileId = newId();
+    await t.db.db.insert(notes).values({ id: noteId, ownerUserId: alice.id, title: 'Unlink' });
+    await t.db.db.insert(noteFiles).values({
+      id: fileId,
+      noteId,
+      ownerUserId: alice.id,
+      filename: 'private.txt',
+      contentType: 'text/plain',
+      size: 4,
+      sha256: 'x'.repeat(64),
+      referenced: true,
+    });
+    const dir = path.join(t.dataDir, 'note-files');
+    // A directory where the file should be makes unlink fail with EISDIR, which is not ENOENT.
+    await mkdir(path.join(dir, fileId), { recursive: true });
+    await writeFile(path.join(dir, `${fileId}.part`), 'left over');
+
+    const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+    const result = await deleteAccount(
+      {
+        db: t.db.db,
+        sync: t.app.services.sync,
+        noteFileStore: new AttachmentStore(t.dataDir, 'note-files'),
+        log: { warn: (fields, message) => warnings.push({ fields, message }) },
+      },
+      alice.id,
+      { userId: alice.id, ip: null },
+    );
+
+    expect(result).toEqual({ deleted: true });
+    expect(await t.db.db.select().from(users).where(eq(users.id, alice.id))).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.fields.fileId).toBe(fileId);
+    expect(warnings[0]?.message).toContain('stray-file sweep');
+    // The display filename is never logged, only the id.
+    expect(JSON.stringify(warnings.map((warning) => warning.fields))).not.toContain('private.txt');
+    expect(existsSync(path.join(dir, `${fileId}.part`))).toBe(false);
+    expect(existsSync(path.join(dir, fileId))).toBe(true);
   });
 
   it('lets an admin delete someone else, with the same checks', async () => {

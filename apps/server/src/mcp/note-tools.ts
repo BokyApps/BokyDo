@@ -1,13 +1,12 @@
 import {
-  CENSOR_TOKEN,
   noteCreateRequestSchema,
   noteListQuerySchema,
   notePatchSchema,
-  parseCensorToken,
   redactCensored,
   scopesAllow,
   type Note,
   type NotePatch,
+  type NoteSummary,
 } from '@bokydo/shared';
 import { z } from 'zod';
 import {
@@ -17,6 +16,8 @@ import {
   listNotes,
   unlinkNoteFromTask,
   updateNote,
+  type NoteReadOptions,
+  type NoteUpdateOptions,
 } from '../notes/service.js';
 import type { ToolContext, ToolDefinition } from './tools.js';
 import { ToolError } from './tools.js';
@@ -52,12 +53,39 @@ const fail = (error: string): never => {
 };
 
 /**
- * What MCP may see of a note: the body with every censored span replaced by `█████`. The
- * ciphertext tokens are never sent to a client, so an AI cannot copy them elsewhere, and the
- * server holds no key to the cleartext either.
+ * What MCP may see of a note: every free-text field with censor-like spans replaced by `█████`.
+ * The ciphertext tokens are never sent to a client, so an AI cannot copy them elsewhere, and the
+ * server holds no key to the cleartext either. Titles, tags, snippets, backlink titles, file
+ * names and linked task text are redacted too, not just the body: any of them is free text and
+ * any of them could carry a token.
  */
-function present(note: Note): Omit<Note, 'body'> & { body: string } {
-  return { ...note, body: redactCensored(note.body) };
+function present(note: Note): Note {
+  return {
+    ...note,
+    title: redactCensored(note.title),
+    body: redactCensored(note.body),
+    snippet: redactCensored(note.snippet),
+    tags: note.tags.map(redactCensored),
+    backlinks: note.backlinks.map((backlink) => ({
+      ...backlink,
+      title: redactCensored(backlink.title),
+    })),
+    linkedTasks: note.linkedTasks.map((task) => ({
+      ...task,
+      content: redactCensored(task.content),
+    })),
+    files: note.files.map((file) => ({ ...file, filename: redactCensored(file.filename) })),
+  };
+}
+
+/** The list shape: the same free-text fields as a note, minus body, links and files. */
+function presentSummary(note: NoteSummary): NoteSummary {
+  return {
+    ...note,
+    title: redactCensored(note.title),
+    snippet: redactCensored(note.snippet),
+    tags: note.tags.map(redactCensored),
+  };
 }
 
 /** A write-only token may change a note but must not read one back, as over REST. */
@@ -67,32 +95,49 @@ function presentFor(ctx: ToolContext, note: Note) {
     : { note: { id: note.id, updatedAt: note.updatedAt } };
 }
 
+/** The scope-derived read options `get_note` and the REST routes use: no task data without it. */
+const readOptions = (ctx: ToolContext): NoteReadOptions => ({
+  linkedTasks: scopesAllow(ctx.scopes, ['tasks:read']),
+});
+
+/** Censor-like text anywhere in a body, case-insensitive and lenient on purpose. */
+const CENSORED_BODY = /\{\{\s*censored/i;
+
+const CENSORED_MCP_ERROR =
+  'This note contains censored text; change its body or move it to the trash in the BokyDo app.';
+
+/**
+ * MCP's censored-content policy: a client that cannot see or re-create a censored span may not
+ * change the body or move the note to the trash. Title, tags, pin and archive/unarchive remain
+ * allowed. The service runs this under the note's row lock, so it sees the body a concurrent
+ * save has committed. REST clients are not restricted this way.
+ */
+function censorGuard(destructive: boolean): NoteUpdateOptions['guard'] {
+  return destructive
+    ? (current) => (CENSORED_BODY.test(current.body) ? 'censored_content' : null)
+    : undefined;
+}
+
 async function apply(
   ctx: ToolContext,
   noteId: string,
   patch: NotePatch,
-  checkCensored = false,
+  /**
+   * Whether this change could destroy censored text. Defaults to a body change or a move to
+   * the trash; archiving passes false, and restoring from the trash is not destructive either.
+   */
+  destructive = patch.body !== undefined || patch.trashed === true,
 ): Promise<Note> {
-  if (checkCensored && patch.body !== undefined) {
-    const body = patch.body;
-    const current = await getNote(ctx.db, ctx.userId, noteId);
-    if (!current) throw new ToolError('Note not found');
-    // A censor token cannot be re-created by an AI: it has no password and no key. Dropping one
-    // would destroy text the user can never get back, so refuse rather than silently lose it.
-    const missing = (current.body.match(CENSOR_TOKEN) ?? []).filter(
-      (token) => parseCensorToken(token) !== null && !body.includes(token),
-    );
-    if (missing.length)
-      fail(
-        'The new body would remove censored text, which cannot be re-created by an AI client. ' +
-          'Keep every {{censored:v1:…}} token exactly as it is, or ask the user to uncensor it in the web editor first.',
-      );
+  const guard = censorGuard(destructive);
+  const result = await updateNote(ctx.db, ctx.userId, noteId, patch, {
+    ...readOptions(ctx),
+    ...(guard ? { guard } : {}),
+  });
+  if (!result.ok) {
+    if (result.error === 'not_found') throw new ToolError('Note not found');
+    if (result.error === 'censored_content') fail(CENSORED_MCP_ERROR);
+    throw new ToolError(`Note not updated: ${result.error}`);
   }
-  const result = await updateNote(ctx.db, ctx.userId, noteId, patch);
-  if (!result.ok)
-    throw new ToolError(
-      result.error === 'not_found' ? 'Note not found' : `Note not updated: ${result.error}`,
-    );
   await ctx.publishNoteChange?.(ctx.userId);
   return result.value;
 }
@@ -132,7 +177,7 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     run: async (ctx, a: z.output<typeof listArgs>) => {
       const result = await listNotes(ctx.db, ctx.userId, a);
       if (!result.ok) throw new ToolError(`Notes not listed: ${result.error}`);
-      return result.value;
+      return { ...result.value, notes: result.value.notes.map(presentSummary) };
     },
   },
   {
@@ -147,10 +192,7 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     args: z.object({ id: uuid }).strict(),
     run: async (ctx, a: { id: string }) => ({
       note: present(
-        (await getNote(ctx.db, ctx.userId, a.id, {
-          // A token without `tasks:read` must not read task text through a note.
-          linkedTasks: scopesAllow(ctx.scopes, ['tasks:read']),
-        })) ?? fail('Note not found'),
+        (await getNote(ctx.db, ctx.userId, a.id, readOptions(ctx))) ?? fail('Note not found'),
       ),
     }),
   },
@@ -172,7 +214,7 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     annotations: add,
     args: createArgs,
     run: async (ctx, a: z.output<typeof createArgs>) => {
-      const result = await createNote(ctx.db, ctx.userId, a);
+      const result = await createNote(ctx.db, ctx.userId, a, readOptions(ctx));
       if (!result.ok) throw new ToolError(`Note not created: ${result.error}`);
       if (result.value.created) await ctx.publishNoteChange?.(ctx.userId);
       return presentFor(ctx, result.value.note);
@@ -182,7 +224,7 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     name: 'update_note',
     title: 'Update a note',
     description:
-      'Change a note’s title, body, tags, pin, archived state or trashed state. Only the fields you send change. A body that drops censored text is refused, because an AI client cannot re-create it.',
+      'Change a note’s title, body, tags, pin, archived state or trashed state. Only the fields you send change. MCP refuses a body change or a move to the trash when the note’s current body contains censored text, because a client cannot see or re-create it; change the body or trash it in the BokyDo app instead. REST clients with notes:write are not limited this way. Censored spans in the answer appear as █████.',
     scopes: ['notes:write'],
     accountWide: true,
     inputSchema: schema(
@@ -201,14 +243,14 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     args: updateArgs,
     run: async (ctx, a: { id: string } & NotePatch) => {
       const { id, ...patch } = a;
-      return presentFor(ctx, await apply(ctx, id, patch, true));
+      return presentFor(ctx, await apply(ctx, id, patch));
     },
   },
   {
     name: 'archive_note',
     title: 'Archive a note',
     description:
-      'Move a note to the archive, or back to the active list with `archived: false`. Archiving is not deleting.',
+      'Move a note to the archive, or back to the active list with `archived: false`. Archiving is not deleting, and it is allowed even when the note has censored text.',
     scopes: ['notes:write'],
     accountWide: true,
     inputSchema: schema({ ...noteId, archived: { type: 'boolean', description: 'Default true' } }, [
@@ -217,13 +259,13 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     annotations: write,
     args: z.object({ id: uuid, archived: z.boolean().default(true) }).strict(),
     run: async (ctx, a: { id: string; archived: boolean }) =>
-      presentFor(ctx, await apply(ctx, a.id, { state: a.archived ? 'archived' : 'active' })),
+      presentFor(ctx, await apply(ctx, a.id, { state: a.archived ? 'archived' : 'active' }, false)),
   },
   {
     name: 'trash_note',
     title: 'Trash a note',
     description:
-      'Move a note to the trash (purged after 30 days), or restore it with `trashed: false`. Use the web editor or REST to delete a note forever.',
+      'Move a note to the trash (purged after 30 days), or restore it with `trashed: false`. A note whose current body contains censored text cannot be trashed from MCP; move it to the trash in the BokyDo app. Use the web editor or REST to delete a note forever.',
     scopes: ['notes:write'],
     accountWide: true,
     inputSchema: schema({ ...noteId, trashed: { type: 'boolean', description: 'Default true' } }, [
@@ -232,7 +274,7 @@ export const NOTE_TOOLS: ToolDefinition[] = [
     annotations: destructive,
     args: z.object({ id: uuid, trashed: z.boolean().default(true) }).strict(),
     run: async (ctx, a: { id: string; trashed: boolean }) =>
-      presentFor(ctx, await apply(ctx, a.id, { trashed: a.trashed })),
+      presentFor(ctx, await apply(ctx, a.id, { trashed: a.trashed }, a.trashed)),
   },
   {
     name: 'link_note_to_task',
