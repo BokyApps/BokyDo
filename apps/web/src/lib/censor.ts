@@ -35,7 +35,8 @@ const AAD = new TextEncoder().encode('bokydo-censor-v1');
 // subtle.* must be ArrayBuffer-backed, not the default Uint8Array<ArrayBufferLike>.
 type Bytes = Uint8Array<ArrayBuffer>;
 
-type CensorErrorCode = 'bad_password' | 'malformed' | 'too_large' | 'empty_password' | 'empty_text';
+type CensorErrorCode =
+  'bad_password' | 'malformed' | 'too_large' | 'empty_password' | 'empty_text' | 'locked';
 
 const ERROR_MESSAGES: Record<CensorErrorCode, string> = {
   bad_password: 'Wrong password or tampered censor token.',
@@ -43,6 +44,7 @@ const ERROR_MESSAGES: Record<CensorErrorCode, string> = {
   too_large: 'Censored text is too large.',
   empty_password: 'Password must not be empty.',
   empty_text: 'There is no text to censor.',
+  locked: 'Censored text was locked while unlocking.',
 };
 
 export class CensorError extends Error {
@@ -76,15 +78,19 @@ function bytesToBase64url(bytes: Bytes): string {
   return out;
 }
 
+const B64URL_LOOKUP = new Map<string, number>(
+  Array.from(B64URL_ALPHABET, (ch, i) => [ch, i] as const),
+);
+
+/** Unpadded base64url length of `bytes` bytes. */
+const encodedLength = (bytes: number) => Math.ceil((bytes * 4) / 3);
+
 function base64urlToBytes(text: string): Bytes | null {
   const remainder = text.length % 4;
   if (remainder === 1) return null;
   const size = Math.floor(text.length / 4) * 3 + (remainder === 2 ? 1 : remainder === 3 ? 2 : 0);
   const out = new Uint8Array(size);
-  const lookup = new Map<string, number>();
-  for (let i = 0; i < B64URL_ALPHABET.length; i++) {
-    lookup.set(B64URL_ALPHABET.charAt(i), i);
-  }
+  const lookup = B64URL_LOOKUP;
   let acc = 0;
   let bits = 0;
   let written = 0;
@@ -111,6 +117,11 @@ export function parseToken(token: string): { salt: Bytes; iv: Bytes; ct: Bytes }
   const ivText = match[2];
   const ctText = match[3];
   if (saltText === undefined || ivText === undefined || ctText === undefined) return null;
+  // Check encoded lengths before decoding anything, so a huge field costs nothing.
+  if (saltText.length !== encodedLength(SALT_BYTES) || ivText.length !== encodedLength(IV_BYTES))
+    return null;
+  if (ctText.length < encodedLength(MIN_CT_BYTES) || ctText.length > encodedLength(MAX_CT_BYTES))
+    return null;
   const salt = base64urlToBytes(saltText);
   const iv = base64urlToBytes(ivText);
   const ct = base64urlToBytes(ctText);
@@ -158,7 +169,8 @@ async function decryptParsed(parsed: Parsed, key: CryptoKey): Promise<string> {
     // partial output; AES-GCM either yields the whole plaintext or throws.
     throw new CensorError('bad_password');
   }
-  return new TextDecoder().decode(buffer);
+  // ignoreBOM: a span that starts with U+FEFF must decrypt to exactly what was censored.
+  return new TextDecoder('utf-8', { ignoreBOM: true }).decode(buffer);
 }
 
 export async function censor(plaintext: string, password: string): Promise<string> {
@@ -186,53 +198,96 @@ export async function uncensor(
 ): Promise<string> {
   const parsed = parseToken(token);
   if (parsed === null) throw new CensorError('malformed');
-  const saltB64 = bytesToBase64url(parsed.salt);
-  const cached = cache?.get(saltB64);
-  const key = cached ?? (await deriveKey(password, parsed.salt));
+  // Always derive from the password the user typed: a warm cache must never make a wrong
+  // password "work", and must never let a token borrow another span's key.
+  const generation = cache?.generation;
+  const key = await deriveKey(password, parsed.salt);
   const plaintext = await decryptParsed(parsed, key);
-  // Cache the key and remember the password ONLY after a decrypt we know succeeded, and ONLY
-  // when the key was freshly derived from that password (a cached key says nothing about
-  // `password`, which could be anything and must not be remembered).
-  if (cached === undefined) {
-    cache?.set(saltB64, key);
-    cache?.rememberPassword(password);
+  if (cache) {
+    // Lock or sign-out happened while we were deriving: discard the result entirely.
+    if (cache.generation !== generation) throw new CensorError('locked');
+    await cache.remember(token, key, password, generation);
   }
   return plaintext;
 }
 
+/** How many remembered passwords `tryUnlock` will try (each try costs one full PBKDF2). */
+const MAX_REMEMBERED_ATTEMPTS = 3;
+
+async function tokenDigest(token: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return bytesToBase64url(new Uint8Array(digest));
+}
+
+/**
+ * Session-only memory of unlocked spans. Keys are stored per exact token (SHA-256 of the whole
+ * token, not just its salt), so a planted token that reuses a real span's salt can neither use
+ * nor overwrite that span's entry. `clear()` bumps a generation: work that was in flight when the
+ * user locked finishes without returning plaintext or repopulating anything.
+ *
+ * Call `tryUnlock` only from an explicit Reveal action, never on render or in bulk: each attempt
+ * is a 600k-iteration PBKDF2, and a hostile note can contain many tokens.
+ */
 export class CensorKeyCache {
   private readonly keys = new Map<string, CryptoKey>();
-  private readonly passwords = new Set<string>();
+  /** Most recent last; bounded so remembered-password unlocks stay cheap. */
+  private passwords: string[] = [];
+  private readonly inFlight = new Map<string, Promise<string | null>>();
+  private gen = 0;
 
-  get(saltB64: string): CryptoKey | undefined {
-    return this.keys.get(saltB64);
+  get generation(): number {
+    return this.gen;
   }
 
-  set(saltB64: string, key: CryptoKey): void {
-    this.keys.set(saltB64, key);
+  /** Record a successful unlock. Ignored if the cache was cleared since `generation`. */
+  async remember(
+    token: string,
+    key: CryptoKey,
+    password: string,
+    generation = this.gen,
+  ): Promise<void> {
+    const digest = await tokenDigest(token);
+    if (this.gen !== generation) return;
+    this.keys.set(digest, key);
+    this.passwords = [...this.passwords.filter((p) => p !== password), password].slice(
+      -MAX_REMEMBERED_ATTEMPTS,
+    );
   }
 
-  rememberPassword(password: string): void {
-    this.passwords.add(password);
+  /** Unlock with a key or password that already worked this session; null if none does. */
+  tryUnlock(token: string): Promise<string | null> {
+    const pending = this.inFlight.get(token);
+    if (pending) return pending;
+    const generation = this.gen;
+    const run = this.unlock(token, generation).finally(() => {
+      if (this.inFlight.get(token) === run) this.inFlight.delete(token);
+    });
+    this.inFlight.set(token, run);
+    return run;
   }
 
-  async tryUnlock(token: string): Promise<string | null> {
+  private async unlock(token: string, generation: number): Promise<string | null> {
     const parsed = parseToken(token);
     if (parsed === null) return null;
-    const saltB64 = bytesToBase64url(parsed.salt);
-    const cached = this.keys.get(saltB64);
+    const digest = await tokenDigest(token);
+    const stale = () => this.gen !== generation;
+    if (stale()) return null;
+    const cached = this.keys.get(digest);
     if (cached !== undefined) {
       try {
-        return await decryptParsed(parsed, cached);
+        const plaintext = await decryptParsed(parsed, cached);
+        return stale() ? null : plaintext;
       } catch {
         return null;
       }
     }
-    for (const password of this.passwords) {
+    for (const password of [...this.passwords].reverse()) {
       const key = await deriveKey(password, parsed.salt);
+      if (stale()) return null;
       try {
         const plaintext = await decryptParsed(parsed, key);
-        this.keys.set(saltB64, key);
+        if (stale()) return null;
+        this.keys.set(digest, key);
         return plaintext;
       } catch (error) {
         if (error instanceof CensorError && error.code === 'bad_password') continue;
@@ -242,9 +297,12 @@ export class CensorKeyCache {
     return null;
   }
 
+  /** Forget every key and password, and void any unlock still in flight. */
   clear(): void {
+    this.gen++;
     this.keys.clear();
-    this.passwords.clear();
+    this.passwords = [];
+    this.inFlight.clear();
   }
 }
 
