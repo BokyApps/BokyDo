@@ -62,11 +62,7 @@ export async function registerNoteRoutes(
   },
 ): Promise<() => Promise<void>> {
   const { db, settings, events, store } = deps;
-  const quota =
-    deps.quota ??
-    (app as FastifyInstance & { noteUploadQuotaForTest?: NoteUploadQuota })
-      .noteUploadQuotaForTest ??
-    DEFAULT_UPLOAD_QUOTA;
+  const quota = deps.quota ?? DEFAULT_UPLOAD_QUOTA;
   const accountWide = (scope: 'notes:read' | 'notes:write') => ({
     config: { access: 'user' as const, scopes: [scope] },
     preHandler: async (req: FastifyRequest, reply: FastifyReply) => {

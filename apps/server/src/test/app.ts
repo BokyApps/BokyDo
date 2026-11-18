@@ -30,6 +30,7 @@ export async function testApp(
     importFetch?: OutboundFetch;
     /** Injected clock for the Todoist importer's completed-task windows (tests only). */
     importNow?: () => Date;
+    noteUploadQuota?: NonNullable<Parameters<typeof buildApp>[0]['noteUploadQuota']>;
     configureForTest?: NonNullable<Parameters<typeof buildApp>[0]['configureForTest']>;
     configurePluginsForTest?: NonNullable<
       Parameters<typeof buildApp>[0]['configurePluginsForTest']
@@ -49,6 +50,7 @@ export async function testApp(
     ...(opts.resolver ? { resolver: opts.resolver } : {}),
     ...(opts.importFetch ? { importFetch: opts.importFetch } : {}),
     ...(opts.importNow ? { importNow: opts.importNow } : {}),
+    ...(opts.noteUploadQuota ? { noteUploadQuota: opts.noteUploadQuota } : {}),
     ...(opts.configureForTest ? { configureForTest: opts.configureForTest } : {}),
     ...(opts.configurePluginsForTest
       ? { configurePluginsForTest: opts.configurePluginsForTest }

@@ -48,7 +48,8 @@ import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
 import { registerHabitRoutes } from './habits/routes.js';
-import { registerNoteRoutes } from './notes/routes.js';
+import { registerNoteRoutes, type NoteUploadQuota } from './notes/routes.js';
+import { registerNoteExportRoutes } from './note-export/routes.js';
 import { registerImportRoutes } from './import/routes.js';
 import { TodoistImporter } from './import/todoist-import.js';
 import { fireDueReminders } from './reminders/reminders.js';
@@ -79,6 +80,8 @@ export interface AppDeps {
   importFetch?: OutboundFetch;
   /** Tests only: the importer's clock, so completed-task windows are not wall-clock bound. */
   importNow?: () => Date;
+  /** Tests only: a small per-user note-file quota instead of the 1 GiB default. */
+  noteUploadQuota?: NoteUploadQuota;
 }
 
 export interface AppServices {
@@ -338,7 +341,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     settings,
     events,
     store: noteFileStore,
+    ...(deps.noteUploadQuota ? { quota: deps.noteUploadQuota } : {}),
   });
+  registerNoteExportRoutes(app, { db, store: noteFileStore });
   registerImportRoutes(app, importer);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,

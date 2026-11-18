@@ -140,6 +140,7 @@ const EXPECTED: Record<string, `${Access}/${SetupPhase}`> = {
   'DELETE /api/v1/notes/:id/tasks/:taskId': 'user/after',
   'GET /api/v1/tasks/:taskId/notes': 'user/after',
   'POST /api/v1/notes/:id/files': 'user/after',
+  'GET /api/v1/notes/:id/export': 'user/after',
   'GET /api/v1/note-files/:id': 'user/after',
   // Import from Todoist (W11a): session only, the user hands over another service's token
   'POST /api/v1/import/todoist/connect': 'user/after',
@@ -208,6 +209,7 @@ const TOKEN_SCOPES: Record<string, string> = {
   'GET /api/v1/tasks/:taskId/notes': 'notes:read',
   'POST /api/v1/notes/:id/files': 'notes:write',
   'GET /api/v1/note-files/:id': 'notes:read',
+  'GET /api/v1/notes/:id/export': 'notes:read',
   'GET /api/v1/push/key': 'sync',
   'POST /api/v1/push/subscriptions': 'sync',
   'DELETE /api/v1/push/subscriptions': 'sync',
