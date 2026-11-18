@@ -120,6 +120,7 @@ describe('censor / uncensor', () => {
 
   it('throws typed errors for empty password, oversized text and malformed tokens', async () => {
     await expect(censor('x', '')).rejects.toMatchObject({ code: 'empty_password' });
+    await expect(censor('', 'pw')).rejects.toMatchObject({ code: 'empty_text' });
     await expect(censor('a'.repeat(48 * 1024 + 1), 'pw')).rejects.toMatchObject({
       code: 'too_large',
     });
