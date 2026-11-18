@@ -371,12 +371,32 @@
       "filtersLabels": "Filters & Labels",
       "habits": "Habits",
       "inbox": "Inbox",
+      "notes": "Notes",
       "search": "Search",
       "templates": "Templates",
       "today": "Today",
       "upcoming": "Upcoming"
     },
     "notes": {
+      "archive": "Archive",
+      "back": "Back to notes",
+      "censor": {
+        "censor": "Censor",
+        "confirmPassword": "Confirm password",
+        "mismatch": "Passwords do not match.",
+        "password": "Password",
+        "remove": "Remove censor",
+        "removeMessage": "This puts the text back in plain sight in the note, where anyone reading it can copy it. Continue?",
+        "removeTitle": "Remove censor?",
+        "setTitle": "Censor text",
+        "unlock": "Unlock",
+        "unlockTitle": "Unlock censored text",
+        "warning": "Censored text can only be read with this password. A forgotten password cannot be recovered, and there is no way to reset it. Keep it somewhere safe."
+      },
+      "conflict": "This note changed elsewhere. Reloading.",
+      "delete": "Delete forever",
+      "deleteMessage": "This permanently deletes the note and its files. It cannot be undone.",
+      "deleteTitle": "Delete forever?",
       "editor": {
         "apply": "Apply",
         "bold": "Bold",
@@ -430,7 +450,70 @@
         "uploadFile": "Upload file",
         "uploading": "Uploading {{name}}…",
         "uploadRemove": "Remove upload"
-      }
+      },
+      "empty": {
+        "body": "Capture an idea, a link, or something to remember.",
+        "filtered": "No notes match this search.",
+        "title": "No notes yet",
+        "trash": "Trash is empty."
+      },
+      "export": {
+        "label": "Export",
+        "markdown": "Markdown",
+        "pdf": "PDF",
+        "word": "Word"
+      },
+      "files": "Files",
+      "gone": "This note no longer exists.",
+      "linkedFrom": "Linked from",
+      "linkedTasks": "Linked tasks",
+      "linkNote": "Link note",
+      "linkNoteSearch": "Search notes",
+      "linkTask": "Link a task",
+      "linkTaskSearch": "Search tasks",
+      "loadMore": "Load more",
+      "lock": "Lock censored text",
+      "new": "New note",
+      "newFirst": "Create your first note",
+      "newFromTask": "New note from task",
+      "noLinkedTasks": "No tasks linked yet.",
+      "other": "Notes",
+      "picker": {
+        "empty": "No results",
+        "searching": "Searching…"
+      },
+      "pin": "Pin",
+      "pinned": "Pinned",
+      "restore": "Restore",
+      "saved": "Saved",
+      "saveError": "Save failed — retrying on next edit",
+      "saving": "Saving…",
+      "search": "Search notes",
+      "subtitle": "Keep thoughts, links and files next to your tasks.",
+      "tabs": {
+        "active": "Active",
+        "archived": "Archived",
+        "label": "Note state",
+        "trash": "Trash"
+      },
+      "tags": {
+        "add": "Add a tag",
+        "all": "All tags",
+        "filter": "Filter by tag",
+        "invalid": "Tags are lowercase words without spaces, # or commas (max {{max}}).",
+        "remove": "Remove tag {{tag}}"
+      },
+      "taskSection": "Notes",
+      "taskSectionEmpty": "No notes linked to this task yet.",
+      "title": "Notes",
+      "titleLabel": "Note title",
+      "titlePlaceholder": "Title",
+      "trash": "Move to trash",
+      "unarchive": "Unarchive",
+      "unlinkNote": "Unlink note",
+      "unlinkTask": "Unlink task",
+      "unpin": "Unpin",
+      "untitled": "Untitled"
     },
     "notifications": {
       "aProject": "a project",

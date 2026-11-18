@@ -13,6 +13,7 @@ import {
   TemplateIcon,
   InboxIcon,
   HabitIcon,
+  NoteIcon,
   PlusIcon,
   SearchIcon,
   TagIcon,
@@ -113,6 +114,12 @@ export function Sidebar({
             <HabitIcon />
           </span>{' '}
           {t('nav.habits', { defaultValue: 'Habits' })}
+        </Link>
+        <Link to="/notes" className={item} activeProps={active}>
+          <span className="text-muted">
+            <NoteIcon />
+          </span>{' '}
+          {t('nav.notes', { defaultValue: 'Notes' })}
         </Link>
         {state.invitations.length > 0 && (
           <Link to="/invitations" className={item} activeProps={active}>

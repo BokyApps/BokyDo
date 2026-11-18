@@ -103,6 +103,13 @@ export const HabitIcon = () => (
     <path d="M5.4 8a7 7 0 0 1 11.5-3L20 8M4 16l3.1 3a7 7 0 0 0 11.5-3" />
   </Icon>
 );
+export const NoteIcon = () => (
+  <Icon>
+    <path d="M5 4h14v12l-4 4H5z" />
+    <path d="M19 16h-4v4" />
+    <path d="M8 9h8M8 13h5" />
+  </Icon>
+);
 export const FlagIcon = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
