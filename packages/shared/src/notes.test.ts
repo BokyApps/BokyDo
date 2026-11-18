@@ -50,6 +50,8 @@ describe('reference extraction', () => {
       `See [one](bokydo:note/${noteA}) and [two](bokydo:note/${noteB}).`,
       `![image](/api/v1/note-files/${file})`,
       `[file](/api/v1/note-files/${file})`,
+      `![inline](/api/v1/note-files/${file}?inline=1)`,
+      `[titled](bokydo:note/${noteA} "a title")`,
       `Do [this](bokydo:task/${task}).`,
       `Again [one](bokydo:note/${noteA.toUpperCase()}).`,
     ].join('\n');
@@ -58,6 +60,26 @@ describe('reference extraction', () => {
       taskIds: [task],
       fileIds: [file],
     });
+  });
+
+  it('only counts real link destinations, never code, plain text or look-alikes', () => {
+    const body = [
+      `plain ${noteA} and bokydo:note/${noteB} and bokydo:note/${task}x`,
+      `[x](https://x/api/v1/note-files/${file}/y)`,
+      `[x](https://example.com/?u=bokydo:note/${noteA})`,
+      `\`[x](bokydo:note/${noteA})\``,
+      '``[x](bokydo:note/' + noteB + ')``',
+      '```md',
+      `[x](bokydo:note/${noteA})`,
+      `[x](bokydo:task/${task})`,
+      '```',
+      '~~~',
+      `[x](/api/v1/note-files/${file})`,
+      '~~~',
+      `bare ](bokydo:note/${noteA})`,
+      `[nested text](bokydo:note/${noteB}?x)`,
+    ].join('\n');
+    expect(extractNoteRefs(body)).toEqual({ noteIds: [], taskIds: [], fileIds: [] });
   });
 
   it('ignores other schemes, malformed ids and unknown prefixes', () => {
@@ -85,6 +107,14 @@ describe('reference extraction', () => {
     expect(refs.taskIds).toEqual([]);
     expect(refs.fileIds).toEqual([]);
   });
+
+  it('scans a hostile megabyte in well under 200 ms', () => {
+    for (const body of ['[[[[(((('.repeat(125_000), '`'.repeat(1024 * 1024)]) {
+      const started = performance.now();
+      expect(extractNoteRefs(body)).toEqual({ noteIds: [], taskIds: [], fileIds: [] });
+      expect(performance.now() - started).toBeLessThan(200);
+    }
+  });
 });
 
 describe('search text and snippets', () => {
@@ -96,11 +126,20 @@ describe('search text and snippets', () => {
         '# Heading',
         `Secret: ${token('c2VjcmV0cGhyYXNl')} end.`,
         'See [the site](https://evil.example/secret) and https://also.example/hidden.',
+        'Mail mailto:hidden@example.com or visit www.hidden.example/path.',
         `![alt text](/api/v1/note-files/0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e)`,
         '**bold** `code` _italic_',
       ].join('\n'),
     );
-    for (const hidden of ['censored', 'c2VjcmV0', 'evil', 'also', 'note-files', 'Heading #'])
+    for (const hidden of [
+      'censored',
+      'c2VjcmV0',
+      'evil',
+      'also',
+      'note-files',
+      'Heading #',
+      'hidden',
+    ])
       expect(text).not.toContain(hidden);
     for (const kept of [
       'Trip',

@@ -13,7 +13,19 @@ import {
   type NoteSummary,
   type NoteTagsResponse,
 } from '@bokydo/shared';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  notInArray,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { z } from 'zod';
 import type { AttachmentStore } from '../attachments/store.js';
 import type { Database } from '../db/client.js';
@@ -28,17 +40,26 @@ import {
   tasks,
 } from '../db/schema.js';
 import type { Tx } from '../sync/context.js';
-import { projectAccess } from '../sync/policy.js';
 
-export type NoteFailure = 'validation_failed' | 'not_found' | 'id_conflict';
+export type NoteFailure = 'validation_failed' | 'not_found' | 'id_conflict' | 'too_many_links';
 export type NoteResult<T> = { ok: true; value: T } | { ok: false; error: NoteFailure };
 
 export const NOTE_PENDING_TTL_MS = 24 * 3600 * 1000;
 export const NOTE_TRASH_TTL_MS = 30 * 24 * 3600 * 1000;
+/** A reservation older than this is a dropped upload; it and its bytes are removed. */
+export const NOTE_UPLOADING_TTL_MS = 3600 * 1000;
 
 const uuid = (value: string) => z.uuid().safeParse(value).success;
 
 type NoteRow = typeof notes.$inferSelect;
+
+/** A body named more distinct notes/tasks than the table will hold. */
+class TooManyLinksError extends Error {}
+
+export interface NoteReadOptions {
+  /** False for a bearer token without `tasks:read`: the response carries no task data. */
+  linkedTasks?: boolean;
+}
 
 interface NoteCursor {
   pinned: boolean;
@@ -58,7 +79,10 @@ function decodeCursor(raw: string): NoteCursor | null {
     if (!parsed || typeof parsed !== 'object') return null;
     const { p, u, i } = parsed as Record<string, unknown>;
     if (typeof p !== 'boolean' || typeof u !== 'string' || typeof i !== 'string') return null;
-    if (Number.isNaN(new Date(u).getTime()) || !uuid(i)) return null;
+    const date = new Date(u);
+    // Only the canonical ISO string a cursor was issued with: a lenient date would page from a
+    // different instant than the caller asked for, and `toISOString` round-trips exactly.
+    if (Number.isNaN(date.getTime()) || date.toISOString() !== u || !uuid(i)) return null;
     return { pinned: p, updatedAt: u, id: i };
   } catch {
     return null;
@@ -158,7 +182,12 @@ export async function listNoteTags(db: Database, userId: string): Promise<NoteTa
 }
 
 /** One note with its body, backlinks, currently visible linked tasks and files. */
-export async function getNote(db: Database, userId: string, noteId: string): Promise<Note | null> {
+export async function getNote(
+  db: Database,
+  userId: string,
+  noteId: string,
+  options: NoteReadOptions = {},
+): Promise<Note | null> {
   if (!uuid(noteId)) return null;
   const [row] = await db
     .select()
@@ -174,24 +203,30 @@ export async function getNote(db: Database, userId: string, noteId: string): Pro
         and(eq(noteLinks.toNoteId, row.id), eq(notes.ownerUserId, userId), isNull(notes.trashedAt)),
       )
       .orderBy(desc(notes.updatedAt), desc(notes.id)),
-    db
-      .selectDistinct({
-        id: tasks.id,
-        content: tasks.content,
-        projectId: tasks.projectId,
-        completed: tasks.isCompleted,
-      })
-      .from(noteTaskLinks)
-      .innerJoin(tasks, eq(tasks.id, noteTaskLinks.taskId))
-      .innerJoin(projects, eq(projects.id, tasks.projectId))
-      .innerJoin(
-        projectMembers,
-        and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)),
-      )
-      .where(
-        and(eq(noteTaskLinks.noteId, row.id), isNull(tasks.deletedAt), isNull(projects.deletedAt)),
-      )
-      .orderBy(asc(tasks.content), asc(tasks.id)),
+    options.linkedTasks === false
+      ? Promise.resolve([])
+      : db
+          .selectDistinct({
+            id: tasks.id,
+            content: tasks.content,
+            projectId: tasks.projectId,
+            completed: tasks.isCompleted,
+          })
+          .from(noteTaskLinks)
+          .innerJoin(tasks, eq(tasks.id, noteTaskLinks.taskId))
+          .innerJoin(projects, eq(projects.id, tasks.projectId))
+          .innerJoin(
+            projectMembers,
+            and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)),
+          )
+          .where(
+            and(
+              eq(noteTaskLinks.noteId, row.id),
+              isNull(tasks.deletedAt),
+              isNull(projects.deletedAt),
+            ),
+          )
+          .orderBy(asc(tasks.content), asc(tasks.id)),
     db
       .select({
         id: noteFiles.id,
@@ -200,7 +235,13 @@ export async function getNote(db: Database, userId: string, noteId: string): Pro
         size: noteFiles.size,
       })
       .from(noteFiles)
-      .where(eq(noteFiles.noteId, row.id))
+      .where(
+        and(
+          eq(noteFiles.noteId, row.id),
+          eq(noteFiles.ownerUserId, userId),
+          eq(noteFiles.status, 'ready'),
+        ),
+      )
       .orderBy(asc(noteFiles.createdAt), asc(noteFiles.id)),
   ]);
   return {
@@ -217,6 +258,7 @@ export async function createNote(
   db: Database,
   userId: string,
   input: unknown,
+  options: NoteReadOptions = {},
 ): Promise<NoteResult<{ note: Note; created: boolean }>> {
   const parsed = noteCreateRequestSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: 'validation_failed' };
@@ -224,32 +266,40 @@ export async function createNote(
   if (!tags) return { ok: false, error: 'validation_failed' };
   const id = parsed.data.id ?? newId();
   const { title, body, pinned } = parsed.data;
-  const created = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(notes)
-      .values({
-        id,
-        ownerUserId: userId,
-        title,
-        body,
-        tags,
-        pinned,
-        searchText: toSearchText(title, tags, body),
-      })
-      .onConflictDoNothing()
-      .returning();
-    if (!row) return false;
-    await rebuildRefs(tx, row, userId);
-    return true;
-  });
+  let created: boolean;
+  try {
+    created = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(notes)
+        .values({
+          id,
+          ownerUserId: userId,
+          title,
+          body,
+          tags,
+          pinned,
+          searchText: toSearchText(title, tags, body),
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (!row) return false;
+      if (!(await rebuildRefs(tx, row, userId))) throw new TooManyLinksError();
+      return true;
+    });
+  } catch (err) {
+    if (err instanceof TooManyLinksError) return { ok: false, error: 'too_many_links' };
+    throw err;
+  }
   if (created) {
-    const note = await getNote(db, userId, id);
+    const note = await getNote(db, userId, id, options);
     return note ? { ok: true, value: { note, created: true } } : { ok: false, error: 'not_found' };
   }
   // A retry with the same client ID and the same content is the same create; anything else is a
-  // conflict (a stable ID belongs to whoever created it first).
+  // conflict (a stable ID belongs to whoever created it first). Another owner's ID is a
+  // conflict too, never a 404 or a hint that the ID is free.
   const [existing] = await db.select().from(notes).where(eq(notes.id, id));
-  if (!existing || existing.ownerUserId !== userId) return { ok: false, error: 'not_found' };
+  if (!existing) return { ok: false, error: 'not_found' };
+  if (existing.ownerUserId !== userId) return { ok: false, error: 'id_conflict' };
   const same =
     existing.title === title &&
     existing.body === body &&
@@ -259,7 +309,7 @@ export async function createNote(
     existing.tags.length === tags.length &&
     existing.tags.every((tag, index) => tag === tags[index]);
   if (!same) return { ok: false, error: 'id_conflict' };
-  const note = await getNote(db, userId, id);
+  const note = await getNote(db, userId, id, options);
   return note ? { ok: true, value: { note, created: false } } : { ok: false, error: 'not_found' };
 }
 
@@ -268,6 +318,7 @@ export async function updateNote(
   userId: string,
   noteId: string,
   input: unknown,
+  options: NoteReadOptions = {},
 ): Promise<NoteResult<Note>> {
   const patch = notePatchSchema.safeParse(input);
   if (!patch.success || !uuid(noteId)) return { ok: false, error: 'validation_failed' };
@@ -277,42 +328,51 @@ export async function updateNote(
     if (!normalised) return { ok: false, error: 'validation_failed' };
     tags = normalised;
   }
-  const updated = await db.transaction(async (tx) => {
-    const [current] = await tx
-      .select()
-      .from(notes)
-      .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)))
-      .for('update');
-    if (!current) return null;
-    const merged = {
-      title: patch.data.title ?? current.title,
-      body: patch.data.body ?? current.body,
-      tags: tags ?? current.tags,
-      pinned: patch.data.pinned ?? current.pinned,
-      state: patch.data.state ?? current.state,
-      trashedAt:
-        patch.data.trashed === undefined
-          ? current.trashedAt
-          : patch.data.trashed
-            ? (current.trashedAt ?? new Date())
-            : null,
-    };
-    const [row] = await tx
-      .update(notes)
-      .set({
-        ...merged,
-        searchText: toSearchText(merged.title, merged.tags, merged.body),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(notes.id, current.id), eq(notes.ownerUserId, userId)))
-      .returning();
-    if (!row) return null;
-    // Links and file claims are derived from the body, so only a body change rebuilds them.
-    if (patch.data.body !== undefined) await rebuildRefs(tx, row, userId);
-    return row;
-  });
+  let updated: NoteRow | null;
+  try {
+    updated = await db.transaction(async (tx) => {
+      // The body save locks the note row here, in the same transaction that flips file
+      // `referenced`/`unreferenced_at`, so a purge can never interleave with a claim.
+      const [current] = await tx
+        .select()
+        .from(notes)
+        .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)))
+        .for('update');
+      if (!current) return null;
+      const merged = {
+        title: patch.data.title ?? current.title,
+        body: patch.data.body ?? current.body,
+        tags: tags ?? current.tags,
+        pinned: patch.data.pinned ?? current.pinned,
+        state: patch.data.state ?? current.state,
+        trashedAt:
+          patch.data.trashed === undefined
+            ? current.trashedAt
+            : patch.data.trashed
+              ? (current.trashedAt ?? new Date())
+              : null,
+      };
+      const [row] = await tx
+        .update(notes)
+        .set({
+          ...merged,
+          searchText: toSearchText(merged.title, merged.tags, merged.body),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(notes.id, current.id), eq(notes.ownerUserId, userId)))
+        .returning();
+      if (!row) return null;
+      // Links and file claims are derived from the body, so only a body change rebuilds them.
+      if (patch.data.body !== undefined && !(await rebuildRefs(tx, row, userId)))
+        throw new TooManyLinksError();
+      return row;
+    });
+  } catch (err) {
+    if (err instanceof TooManyLinksError) return { ok: false, error: 'too_many_links' };
+    throw err;
+  }
   if (!updated) return { ok: false, error: 'not_found' };
-  const note = await getNote(db, userId, noteId);
+  const note = await getNote(db, userId, noteId, options);
   return note ? { ok: true, value: note } : { ok: false, error: 'not_found' };
 }
 
@@ -333,14 +393,18 @@ export async function deleteNote(
     const files = await tx
       .select({ id: noteFiles.id })
       .from(noteFiles)
-      .where(eq(noteFiles.noteId, note.id));
+      .where(and(eq(noteFiles.noteId, note.id), eq(noteFiles.ownerUserId, userId)));
     await tx.delete(notes).where(eq(notes.id, note.id));
     return files.map((file) => file.id);
   });
   return fileIds ? { ok: true, value: { fileIds } } : { ok: false, error: 'not_found' };
 }
 
-/** A manual note → task link, allowed only while the task's project is visible to the caller. */
+/**
+ * A manual note → task link, allowed only while the task's project is visible to the caller.
+ * The owner check and the link write share one transaction with the note row locked, and task
+ * visibility is one join: a private task and a missing one take the same 404 path.
+ */
 export async function linkNoteToTask(
   db: Database,
   userId: string,
@@ -348,22 +412,30 @@ export async function linkNoteToTask(
   taskId: string,
 ): Promise<NoteResult<true>> {
   if (!uuid(noteId) || !uuid(taskId)) return { ok: false, error: 'validation_failed' };
-  const [note] = await db
-    .select({ id: notes.id })
-    .from(notes)
-    .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId), isNull(notes.trashedAt)));
-  if (!note) return { ok: false, error: 'not_found' };
-  const [task] = await db
-    .select({ id: tasks.id, projectId: tasks.projectId })
-    .from(tasks)
-    .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)));
-  if (!task || !(await projectAccess(db, userId, task.projectId)))
-    return { ok: false, error: 'not_found' };
-  await db
-    .insert(noteTaskLinks)
-    .values({ noteId: note.id, taskId: task.id, source: 'manual' })
-    .onConflictDoNothing();
-  return { ok: true, value: true };
+  const linked = await db.transaction(async (tx) => {
+    const [note] = await tx
+      .select({ id: notes.id })
+      .from(notes)
+      .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId), isNull(notes.trashedAt)))
+      .for('update');
+    if (!note) return false;
+    const [task] = await tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .innerJoin(projects, eq(projects.id, tasks.projectId))
+      .innerJoin(
+        projectMembers,
+        and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)),
+      )
+      .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt), isNull(projects.deletedAt)));
+    if (!task) return false;
+    await tx
+      .insert(noteTaskLinks)
+      .values({ noteId: note.id, taskId: task.id, source: 'manual' })
+      .onConflictDoNothing();
+    return true;
+  });
+  return linked ? { ok: true, value: true } : { ok: false, error: 'not_found' };
 }
 
 /** Remove the manual link only; a body link stays until the body no longer names the task. */
@@ -374,21 +446,25 @@ export async function unlinkNoteFromTask(
   taskId: string,
 ): Promise<NoteResult<true>> {
   if (!uuid(noteId) || !uuid(taskId)) return { ok: false, error: 'validation_failed' };
-  const [note] = await db
-    .select({ id: notes.id })
-    .from(notes)
-    .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)));
-  if (!note) return { ok: false, error: 'not_found' };
-  await db
-    .delete(noteTaskLinks)
-    .where(
-      and(
-        eq(noteTaskLinks.noteId, note.id),
-        eq(noteTaskLinks.taskId, taskId),
-        eq(noteTaskLinks.source, 'manual'),
-      ),
-    );
-  return { ok: true, value: true };
+  const removed = await db.transaction(async (tx) => {
+    const [note] = await tx
+      .select({ id: notes.id })
+      .from(notes)
+      .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)))
+      .for('update');
+    if (!note) return false;
+    await tx
+      .delete(noteTaskLinks)
+      .where(
+        and(
+          eq(noteTaskLinks.noteId, note.id),
+          eq(noteTaskLinks.taskId, taskId),
+          eq(noteTaskLinks.source, 'manual'),
+        ),
+      );
+    return true;
+  });
+  return removed ? { ok: true, value: true } : { ok: false, error: 'not_found' };
 }
 
 /** The caller's own non-trashed notes linked to a task they can currently see. */
@@ -399,11 +475,15 @@ export async function notesForTask(
 ): Promise<NoteResult<NoteSummary[]>> {
   if (!uuid(taskId)) return { ok: false, error: 'not_found' };
   const [task] = await db
-    .select({ id: tasks.id, projectId: tasks.projectId })
+    .select({ id: tasks.id })
     .from(tasks)
-    .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)));
-  if (!task || !(await projectAccess(db, userId, task.projectId)))
-    return { ok: false, error: 'not_found' };
+    .innerJoin(projects, eq(projects.id, tasks.projectId))
+    .innerJoin(
+      projectMembers,
+      and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)),
+    )
+    .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt), isNull(projects.deletedAt)));
+  if (!task) return { ok: false, error: 'not_found' };
   const linkedNoteIds = db
     .select({ id: noteTaskLinks.noteId })
     .from(noteTaskLinks)
@@ -421,13 +501,15 @@ export async function notesForTask(
 /**
  * Derive `note_links`, the body half of `note_task_links` and file `referenced` flags from the
  * note's Markdown. Targets are resolved in batches and only when the user may see them now: their
- * own non-trashed notes, and tasks in projects they belong to.
+ * own non-trashed notes, and tasks in projects they belong to. Returns false when the body names
+ * more distinct notes/tasks than `NOTE_REF_LIMIT`.
  */
-async function rebuildRefs(tx: Tx, note: NoteRow, userId: string): Promise<void> {
+async function rebuildRefs(tx: Tx, note: NoteRow, userId: string): Promise<boolean> {
   const refs = extractNoteRefs(note.body);
-  const noteIds = refs.noteIds.filter((id) => id !== note.id).slice(0, NOTE_REF_LIMIT);
-  const taskIds = refs.taskIds.slice(0, NOTE_REF_LIMIT);
-  const fileIds = refs.fileIds.slice(0, NOTE_REF_LIMIT);
+  const noteIds = refs.noteIds.filter((id) => id !== note.id);
+  const taskIds = refs.taskIds;
+  const fileIds = refs.fileIds;
+  if (noteIds.length + taskIds.length > NOTE_REF_LIMIT) return false;
 
   await tx.delete(noteLinks).where(eq(noteLinks.fromNoteId, note.id));
   if (noteIds.length) {
@@ -466,49 +548,111 @@ async function rebuildRefs(tx: Tx, note: NoteRow, userId: string): Promise<void>
         .onConflictDoNothing();
   }
 
-  // Files of this note that the body no longer names go back to pending, and are purged later.
-  await tx.update(noteFiles).set({ referenced: false }).where(eq(noteFiles.noteId, note.id));
+  // Claim only this note's and owner's ready files; another note's file id in this body is
+  // ignored (the composite foreign key would also refuse to store it). Every referenced file is
+  // claimed, with no cap: the id can only ever name a file of this note.
   if (fileIds.length)
     await tx
       .update(noteFiles)
-      .set({ referenced: true })
-      .where(and(eq(noteFiles.noteId, note.id), inArray(noteFiles.id, fileIds)));
+      .set({ referenced: true, unreferencedAt: null })
+      .where(
+        and(
+          eq(noteFiles.noteId, note.id),
+          eq(noteFiles.ownerUserId, userId),
+          eq(noteFiles.status, 'ready'),
+          inArray(noteFiles.id, fileIds),
+          eq(noteFiles.referenced, false),
+        ),
+      );
+  // Files of this note the body no longer names go back to pending from now: the 24 h purge is
+  // measured from the removal, not from the upload.
+  await tx
+    .update(noteFiles)
+    .set({ referenced: false, unreferencedAt: new Date() })
+    .where(
+      and(
+        eq(noteFiles.noteId, note.id),
+        eq(noteFiles.ownerUserId, userId),
+        eq(noteFiles.status, 'ready'),
+        eq(noteFiles.referenced, true),
+        fileIds.length ? notInArray(noteFiles.id, fileIds) : sql`true`,
+      ),
+    );
+  return true;
+}
+
+export interface PurgeHooks {
+  /**
+   * Test seam, called inside the trash transaction after `FOR UPDATE SKIP LOCKED` selected the
+   * notes and before their files/rows are deleted, so a restore can be simulated between the
+   * select and the delete.
+   */
+  afterTrashSelected?: (tx: Tx) => Promise<void>;
 }
 
 /**
  * Remove expired note files and trashed notes, then stray bytes in the note-files directory.
  * Runs hourly and is returned so tests (and the account-deletion path) can call it directly.
+ *
+ * Every candidate is deleted by the statement that returns it, so a file or note that stops
+ * qualifying between the check and the delete is never removed by a stale list. The trash purge
+ * re-checks `trashed_at` under the row lock it already holds.
  */
 export async function purgeNotes(
   db: Database,
   store: AttachmentStore,
   now = new Date(),
+  hooks: PurgeHooks = {},
 ): Promise<void> {
-  const pendingBefore = new Date(now.getTime() - NOTE_PENDING_TTL_MS);
-  const pending = await db
-    .select({ id: noteFiles.id })
-    .from(noteFiles)
-    .where(and(eq(noteFiles.referenced, false), lt(noteFiles.createdAt, pendingBefore)));
-  if (pending.length) {
-    const ids = pending.map((row) => row.id);
-    await db.delete(noteFiles).where(inArray(noteFiles.id, ids));
-    for (const id of ids) await store.remove(id);
+  // Stale upload reservations (the client went away): row, final file and `.part`.
+  const uploadingBefore = new Date(now.getTime() - NOTE_UPLOADING_TTL_MS);
+  const stale = await db
+    .delete(noteFiles)
+    .where(and(eq(noteFiles.status, 'uploading'), lt(noteFiles.createdAt, uploadingBefore)))
+    .returning({ id: noteFiles.id });
+  for (const row of stale) {
+    await store.remove(row.id);
+    await store.removeName(`${row.id}.part`);
   }
 
+  // Pending files: one DELETE decides and returns the ids, then only those are unlinked.
+  const pendingBefore = new Date(now.getTime() - NOTE_PENDING_TTL_MS);
+  const pending = await db
+    .delete(noteFiles)
+    .where(
+      and(
+        eq(noteFiles.referenced, false),
+        eq(noteFiles.status, 'ready'),
+        lt(noteFiles.unreferencedAt, pendingBefore),
+      ),
+    )
+    .returning({ id: noteFiles.id });
+  for (const row of pending) await store.remove(row.id);
+
+  // Trashed notes: the select locks the rows, the note delete re-checks the cutoff, and the
+  // whole thing commits before any bytes are unlinked.
   const trashBefore = new Date(now.getTime() - NOTE_TRASH_TTL_MS);
-  const trashed = await db
-    .select({ id: notes.id })
-    .from(notes)
-    .where(and(isNotNull(notes.trashedAt), lt(notes.trashedAt, trashBefore)));
-  if (trashed.length) {
+  const files = await db.transaction(async (tx) => {
+    const trashed = await tx
+      .select({ id: notes.id })
+      .from(notes)
+      .where(and(isNotNull(notes.trashedAt), lt(notes.trashedAt, trashBefore)))
+      .for('update', { skipLocked: true });
+    if (trashed.length === 0) return [];
+    await hooks.afterTrashSelected?.(tx);
     const ids = trashed.map((row) => row.id);
-    const files = await db
-      .select({ id: noteFiles.id })
-      .from(noteFiles)
-      .where(inArray(noteFiles.noteId, ids));
-    await db.delete(notes).where(inArray(notes.id, ids));
-    for (const file of files) await store.remove(file.id);
-  }
+    const removed = await tx
+      .delete(noteFiles)
+      .where(inArray(noteFiles.noteId, ids))
+      .returning({ id: noteFiles.id });
+    await tx
+      .delete(notes)
+      .where(
+        and(inArray(notes.id, ids), isNotNull(notes.trashedAt), lt(notes.trashedAt, trashBefore)),
+      );
+    return removed.map((row) => row.id);
+  });
+  for (const id of files) await store.remove(id);
 
   const onDisk = await store.list(NOTE_PENDING_TTL_MS);
   if (onDisk.length === 0) return;

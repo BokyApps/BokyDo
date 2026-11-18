@@ -12,8 +12,12 @@ export const NOTE_TITLE_MAX = 200;
 export const NOTE_BODY_MAX_BYTES = 512 * 1024;
 export const NOTE_TAG_MAX_LENGTH = 50;
 export const NOTE_TAGS_MAX = 20;
-/** Links stored per kind from one note body; keeps a hostile body from filling the tables. */
-export const NOTE_REF_LIMIT = 500;
+/**
+ * Most distinct note and task links stored from one body. More is rejected (`too_many_links`)
+ * so a hostile body cannot fill the link tables; file references are not capped, because a
+ * file can only ever be claimed for its own note and owner.
+ */
+export const NOTE_REF_LIMIT = 1000;
 export const NOTE_SNIPPET_MAX = 200;
 /** What coolers render in place of a censored span. */
 export const CENSOR_PLACEHOLDER = '█████';
@@ -217,6 +221,8 @@ export function redactCensored(text: string): string {
 // ---------------------------------------------------------------------------------------------
 
 const HTTP_URL = /https?:\/\/[^\s<>"'`]+/gi;
+const MAILTO_URL = /mailto:[^\s<>"'`]+/gi;
+const WWW_URL = /\bwww\.[^\s<>"'`]+/gi;
 /** In-app links and note-file URLs: their IDs are meaningless as words. */
 const APP_URL = /(?:bokydo:(?:note|task)\/|\/api\/v1\/note-files\/)[0-9a-fA-F-]{0,64}/g;
 // eslint-disable-next-line no-useless-escape -- `]`, `[` and `-` are clearer escaped in a class
@@ -233,6 +239,8 @@ export function toSearchText(title: string, tags: readonly string[], body: strin
     .join(' ')
     .replace(CENSOR_TOKEN, ' ')
     .replace(HTTP_URL, ' ')
+    .replace(MAILTO_URL, ' ')
+    .replace(WWW_URL, ' ')
     .replace(APP_URL, ' ')
     .replace(MARKDOWN_PUNCTUATION, ' ')
     .replace(WHITESPACE, ' ')
@@ -262,28 +270,174 @@ export interface NoteRefs {
   fileIds: string[];
 }
 
+const NOTE_PREFIX = 'bokydo:note/';
+const TASK_PREFIX = 'bokydo:task/';
+const FILE_PREFIX = '/api/v1/note-files/';
+const FILE_INLINE = '?inline=1';
+const NOTE_LENGTH = NOTE_PREFIX.length + 36;
+const FILE_LENGTH = FILE_PREFIX.length + 36;
+const BACKTICK = 96;
+const TILDE = 126;
+
 /**
- * The in-app links and note-file references in a Markdown body. Linear in the body: each known
- * prefix is found with `indexOf`, and a fixed-width, anchored UUID test follows it. Nothing
- * here backtracks, so nested brackets, very long labels and millions of prefixes stay cheap.
+ * The in-app links and note-file references in a Markdown body. Only real link and image
+ * destinations count: the text after `](`, read up to the first whitespace or `)`. Fenced code
+ * blocks, inline code spans and plain text (including bare UUIDs and look-alike URLs) are
+ * skipped. Destinations must match exactly `bokydo:note/<uuid>`, `bokydo:task/<uuid>` or
+ * `/api/v1/note-files/<uuid>` (with an optional `?inline=1`).
+ *
+ * One forward pass: fences and code spans are consumed with fixed look-ahead, never backtracking,
+ * so a hostile body stays linear.
  */
 export function extractNoteRefs(body: string): NoteRefs {
   const noteIds = new Set<string>();
   const taskIds = new Set<string>();
   const fileIds = new Set<string>();
-  collect(body, 'bokydo:note/', noteIds);
-  collect(body, 'bokydo:task/', taskIds);
-  collect(body, '/api/v1/note-files/', fileIds);
+  const n = body.length;
+  let i = 0;
+  let lineStart = true;
+  /** Where the current `[...]` label opened, so a bare `](` in prose is not a link. */
+  let labelStart = -1;
+  while (i < n) {
+    if (lineStart) {
+      lineStart = false;
+      let j = i;
+      let spaces = 0;
+      while (spaces < 3 && body.charCodeAt(j) === 32) {
+        j++;
+        spaces++;
+      }
+      const fence = body.charCodeAt(j);
+      if (fence === BACKTICK || fence === TILDE) {
+        let k = j;
+        while (body.charCodeAt(k) === fence) k++;
+        const run = k - j;
+        if (run >= 3) {
+          const nl = body.indexOf('\n', k);
+          i = skipFence(body, nl === -1 ? n : nl + 1, fence, run);
+          labelStart = -1;
+          lineStart = true;
+          continue;
+        }
+      }
+    }
+    const c = body.charCodeAt(i);
+    if (c === 10) {
+      i++;
+      lineStart = true;
+      continue;
+    }
+    if (c === BACKTICK) {
+      let k = i;
+      while (body.charCodeAt(k) === BACKTICK) k++;
+      const close = backtickClose(body, k, k - i);
+      if (close === -1) {
+        // An unmatched run is literal text in CommonMark; skip the rest of its line so a
+        // hostile body full of unclosed backticks cannot make us rescan it per run.
+        const nl = body.indexOf('\n', k);
+        i = nl === -1 ? n : nl;
+      } else i = close + (k - i);
+      continue;
+    }
+    if (c === 91) {
+      labelStart = i;
+      i++;
+      continue;
+    }
+    if (c === 93) {
+      const hadLabel = labelStart !== -1;
+      labelStart = -1;
+      if (hadLabel && body.charCodeAt(i + 1) === 40) {
+        // A `](` after a label is a link or image destination: the URL runs to whitespace or
+        // `)`, and any `"title"` after that whitespace is ignored.
+        let end = i + 2;
+        while (end < n) {
+          const d = body.charCodeAt(end);
+          if (d === 41 || d === 32 || d === 9 || d === 10 || d === 13) break;
+          end++;
+        }
+        collectDestination(body, i + 2, end, noteIds, taskIds, fileIds);
+        i = end;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
   return { noteIds: [...noteIds], taskIds: [...taskIds], fileIds: [...fileIds] };
 }
 
-function collect(body: string, prefix: string, into: Set<string>): void {
-  let at = body.indexOf(prefix);
-  while (at !== -1) {
-    const id = uuidAt(body, at + prefix.length);
-    if (id) into.add(id);
-    at = body.indexOf(prefix, at + prefix.length);
+/** Classify one destination by exact shape; no substring search, so look-alikes never match. */
+function collectDestination(
+  body: string,
+  start: number,
+  end: number,
+  noteIds: Set<string>,
+  taskIds: Set<string>,
+  fileIds: Set<string>,
+): void {
+  const length = end - start;
+  if (length === NOTE_LENGTH) {
+    if (body.startsWith(NOTE_PREFIX, start)) {
+      const id = uuidAt(body, start + NOTE_PREFIX.length);
+      if (id) noteIds.add(id);
+    } else if (body.startsWith(TASK_PREFIX, start)) {
+      const id = uuidAt(body, start + TASK_PREFIX.length);
+      if (id) taskIds.add(id);
+    }
+  } else if (length === FILE_LENGTH || length === FILE_LENGTH + FILE_INLINE.length) {
+    if (!body.startsWith(FILE_PREFIX, start)) return;
+    if (length !== FILE_LENGTH && !body.startsWith(FILE_INLINE, start + FILE_LENGTH)) return;
+    const id = uuidAt(body, start + FILE_PREFIX.length);
+    if (id) fileIds.add(id);
   }
+}
+
+/** Index just past the closing fence line, or the end when the fence is never closed. */
+function skipFence(body: string, from: number, fence: number, run: number): number {
+  const n = body.length;
+  let line = from;
+  while (line < n) {
+    let q = line;
+    let spaces = 0;
+    while (spaces < 3 && body.charCodeAt(q) === 32) {
+      q++;
+      spaces++;
+    }
+    if (body.charCodeAt(q) === fence) {
+      let r = q;
+      while (body.charCodeAt(r) === fence) r++;
+      if (r - q >= run) {
+        let t = r;
+        while (t < n && (body.charCodeAt(t) === 32 || body.charCodeAt(t) === 9)) t++;
+        if (t === n || body.charCodeAt(t) === 10) return t === n ? n : t + 1;
+      }
+    }
+    const nl = body.indexOf('\n', line);
+    if (nl === -1) return n;
+    line = nl + 1;
+  }
+  return n;
+}
+
+/** Start of the next run of exactly `run` backticks on this line, or -1. */
+function backtickClose(body: string, from: number, run: number): number {
+  const n = body.length;
+  let p = from;
+  while (p < n) {
+    const c = body.charCodeAt(p);
+    if (c === 10) return -1;
+    if (c === BACKTICK) {
+      let q = p;
+      while (body.charCodeAt(q) === BACKTICK) q++;
+      if (q - p === run) return p;
+      p = q;
+      continue;
+    }
+    p++;
+  }
+  return -1;
 }
 
 // ---------------------------------------------------------------------------------------------

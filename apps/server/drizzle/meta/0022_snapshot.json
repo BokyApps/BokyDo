@@ -1,5 +1,5 @@
 {
-  "id": "0e5df12e-1833-474b-a02b-1278198ec270",
+  "id": "d5bf809a-5e90-406a-9413-fa49da438cf2",
   "prevId": "13af2b51-ae73-478e-945a-5190529c39c6",
   "version": "7",
   "dialect": "postgresql",
@@ -2155,12 +2155,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ready'"
+        },
         "referenced": {
           "name": "referenced",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "unreferenced_at": {
+          "name": "unreferenced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
         },
         "created_at": {
           "name": "created_at",
@@ -2205,7 +2219,7 @@
           "name": "note_files_pending_idx",
           "columns": [
             {
-              "expression": "created_at",
+              "expression": "unreferenced_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2216,22 +2230,25 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "note_files_uploading_idx": {
+          "name": "note_files_uploading_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"note_files\".\"status\" = 'uploading'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "note_files_note_id_notes_id_fk": {
-          "name": "note_files_note_id_notes_id_fk",
-          "tableFrom": "note_files",
-          "tableTo": "notes",
-          "columnsFrom": [
-            "note_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "note_files_owner_user_id_users_id_fk": {
           "name": "note_files_owner_user_id_users_id_fk",
           "tableFrom": "note_files",
@@ -2244,12 +2261,31 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
+        },
+        "note_files_note_owner_fk": {
+          "name": "note_files_note_owner_fk",
+          "tableFrom": "note_files",
+          "tableTo": "notes",
+          "columnsFrom": [
+            "note_id",
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "owner_user_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "note_files_status_check": {
+          "name": "note_files_status_check",
+          "value": "\"note_files\".\"status\" in ('uploading', 'ready')"
+        },
         "note_files_size_check": {
           "name": "note_files_size_check",
           "value": "\"note_files\".\"size\" >= 0"
@@ -2511,8 +2547,8 @@
         }
       },
       "indexes": {
-        "notes_owner_updated_idx": {
-          "name": "notes_owner_updated_idx",
+        "notes_owner_list_idx": {
+          "name": "notes_owner_list_idx",
           "columns": [
             {
               "expression": "owner_user_id",
@@ -2521,7 +2557,19 @@
               "nulls": "last"
             },
             {
+              "expression": "\"pinned\" desc",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
               "expression": "\"updated_at\" desc",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "\"id\" desc",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
@@ -2579,7 +2627,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "notes_id_owner_unique": {
+          "name": "notes_id_owner_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "owner_user_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "notes_title_check": {
