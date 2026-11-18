@@ -10,6 +10,10 @@ import {
 } from './markdown.js';
 
 const UUID = '123e4567-e89b-12d3-a456-426614174000';
+// A cryptographically-valid token (strict parseToken requires 16-byte salt, 12-byte iv and >=17
+// bytes of ciphertext). The old fixture was only shape-valid and is intentionally rejected now.
+const VALID_TOKEN =
+  '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
 const rt = (md: string) => docToMarkdown(markdownToDoc(md));
 const stable = (md: string) => expect(rt(rt(md))).toBe(rt(md));
 
@@ -35,7 +39,7 @@ describe('markdown round-trip (canonical forms are identical)', () => {
     ['task link', `[a task](bokydo:task/${UUID})`],
     ['valid youtube embed', '::embed[My video](https://www.youtube.com/watch?v=dQw4w9WgXcQ)'],
     ['valid drive embed', `::embed[Drive](https://drive.google.com/file/d/1AbCdEfGhIjKlMn/view)`],
-    ['censored token', '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBB:cccccccccccc}}'],
+    ['censored token', VALID_TOKEN],
   ];
 
   for (const [name, md] of cases) {
@@ -53,17 +57,19 @@ describe('markdown round-trip (canonical forms are identical)', () => {
       `[link](https://example.com/)`,
       `![alt](/api/v1/note-files/${UUID})`,
       '::embed[My video](https://www.youtube.com/watch?v=dQw4w9WgXcQ)',
-      '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBB:cccccccccccc}}',
+      VALID_TOKEN,
     ];
     for (const md of samples) stable(md);
   });
 
-  it('clamps heading levels 4-6 to 3 on input', () => {
-    expect(rt('#### four\n\n##### five\n\n###### six')).toBe('### four\n\n### five\n\n### six');
+  it('keeps heading levels 4-6 (schema allows 1-6; source is preserved verbatim)', () => {
+    expect(rt('#### four\n\n##### five\n\n###### six')).toBe(
+      '#### four\n\n##### five\n\n###### six',
+    );
   });
 
-  it('normalises link destinations through safeHref', () => {
-    expect(rt('[x](https://example.com)')).toBe('[x](https://example.com/)');
+  it('preserves the exact source verbatim (no canonical rewriting of unchanged blocks)', () => {
+    expect(rt('[x](https://example.com)')).toBe('[x](https://example.com)');
   });
 });
 
@@ -144,11 +150,12 @@ describe('unsafe links / images / HTML are neutralised on parse', () => {
     expect(inline.length).toBeGreaterThan(0);
     expect(inline.every((n) => n.type === 'text')).toBe(true);
     expect(inline.every((n) => (n.marks ?? []).length === 0)).toBe(true);
-    // Serialised output escapes the angle brackets, so it never becomes markup again.
+    // The source is preserved verbatim; the html:false renderer shows `<…>` as text, never markup.
     const out = docToMarkdown(doc);
-    expect(out).toContain('\\<img');
-    expect(out).toContain('\\<iframe');
-    expect(out).not.toMatch(/(^|[^\\])</); // no unescaped '<' anywhere
+    expect(out).toBe(src);
+    // Re-parsing the emitted Markdown still produces only text nodes (no executable DOM).
+    const inline2 = (markdownToDoc(out).content ?? []).flatMap((block) => block.content ?? []);
+    expect(inline2.every((n) => n.type === 'text')).toBe(true);
   });
 
   it('classifyHref rejects anything outside the allow-list', () => {
@@ -163,7 +170,7 @@ describe('unsafe links / images / HTML are neutralised on parse', () => {
 
 describe('censored spans', () => {
   it('round-trips the exact token and shows the placeholder in text', () => {
-    const token = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBB:cccccccccccc}}';
+    const token = VALID_TOKEN;
     expect(rt(token)).toBe(token);
     const doc = markdownToDoc(`before ${token} after`);
     const censored = doc.content?.[0]?.content?.find((n) => n.type === 'censored');
@@ -194,7 +201,10 @@ describe('embed lines that are not allow-listed', () => {
     expect(doc.content?.[0]?.type).toBe('paragraph');
     const link = doc.content?.[0]?.content?.[0];
     expect(link?.marks?.some((m) => m.type === 'link')).toBe(true);
-    expect(rt('::embed[clip](https://vimeo.com/12345)')).toBe('[clip](https://vimeo.com/12345)');
+    // The non-embed source is preserved verbatim (it re-parses to a plain link paragraph).
+    expect(rt('::embed[clip](https://vimeo.com/12345)')).toBe(
+      '::embed[clip](https://vimeo.com/12345)',
+    );
   });
 
   it('an unsafe ::embed URL stays plain text (no link, no embed)', () => {

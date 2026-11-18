@@ -1,9 +1,10 @@
-import type { Editor, JSONContent } from '@tiptap/core';
+import type { Editor } from '@tiptap/core';
 import { useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { NoteCallbacks } from './callbacks.js';
+import { censorSelection } from './censor-command.js';
 import { parseEmbedUrl } from './embed.js';
-import { classifyHref, contentToMarkdown } from './markdown.js';
+import { classifyHref } from './markdown.js';
 
 interface ToolbarProps {
   editor: Editor | null;
@@ -46,7 +47,7 @@ export function Toolbar({
   const [pickerResults, setPickerResults] = useState<PickerResult[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
 
-  const [censorError, setCensorError] = useState(false);
+  const [censorError, setCensorError] = useState<string | null>(null);
 
   const disabled = !editor || !editable || markdownMode;
 
@@ -195,20 +196,22 @@ export function Toolbar({
     if (!editor || !callbacks.onCensor) return;
     const { from, to, empty } = editor.state.selection;
     if (empty) {
-      setCensorError(true);
+      setCensorError(
+        t('notes.editor.censorEmpty', { defaultValue: 'Select some text to censor first.' }),
+      );
       return;
     }
-    setCensorError(false);
-    const slice = editor.state.doc.slice(from, to);
-    const json = slice.content.toJSON() as JSONContent[];
-    const markdown = contentToMarkdown(json);
-    const token = await callbacks.onCensor(markdown);
-    if (!token) return;
-    editor
-      .chain()
-      .focus()
-      .insertContentAt({ from, to }, { type: 'censored', attrs: { token } })
-      .run();
+    setCensorError(null);
+    // censorSelection makes the editor read-only while the password prompt is open, aborts if the
+    // document changed (stale selection), and wipes undo history so plaintext can't be restored.
+    const outcome = await censorSelection(editor, from, to, callbacks.onCensor);
+    if (outcome === 'aborted') {
+      setCensorError(
+        t('notes.editor.censorAborted', {
+          defaultValue: 'The note changed while censoring. Nothing was changed — please try again.',
+        }),
+      );
+    }
   };
 
   return (
@@ -448,7 +451,7 @@ export function Toolbar({
 
       {censorError && (
         <p className="bk-toolbar-error" role="alert">
-          {t('notes.editor.censorEmpty', { defaultValue: 'Select some text to censor first.' })}
+          {censorError}
         </p>
       )}
     </div>

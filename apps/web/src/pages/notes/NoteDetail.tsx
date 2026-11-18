@@ -37,6 +37,9 @@ import {
   onCensorLock,
   type CensorPrompts,
 } from '../../lib/notes-censor.js';
+import type { RevealAnchor } from '../../components/notes/callbacks.js';
+import type { RevealState } from '../../components/notes/RevealOverlay.js';
+import { RevealController } from '../../components/notes/reveal-controller.js';
 import { useSyncState } from '../../lib/sync.js';
 import { useToast } from '../../lib/toasts.js';
 import { liveTasks } from '../../lib/views.js';
@@ -111,6 +114,26 @@ function NoteDetailInner({ note }: { note: Note }) {
     () => new CensorFlow({ askPassword, confirmRemove } satisfies CensorPrompts),
   );
 
+  // --- reveal overlay lifecycle (page-owned, CONTRACT CHANGE) ----------------------------------
+  // The editor never receives reveal plaintext. The controller unlocks via the CensorFlow and
+  // publishes the plaintext to a portal overlay; a request id discards late results after close /
+  // lock / pagehide / note change. Escape, blur (in the overlay) and a 60 s timer close it.
+  const [reveal] = useState(() => new RevealController((token) => flow.onReveal(token)));
+  const [revealState, setRevealState] = useState<RevealState | null>(null);
+  useEffect(() => reveal.subscribe(setRevealState), [reveal]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') reveal.close();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [reveal]);
+  useEffect(() => {
+    if (!revealState) return;
+    const timer = window.setTimeout(() => reveal.close(), 60_000);
+    return () => window.clearTimeout(timer);
+  }, [revealState, reveal]);
+
   // --- debounced, diff-only autosave ------------------------------------------------------------
   const [autosave] = useState(
     () =>
@@ -148,8 +171,16 @@ function NoteDetailInner({ note }: { note: Note }) {
   }, [draft, autosave, gone]);
   useEffect(() => () => void autosave.flush(), [autosave]);
 
-  // A lock clears the key cache, closes any reveal overlay (editor remount) and password inputs.
-  useEffect(() => onCensorLock(() => setLockKey((k) => k + 1)), []);
+  // A lock clears the key cache, closes any reveal overlay, discards pending unlocks (editor
+  // remount) and password inputs. pagehide -> lockCensors() reaches this listener too.
+  useEffect(
+    () =>
+      onCensorLock(() => {
+        setLockKey((k) => k + 1);
+        reveal.close();
+      }),
+    [reveal],
+  );
 
   // --- structural mutations (state / trash / delete / links) -----------------------------------
   const refresh = useCallback(
@@ -227,8 +258,23 @@ function NoteDetailInner({ note }: { note: Note }) {
     [navigate],
   );
   const onCensor = useCallback((plaintext: string) => flow.onCensor(plaintext), [flow]);
-  const onReveal = useCallback((token: string) => flow.onReveal(token), [flow]);
+  // Fire-and-forget reveal: the page unlocks and shows the overlay; nothing is returned to the editor.
+  const onReveal = useCallback(
+    (token: string, anchor: RevealAnchor) => {
+      void reveal.request(token, anchor);
+    },
+    [reveal],
+  );
   const onUncensor = useCallback((token: string) => flow.onUncensor(token), [flow]);
+  const onProtectedCut = useCallback(
+    () =>
+      toast({
+        message: t('notes.censor.cutBlocked', {
+          defaultValue: "Censored text can't be cut; delete it or remove the censor first.",
+        }),
+      }),
+    [toast, t],
+  );
 
   const trashed = note.state === 'trashed';
   const saveLabel = gone
@@ -377,6 +423,9 @@ function NoteDetailInner({ note }: { note: Note }) {
             onCensor={onCensor}
             onReveal={onReveal}
             onUncensor={onUncensor}
+            onProtectedCut={onProtectedCut}
+            revealState={revealState}
+            onCloseReveal={() => reveal.close()}
           />
         </Suspense>
       </div>

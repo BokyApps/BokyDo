@@ -3,6 +3,7 @@
 import { safeHref } from '@bokydo/shared';
 import type { JSONContent } from '@tiptap/core';
 import MarkdownIt, { type Token } from 'markdown-it';
+import { parseToken } from '../../lib/censor.js';
 import { EMBED_LINE, parseEmbedUrl } from './embed.js';
 
 /**
@@ -15,6 +16,13 @@ import { EMBED_LINE, parseEmbedUrl } from './embed.js';
  * HTML must stay text, and output must be a *canonical* string that re-parses to the same document.
  * Owning the conversion with markdown-it (html:false) + a deterministic serializer is the only way
  * to guarantee all of that and to unit-test it headlessly; the TipTap editor only ever sees JSON.
+ *
+ * Review fix (silent rewrite / data loss): every *top-level* block carries `attrs.src`, the exact
+ * slice of the source Markdown it came from (plus `attrs.sep`/`attrs.lead` for the surrounding
+ * whitespace) and `attrs.hash`, a hash of its canonical serialisation. On serialise an unchanged
+ * block is emitted verbatim from `src`, so an edit in one block can never rewrite or discard the
+ * Markdown of any other block. Custom syntax is recognised from SOURCE, not decoded inline text,
+ * so backslash-escaped `\{\{censored…` and `\::embed` stay literal.
  */
 
 // ---------------------------------------------------------------------------------------------
@@ -22,17 +30,20 @@ import { EMBED_LINE, parseEmbedUrl } from './embed.js';
 // ---------------------------------------------------------------------------------------------
 
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const NOTE_FILE_HREF = new RegExp(`^/api/v1/note-files/(${UUID})$`);
+const UUID_RE = new RegExp(`^${UUID}$`);
+/** Note-file URLs may carry `?inline=1` for images. Anchored so nothing else is ever an <img>. */
+export const NOTE_FILE_SRC_RE = new RegExp(`^/api/v1/note-files/(${UUID})(\\?inline=1)?$`);
 const INTERNAL_NOTE = new RegExp(`^bokydo:note/(${UUID})$`);
 const INTERNAL_TASK = new RegExp(`^bokydo:task/(${UUID})$`);
 
 export const NOTE_FILE_PREFIX = '/api/v1/note-files/';
 export const CENSORED_PLACEHOLDER = '█████';
 
-/** `{{censored:v1:<salt>:<iv>:<ct>}}` — the shape the editor recognises (ADR 0025). */
+/** `{{censored:v1:<salt>:<iv>:<ct>}}` — shape only; validity is checked with strict parseToken. */
 const CENSOR_BODY = '\\{\\{censored:v1:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+\\}\\}';
 export const CENSOR_TOKEN_EXACT = new RegExp(`^${CENSOR_BODY}$`);
 const CENSOR_SPLIT = new RegExp(`(${CENSOR_BODY})`);
+const CENSOR_GLOBAL = new RegExp(CENSOR_BODY, 'g');
 
 export type HrefKind =
   | { kind: 'link'; href: string }
@@ -44,7 +55,7 @@ export type HrefKind =
 /** Classify a link/image destination. Anything not explicitly allowed becomes plain text. */
 export function classifyHref(raw: string): HrefKind {
   const value = raw.trim();
-  const file = NOTE_FILE_HREF.exec(value);
+  const file = NOTE_FILE_SRC_RE.exec(value);
   if (file?.[1]) return { kind: 'file', id: file[1] };
   const note = INTERNAL_NOTE.exec(value);
   if (note?.[1]) return { kind: 'note', id: note[1] };
@@ -55,16 +66,33 @@ export function classifyHref(raw: string): HrefKind {
   return { kind: 'unsafe' };
 }
 
+// --- strict validators shared with the paste/drop parseHTML rules and renderHTML --------------
+
+export function isValidNoteFileId(id: unknown): id is string {
+  return typeof id === 'string' && UUID_RE.test(id);
+}
+/** The only validation for censor tokens: the crypto module's strict parseToken (ADR 0025). */
+export function isValidCensorToken(token: unknown): token is string {
+  return typeof token === 'string' && parseToken(token) !== null;
+}
+export function isValidInternalChip(kind: unknown, id: unknown): boolean {
+  return (kind === 'note' || kind === 'task') && isValidNoteFileId(id);
+}
+export function isValidEmbedUrl(url: unknown): boolean {
+  return typeof url === 'string' && parseEmbedUrl(url) !== null;
+}
 export function isCensorToken(value: string): boolean {
-  return CENSOR_TOKEN_EXACT.test(value);
+  return isValidCensorToken(value);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Escaping (produces readable, canonical Markdown that re-parses to the same doc)
 // ---------------------------------------------------------------------------------------------
 
-// Always escape characters that could start inline constructs, autolinks or entity decoding.
-const ESCAPE_ALWAYS = /[\\`*_[\]<>~|&]/g;
+// Always escape characters that could start inline constructs, autolinks, table cells, entity
+// decoding, or our own custom syntax (`{`/`}` so a literal `{{censored…` can never re-read as an
+// atom, and `|` so it can never split a table cell).
+const ESCAPE_ALWAYS = /[\\`*_[\]<>~|&{}]/g;
 
 function escapeText(text: string, atLineStart: boolean): string {
   let out = text.replace(ESCAPE_ALWAYS, '\\$&');
@@ -86,11 +114,16 @@ function serializeHref(href: string): string {
   return href.replace(/[()\\]/g, '\\$&');
 }
 
-function longestBacktickRun(text: string): number {
+function serializeTitle(title: string): string {
+  // A link title is rendered as `"…"`; quotes/backslashes inside it must be escaped.
+  return title.replace(/[\\"]/g, '\\$&');
+}
+
+function longestRun(text: string, char: string): number {
   let max = 0;
   let run = 0;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === '`') {
+    if (text[i] === char) {
       run++;
       if (run > max) max = run;
     } else run = 0;
@@ -98,9 +131,18 @@ function longestBacktickRun(text: string): number {
   return max;
 }
 
+/** A fence longer than any run of the same character inside the code (~~~ if backticks clash). */
+function codeFence(text: string): string {
+  const ticks = longestRun(text, '`');
+  if (ticks < 3) return '```';
+  const tildes = longestRun(text, '~');
+  return '~'.repeat(Math.max(3, tildes + 1));
+}
+
 function serializeCode(text: string): string {
   const body = text.replace(/\r?\n/g, ' ');
-  const delim = '`'.repeat(longestBacktickRun(body) + 1);
+  const ticks = longestRun(body, '`');
+  const delim = '`'.repeat(ticks + 1);
   const pad = delim.length > 1 || body.startsWith('`') || body.endsWith('`') ? ' ' : '';
   return `${delim}${pad}${body}${pad}${delim}`;
 }
@@ -129,6 +171,18 @@ const INLINE_TYPES = new Set([
   'noteUpload',
 ]);
 
+/** Stable hash of a block's canonical serialisation, used to detect edits. */
+function hashString(s: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x9e3779b9;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b + c, 0x85ebca6b) >>> 0;
+  }
+  return `${a.toString(36)}-${b.toString(36)}`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Markdown -> ProseMirror JSON
 // ---------------------------------------------------------------------------------------------
@@ -137,14 +191,31 @@ const md = new MarkdownIt({ html: false, linkify: false, breaks: false });
 
 function clampLevel(value: number): number {
   if (!Number.isFinite(value)) return 1;
-  return Math.min(3, Math.max(1, Math.round(value)));
+  return Math.min(6, Math.max(1, Math.round(value)));
 }
 
-function splitCensored(text: string): { text: string; token: boolean }[] {
+/**
+ * Custom censor tokens must be recognised from the RAW inline source, not markdown-it's decoded
+ * `text` tokens: `\{\{censored…\}\}` decodes to a token-looking string but must stay literal text.
+ * We collect the exact token strings that occur unescaped in the raw source (an escaped brace pair
+ * is separated by backslashes, so the shape regex never matches it) and only promote those.
+ */
+function unescapedCensorTokens(raw: string): Set<string> {
+  const set = new Set<string>();
+  CENSOR_GLOBAL.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CENSOR_GLOBAL.exec(raw)) !== null) set.add(m[0]);
+  return set;
+}
+
+function splitCensored(text: string, rawTokens: Set<string>): { text: string; token: boolean }[] {
   return text
     .split(CENSOR_SPLIT)
     .filter((part) => part.length > 0)
-    .map((part) => ({ text: part, token: CENSOR_TOKEN_EXACT.test(part) }));
+    .map((part) => ({
+      text: part,
+      token: rawTokens.has(part) && isValidCensorToken(part),
+    }));
 }
 
 function collectLinkInner(children: Token[], start: number): { inner: Token[]; next: number } {
@@ -173,7 +244,11 @@ function withMarks(marks: Mark[]): { marks: Mark[] } | Record<string, never> {
   return marks.length ? { marks: [...marks] } : {};
 }
 
-function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSONContent[] {
+function parseInlineChildren(
+  children: Token[],
+  initialMarks: Mark[] = [],
+  rawTokens: Set<string> = new Set(),
+): JSONContent[] {
   const out: JSONContent[] = [];
   let marks = [...initialMarks];
   let i = 0;
@@ -186,7 +261,7 @@ function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSON
     const t = children[i]!;
     switch (t.type) {
       case 'text':
-        for (const part of splitCensored(t.content)) {
+        for (const part of splitCensored(t.content, rawTokens)) {
           if (part.token)
             out.push({ type: 'censored', attrs: { token: part.text }, ...withMarks(marks) });
           else pushText(part.text);
@@ -226,11 +301,14 @@ function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSON
         i++;
         break;
       case 'softbreak':
-        pushText(' '); // soft line breaks normalise to a single space
+        // A soft line break is preserved as a literal newline inside the paragraph (not a space).
+        out.push({ type: 'text', text: '\n' });
         i++;
         break;
       case 'link_open': {
         const href = String(t.attrGet('href') ?? '');
+        const rawTitle = t.attrGet('title');
+        const title = rawTitle == null ? null : String(rawTitle);
         const cls = classifyHref(href);
         const { inner, next } = collectLinkInner(children, i + 1);
         if (cls.kind === 'file' || cls.kind === 'note' || cls.kind === 'task') {
@@ -245,11 +323,13 @@ function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSON
             });
           }
         } else if (cls.kind === 'link') {
-          out.push(
-            ...parseInlineChildren(inner, [...marks, { type: 'link', attrs: { href: cls.href } }]),
-          );
+          const linkMark: Mark = {
+            type: 'link',
+            attrs: { href: cls.href, ...(title ? { title } : {}) },
+          };
+          out.push(...parseInlineChildren(inner, [...marks, linkMark], rawTokens));
         } else {
-          out.push(...parseInlineChildren(inner, marks));
+          out.push(...parseInlineChildren(inner, marks, rawTokens));
         }
         i = next;
         break;
@@ -275,8 +355,8 @@ function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSON
   return out;
 }
 
-function parseInline(inline: Token | undefined): JSONContent[] {
-  return inline?.type === 'inline' ? parseInlineChildren(inline.children ?? []) : [];
+function parseInline(inline: Token | undefined, rawTokens: Set<string> = new Set()): JSONContent[] {
+  return inline?.type === 'inline' ? parseInlineChildren(inline.children ?? [], [], rawTokens) : [];
 }
 
 function firstTextNode(nodes: JSONContent[]): JSONContent | null {
@@ -299,12 +379,20 @@ function taskMarker(item: JSONContent): string | null {
 function invalidEmbedParagraph(label: string, url: string, raw: string): JSONContent {
   const href = safeHref(url);
   if (href) {
+    // An empty label would produce an empty text node, which the schema rejects. Fall back to the
+    // URL so the paragraph is never blank (review: valid Markdown must not open blank).
     return {
       type: 'paragraph',
-      content: [{ type: 'text', text: label, marks: [{ type: 'link', attrs: { href } }] }],
+      content: [{ type: 'text', text: label || url, marks: [{ type: 'link', attrs: { href } }] }],
     };
   }
   return { type: 'paragraph', content: [{ type: 'text', text: raw }] };
+}
+
+function alignFromToken(t: Token): string | null {
+  const style = String(t.attrGet('style') ?? '');
+  const m = /text-align:\s*(left|center|right)/i.exec(style);
+  return m ? m[1]!.toLowerCase() : null;
 }
 
 function parseTable(tokens: Token[], i: number): { node: JSONContent; next: number } {
@@ -325,9 +413,11 @@ function parseTable(tokens: Token[], i: number): { node: JSONContent; next: numb
       j++;
     } else if (t.type === 'th_open' || t.type === 'td_open') {
       const inline = tokens[j + 1];
-      const content = parseInline(inline);
+      const content = parseInline(inline, unescapedCensorTokens(inline?.content ?? ''));
+      const align = alignFromToken(t);
       cells.push({
         type: t.type === 'th_open' ? 'tableHeader' : 'tableCell',
+        ...(align ? { attrs: { align } } : {}),
         content: [{ type: 'paragraph', content }],
       });
       j += 2;
@@ -344,8 +434,12 @@ function parseStart(t: Token): number {
   return Number.isFinite(start) && start > 0 ? Math.floor(start) : 1;
 }
 
-function readBlock(tokens: Token[], i: number): { node: JSONContent | null; next: number } {
+function readBlock(
+  tokens: Token[],
+  i: number,
+): { node: JSONContent | null; next: number; map: Token['map'] } {
   const t = tokens[i]!;
+  const map = t.map;
   switch (t.type) {
     case 'paragraph_open': {
       const inline = tokens[i + 1];
@@ -355,21 +449,33 @@ function readBlock(tokens: Token[], i: number): { node: JSONContent | null; next
         const label = em[1] ?? '';
         const url = em[2] ?? '';
         if (parseEmbedUrl(url)) {
-          return { node: { type: 'embed', attrs: { label, url } }, next: i + 3 };
+          return { node: { type: 'embed', attrs: { label, url } }, next: i + 3, map };
         }
-        return { node: invalidEmbedParagraph(label, url, raw), next: i + 3 };
+        return { node: invalidEmbedParagraph(label, url, raw), next: i + 3, map };
       }
-      return { node: { type: 'paragraph', content: parseInline(inline) }, next: i + 3 };
+      return {
+        node: {
+          type: 'paragraph',
+          content: parseInline(inline, unescapedCensorTokens(inline?.content ?? '')),
+        },
+        next: i + 3,
+        map,
+      };
     }
     case 'heading_open': {
       const level = clampLevel(parseInt(t.tag.slice(1), 10));
       return {
-        node: { type: 'heading', attrs: { level }, content: parseInline(tokens[i + 1]) },
+        node: {
+          type: 'heading',
+          attrs: { level },
+          content: parseInline(tokens[i + 1], unescapedCensorTokens(tokens[i + 1]?.content ?? '')),
+        },
         next: i + 3,
+        map,
       };
     }
     case 'hr':
-      return { node: { type: 'horizontalRule' }, next: i + 1 };
+      return { node: { type: 'horizontalRule' }, next: i + 1, map };
     case 'fence':
     case 'code_block': {
       const language = (t.info ?? '').trim().split(/\s+/)[0] ?? '';
@@ -381,6 +487,7 @@ function readBlock(tokens: Token[], i: number): { node: JSONContent | null; next
           content: text ? [{ type: 'text', text }] : [],
         },
         next: i + 1,
+        map,
       };
     }
     case 'blockquote_open': {
@@ -391,6 +498,7 @@ function readBlock(tokens: Token[], i: number): { node: JSONContent | null; next
           content: inner.nodes.length ? inner.nodes : [{ type: 'paragraph', content: [] }],
         },
         next: inner.next,
+        map,
       };
     }
     case 'bullet_list_open':
@@ -398,9 +506,6 @@ function readBlock(tokens: Token[], i: number): { node: JSONContent | null; next
       const closeType = t.type.replace('_open', '_close');
       const inner = parseSequence(tokens, i + 1, closeType);
       const items = inner.nodes;
-      // A GFM task list is a bullet list where *every* item starts with `[ ]`/`[x]`. Mixed lists
-      // stay ordinary bullet lists (the marker remains literal text) so we never mix taskItem and
-      // listItem children inside one list, which the schema forbids.
       const markers = t.type === 'bullet_list_open' ? items.map(taskMarker) : [];
       const allTasks =
         t.type === 'bullet_list_open' && items.length > 0 && markers.every((m) => m !== null);
@@ -422,17 +527,17 @@ function readBlock(tokens: Token[], i: number): { node: JSONContent | null; next
         : t.type === 'ordered_list_open'
           ? { type: 'orderedList', attrs: { start: parseStart(t) }, content: items }
           : { type: 'bulletList', content: items };
-      return { node, next: inner.next };
+      return { node, next: inner.next, map };
     }
     case 'list_item_open': {
       const inner = parseSequence(tokens, i + 1, 'list_item_close');
       const content = inner.nodes.length ? inner.nodes : [{ type: 'paragraph', content: [] }];
-      return { node: { type: 'listItem', content }, next: inner.next };
+      return { node: { type: 'listItem', content }, next: inner.next, map };
     }
     case 'table_open':
-      return parseTable(tokens, i);
+      return { ...parseTable(tokens, i), map };
     default:
-      return { node: null, next: i + 1 };
+      return { node: null, next: i + 1, map };
   }
 }
 
@@ -440,91 +545,196 @@ function parseSequence(
   tokens: Token[],
   start: number,
   stopType?: string,
+  maps?: Token['map'][],
 ): { nodes: JSONContent[]; next: number } {
   const nodes: JSONContent[] = [];
   let i = start;
   while (i < tokens.length) {
     if (stopType && tokens[i]!.type === stopType) return { nodes, next: i + 1 };
     const r = readBlock(tokens, i);
-    if (r.node) nodes.push(r.node);
+    if (r.node) {
+      nodes.push(r.node);
+      if (maps) maps.push(r.map);
+    }
     i = r.next > i ? r.next : i + 1;
   }
   return { nodes, next: i };
 }
 
+/** Drop empty text nodes (ProseMirror rejects them) and keep empty paragraphs (which it allows). */
+function stripEmptyText(nodes: JSONContent[]): JSONContent[] {
+  const kept: JSONContent[] = [];
+  for (const node of nodes) {
+    if (node.content) node.content = stripEmptyText(node.content);
+    if (node.type === 'text' && (node.text ?? '') === '') continue;
+    kept.push(node);
+  }
+  return kept;
+}
+
+/** Character offsets of each source line, used to slice the exact Markdown for each block. */
+function lineOffsets(src: string): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let off = 0;
+  for (const line of src.split('\n')) {
+    out.push({ start: off, end: off + line.length });
+    off += line.length + 1;
+  }
+  return out;
+}
+
+/** Attach verbatim source + a stability hash to each top-level block (review: no silent rewrite). */
+function attachSourceMeta(nodes: JSONContent[], maps: Token['map'][], src: string): void {
+  const lines = lineOffsets(src);
+  const startOf = (i: number) => (lines[i] ? lines[i]!.start : src.length);
+  const endOf = (i: number) => (lines[i] ? lines[i]!.end : src.length);
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!;
+    const attrs: Record<string, unknown> = { ...(node.attrs ?? {}) };
+    const map = maps[i];
+    if (map) {
+      const [s, e] = map;
+      const contentStart = startOf(s);
+      const contentEnd = endOf(e - 1);
+      attrs.src = src.slice(contentStart, contentEnd);
+      const nextStart = i + 1 < nodes.length && maps[i + 1] ? startOf(maps[i + 1]![0]) : src.length;
+      attrs.sep = src.slice(contentEnd, nextStart);
+      if (i === 0) attrs.lead = src.slice(0, contentStart);
+    }
+    attrs.hash = hashString(serializeBlock(node));
+    node.attrs = attrs;
+  }
+}
+
 /** Parse a full Markdown note into a TipTap/ProseMirror JSON document. */
 export function markdownToDoc(src: string): JSONContent {
   const tokens = md.parse(src ?? '', {});
-  const { nodes } = parseSequence(tokens, 0);
-  // A ProseMirror doc always needs at least one block so the editor is editable.
-  return { type: 'doc', content: nodes.length ? nodes : [{ type: 'paragraph', content: [] }] };
+  const maps: Token['map'][] = [];
+  const { nodes } = parseSequence(tokens, 0, undefined, maps);
+  const content = stripEmptyText(nodes.length ? nodes : [{ type: 'paragraph', content: [] }]);
+  if (nodes.length) attachSourceMeta(content, maps, src);
+  else if (content[0]) content[0].attrs = { ...(content[0].attrs ?? {}), lead: src };
+  return { type: 'doc', content };
 }
 
 /** Parse a plaintext Markdown span into inline nodes (used to restore an uncensored span). */
 export function markdownToInline(src: string): JSONContent[] {
   const tokens = md.parseInline(src ?? '', {});
   const inline = tokens.find((t) => t.type === 'inline');
-  return parseInlineChildren(inline?.children ?? []);
+  return stripEmptyText(parseInline(inline, unescapedCensorTokens(inline?.content ?? '')));
 }
 
 // ---------------------------------------------------------------------------------------------
 // ProseMirror JSON -> canonical Markdown
 // ---------------------------------------------------------------------------------------------
 
+interface StackMark {
+  key: string;
+  open: string;
+  close: string;
+}
+
+/** Marks for one inline node, outer → inner. A stable order makes nested bold/italic re-parse. */
+function desiredMarks(node: JSONContent): StackMark[] {
+  const marks = node.marks ?? [];
+  const has = (type: string) => marks.some((m) => m.type === type);
+  const out: StackMark[] = [];
+  const link = marks.find((m) => m.type === 'link');
+  if (link) {
+    const href = serializeHref(String(link.attrs?.href ?? ''));
+    const title = link.attrs?.title;
+    const tail = `](${href}${typeof title === 'string' && title ? ` "${serializeTitle(title)}"` : ''})`;
+    out.push({ key: `link:${href}:${title ?? ''}`, open: '[', close: tail });
+  }
+  if (has('bold')) out.push({ key: 'bold', open: '**', close: '**' });
+  if (has('strike')) out.push({ key: 'strike', open: '~~', close: '~~' });
+  if (has('italic')) out.push({ key: 'italic', open: '*', close: '*' });
+  return out;
+}
+
+/** The literal Markdown for one inline node, before mark delimiters are wrapped around it. */
+function pieceFor(node: JSONContent, atLineStart: boolean): string | null {
+  switch (node.type) {
+    case 'text': {
+      const text = node.text ?? '';
+      if (!text) return null;
+      return (node.marks ?? []).some((m) => m.type === 'code')
+        ? serializeCode(text)
+        : escapeText(text, atLineStart);
+    }
+    case 'censored':
+      return isValidCensorToken(node.attrs?.token)
+        ? String(node.attrs.token)
+        : CENSORED_PLACEHOLDER;
+    case 'noteImage':
+      return `![${escapeLabel(String(node.attrs?.alt ?? ''))}](${NOTE_FILE_PREFIX}${isValidNoteFileId(node.attrs?.id) ? node.attrs.id : ''})`;
+    case 'fileChip':
+      return `[${escapeLabel(String(node.attrs?.name ?? ''))}](${NOTE_FILE_PREFIX}${isValidNoteFileId(node.attrs?.id) ? node.attrs.id : ''})`;
+    case 'internalChip':
+      return `[${escapeLabel(String(node.attrs?.label ?? ''))}](bokydo:${node.attrs?.kind === 'task' ? 'task' : 'note'}/${isValidNoteFileId(node.attrs?.id) ? node.attrs.id : ''})`;
+    default:
+      return typeof node.text === 'string' && node.text ? escapeText(node.text, atLineStart) : null;
+  }
+}
+
+/**
+ * A mark-stack serializer: instead of wrapping each text node independently (which breaks nested
+ * bold+italic, e.g. `**a *b* c**`), we keep marks open across runs and only emit delimiters when
+ * the active mark set changes. Review fix: mixed bold/italic and overlapping marks round-trip.
+ */
 function serializeInline(nodes: JSONContent[] = []): string {
   let out = '';
   let atLineStart = true;
-  for (const node of nodes) {
-    switch (node.type) {
-      case 'text': {
-        const text = node.text ?? '';
-        if (!text) break;
-        const marks = node.marks ?? [];
-        const has = (type: string) => marks.some((m) => m.type === type);
-        let piece = has('code') ? serializeCode(text) : escapeText(text, atLineStart);
-        if (has('bold')) piece = `**${piece}**`;
-        if (has('italic')) piece = `*${piece}*`;
-        if (has('strike')) piece = `~~${piece}~~`;
-        const link = marks.find((m) => m.type === 'link');
-        if (link) piece = `[${piece}](${serializeHref(String(link.attrs?.href ?? ''))})`;
-        out += piece;
-        atLineStart = false;
-        break;
-      }
-      case 'hardBreak':
-        out += '\\\n';
-        atLineStart = true;
-        break;
-      case 'censored':
-        out += String(node.attrs?.token ?? CENSORED_PLACEHOLDER);
-        atLineStart = false;
-        break;
-      case 'noteImage':
-        out += `![${escapeLabel(String(node.attrs?.alt ?? ''))}](${NOTE_FILE_PREFIX}${node.attrs?.id ?? ''})`;
-        atLineStart = false;
-        break;
-      case 'fileChip':
-        out += `[${escapeLabel(String(node.attrs?.name ?? ''))}](${NOTE_FILE_PREFIX}${node.attrs?.id ?? ''})`;
-        atLineStart = false;
-        break;
-      case 'internalChip':
-        out += `[${escapeLabel(String(node.attrs?.label ?? ''))}](bokydo:${node.attrs?.kind}/${node.attrs?.id ?? ''})`;
-        atLineStart = false;
-        break;
-      default:
-        if (typeof node.text === 'string' && node.text) {
-          out += escapeText(node.text, atLineStart);
-          atLineStart = false;
-        }
-        break;
+  const stack: StackMark[] = [];
+  const applyMarks = (desired: StackMark[]): void => {
+    let prefix = 0;
+    while (
+      prefix < stack.length &&
+      prefix < desired.length &&
+      stack[prefix]!.key === desired[prefix]!.key
+    )
+      prefix++;
+    while (stack.length > prefix) out += stack.pop()!.close;
+    for (let i = prefix; i < desired.length; i++) {
+      const mark = desired[i]!;
+      out += mark.open;
+      stack.push(mark);
     }
+  };
+  for (const node of nodes) {
+    if (node.type === 'hardBreak') {
+      out += '\\\n';
+      atLineStart = true;
+      continue; // keep marks open across a hard break
+    }
+    const piece = pieceFor(node, atLineStart);
+    if (piece === null) continue;
+    applyMarks(desiredMarks(node));
+    out += piece;
+    atLineStart = piece.endsWith('\n');
   }
+  while (stack.length) out += stack.pop()!.close;
   return out;
 }
 
 function serializeCell(cell: JSONContent): string {
   const inner = cell.content?.[0]?.content ?? [];
-  return serializeInline(inner).replace(/\r?\n/g, ' ');
+  return (
+    serializeInline(inner)
+      // A pipe must be escaped in a GFM cell even inside a code span; markdown-it unescapes `\|`
+      // before inline parsing, so `` `x\|y` `` round-trips to a code span containing `x|y`.
+      .replace(/\\?\|/g, (m) => (m === '\\|' ? m : '\\|'))
+      .replace(/\r?\n/g, ' ')
+  );
+}
+
+function serializeAlignSep(node: JSONContent | undefined): string {
+  const raw = node?.attrs?.align;
+  const align = raw === 'left' || raw === 'center' || raw === 'right' ? (raw as string) : null;
+  if (align === 'left') return ':---';
+  if (align === 'right') return '---:';
+  if (align === 'center') return ':---:';
+  return '---';
 }
 
 function serializeTable(node: JSONContent): string {
@@ -538,7 +748,11 @@ function serializeTable(node: JSONContent): string {
     return `| ${padded.slice(0, colCount).join(' | ')} |`;
   };
   const cellsOf = (row: JSONContent) => (row.content ?? []).map(serializeCell);
-  const out = [line(cellsOf(rows[0]!)), `| ${new Array(colCount).fill('---').join(' | ')} |`];
+  const header = rows[0]!.content ?? [];
+  const out = [
+    line(cellsOf(rows[0]!)),
+    `| ${Array.from({ length: colCount }, (_, i) => serializeAlignSep(header[i])).join(' | ')} |`,
+  ];
   for (let i = 1; i < rows.length; i++) out.push(line(cellsOf(rows[i]!)));
   return out.join('\n');
 }
@@ -563,6 +777,9 @@ function listLines(node: JSONContent, baseIndent: string): string[] {
       if (b.type === 'bulletList' || b.type === 'orderedList' || b.type === 'taskList') {
         lines.push(...listLines(b, contIndent));
       } else {
+        // A blank line makes the item a *loose* list, keeping its multiple paragraphs distinct
+        // instead of merging them into one paragraph with a soft break (review: loose lists).
+        lines.push('');
         for (const l of serializeBlock(b).split('\n')) lines.push(contIndent + l);
       }
     }
@@ -572,8 +789,11 @@ function listLines(node: JSONContent, baseIndent: string): string[] {
 
 function serializeBlock(node: JSONContent): string {
   switch (node.type) {
-    case 'paragraph':
-      return serializeInline(node.content);
+    case 'paragraph': {
+      const body = serializeInline(node.content);
+      // A paragraph that would re-parse as an `::embed[…](…)` atom must stay a literal paragraph.
+      return body.replace(/^(::embed\[)/, '\\$1');
+    }
     case 'heading': {
       const level = clampLevel(Number(node.attrs?.level ?? 1));
       return `${'#'.repeat(level)} ${serializeInline(node.content)}`;
@@ -587,7 +807,8 @@ function serializeBlock(node: JSONContent): string {
         .map((n) => n.text ?? '')
         .join('')
         .replace(/\n$/, '');
-      return `\`\`\`${language}\n${text}\n\`\`\``;
+      const fence = codeFence(text);
+      return `${fence}${language}\n${text}\n${fence}`;
     }
     case 'blockquote': {
       const inner = serializeBlocks(node.content ?? []);
@@ -604,8 +825,11 @@ function serializeBlock(node: JSONContent): string {
       return listLines(node, '').join('\n');
     case 'table':
       return serializeTable(node);
-    case 'embed':
-      return `::embed[${String(node.attrs?.label ?? '')}](${String(node.attrs?.url ?? '')})`;
+    case 'embed': {
+      const label = String(node.attrs?.label ?? '');
+      const url = String(node.attrs?.url ?? '');
+      return isValidEmbedUrl(url) ? `::embed[${label}](${url})` : label || url;
+    }
     case 'noteUpload':
       return ''; // transient upload placeholder is never persisted to Markdown
     default:
@@ -613,6 +837,7 @@ function serializeBlock(node: JSONContent): string {
   }
 }
 
+/** Pure serialization from node content (no source preservation) — used for clipboard slices. */
 function serializeBlocks(nodes: JSONContent[]): string {
   return nodes
     .map(serializeBlock)
@@ -620,9 +845,29 @@ function serializeBlocks(nodes: JSONContent[]): string {
     .join('\n\n');
 }
 
-/** Serialize a ProseMirror JSON document to canonical Markdown. */
+/**
+ * Serialize a ProseMirror JSON document to Markdown. Each unchanged top-level block is emitted
+ * verbatim from its captured `attrs.src`; edited blocks are re-serialized. This keeps otherwise
+ * untouched Markdown byte-identical while a small edit elsewhere cannot rewrite/discard content.
+ */
 export function docToMarkdown(doc: JSONContent): string {
-  return serializeBlocks(doc.content ?? []);
+  const blocks = doc.content ?? [];
+  if (!blocks.length) return '';
+  let out = '';
+  const lead = blocks[0]?.attrs?.lead;
+  if (typeof lead === 'string') out += lead;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]!;
+    const canonical = serializeBlock(block);
+    const src = block.attrs?.src;
+    const hash = block.attrs?.hash;
+    const unchanged =
+      typeof src === 'string' && typeof hash === 'string' && hashString(canonical) === hash;
+    out += unchanged ? src : canonical;
+    const sep = block.attrs?.sep;
+    out += typeof sep === 'string' ? sep : i < blocks.length - 1 ? '\n\n' : '';
+  }
+  return out;
 }
 
 /**
@@ -669,11 +914,61 @@ const REMOVE_TAGS = new Set([
   'noscript',
 ]);
 
+const MAX_TABLE_COLS = 50;
+const MAX_TABLE_ROWS = 2000;
+
+/** Only these attributes may survive on a data-tagged note chip. */
+function sanitizeElement(el: Element): void {
+  const tag = el.tagName.toLowerCase();
+  for (const attr of Array.from(el.attributes)) {
+    const name = attr.name.toLowerCase();
+    const unsafeName =
+      name.startsWith('on') ||
+      name === 'style' ||
+      name === 'srcdoc' ||
+      name === 'srcset' ||
+      name === 'formaction' ||
+      name === 'xlink:href' ||
+      name === 'data-pm-slice' ||
+      ((tag === 'td' || tag === 'th') &&
+        (name === 'colspan' ||
+          name === 'rowspan' ||
+          name === 'colwidth' ||
+          name === 'data-colwidth'));
+    if (unsafeName) {
+      el.removeAttribute(attr.name);
+    } else if (tag === 'img' && !['src', 'alt', 'data-note-image', 'data-id'].includes(name)) {
+      el.removeAttribute(attr.name);
+    } else if (
+      (tag === 'a' || tag === 'span' || tag === 'div') &&
+      ![
+        'href',
+        'title',
+        'data-file-chip',
+        'data-internal-chip',
+        'data-censored',
+        'data-embed',
+        'data-kind',
+        'data-id',
+        'data-label',
+        'data-token',
+        'data-url',
+        'target',
+        'rel',
+        'download',
+      ].includes(name) &&
+      !name.startsWith('data-')
+    ) {
+      el.removeAttribute(attr.name);
+    }
+  }
+}
+
 /**
  * ProseMirror parses pasted HTML by assigning it to innerHTML, so a hostile `<img onerror>` could
  * otherwise fire while being parsed. DOMParser creates an inert document (no resource loads, no
- * script execution); we strip dangerous tags/attributes before ProseMirror ever sees the HTML.
- * Only known, data-tagged chips and safe links survive, which the schema then filters again.
+ * script execution); we strip dangerous tags/attributes and validate every chip attribute before
+ * ProseMirror ever sees the HTML. The schema's parseHTML rules validate again.
  */
 export function sanitizeClipboardHtml(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -684,27 +979,48 @@ export function sanitizeClipboardHtml(html: string): string {
       el.remove();
       continue;
     }
-    for (const attr of Array.from(el.attributes)) {
-      const name = attr.name.toLowerCase();
-      const unsafeName =
-        name.startsWith('on') ||
-        name === 'style' ||
-        name === 'srcdoc' ||
-        name === 'srcset' ||
-        name === 'formaction' ||
-        name === 'xlink:href';
-      if (unsafeName) el.removeAttribute(attr.name);
-      else if (tag === 'img' && name !== 'src' && name !== 'alt' && !name.startsWith('data-')) {
-        el.removeAttribute(attr.name);
+    sanitizeElement(el);
+
+    if (tag === 'img') {
+      const src = el.getAttribute('src') ?? '';
+      const match = NOTE_FILE_SRC_RE.exec(src);
+      if (
+        !isValidNoteFileId(el.getAttribute('data-id')) ||
+        !match ||
+        !el.hasAttribute('data-note-image')
+      ) {
+        el.remove();
+      } else {
+        el.setAttribute('data-id', match[1]!);
       }
-    }
-    if (tag === 'img' && !el.hasAttribute('data-note-image')) {
-      el.remove();
       continue;
+    }
+    if (tag === 'a' && el.hasAttribute('data-file-chip')) {
+      if (!isValidNoteFileId(el.getAttribute('data-id'))) el.removeAttribute('data-file-chip');
+    }
+    if (tag === 'span' && el.hasAttribute('data-internal-chip')) {
+      if (!isValidInternalChip(el.getAttribute('data-kind'), el.getAttribute('data-id')))
+        el.removeAttribute('data-internal-chip');
+    }
+    if (tag === 'span' && el.hasAttribute('data-censored')) {
+      if (!isValidCensorToken(el.getAttribute('data-token'))) el.removeAttribute('data-censored');
+    }
+    if (tag === 'div' && el.hasAttribute('data-embed')) {
+      if (!isValidEmbedUrl(el.getAttribute('data-url'))) el.removeAttribute('data-embed');
     }
     if (tag === 'a') {
       const href = el.getAttribute('href') ?? '';
-      if (classifyHref(href).kind === 'unsafe') el.removeAttribute('href');
+      if (href && classifyHref(href).kind === 'unsafe') el.removeAttribute('href');
+    }
+  }
+
+  // Bound pasted tables: strip spans, then cap columns/rows so a hostile blob can't blow up layout.
+  for (const table of Array.from(doc.body.querySelectorAll('table'))) {
+    const rows = Array.from(table.querySelectorAll('tr'));
+    for (let r = MAX_TABLE_ROWS; r < rows.length; r++) rows[r]!.remove();
+    for (const row of Array.from(table.querySelectorAll('tr'))) {
+      const cells = Array.from(row.querySelectorAll('td,th'));
+      for (let c = MAX_TABLE_COLS; c < cells.length; c++) cells[c]!.remove();
     }
   }
   return doc.body.innerHTML;

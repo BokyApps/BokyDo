@@ -220,7 +220,10 @@ body {
 }
 .bk-note-prosemirror h1,
 .bk-note-prosemirror h2,
-.bk-note-prosemirror h3 {
+.bk-note-prosemirror h3,
+.bk-note-prosemirror h4,
+.bk-note-prosemirror h5,
+.bk-note-prosemirror h6 {
   margin: 0.9rem 0 0.4rem;
   font-weight: 600;
   line-height: 1.3;
@@ -233,6 +236,16 @@ body {
 }
 .bk-note-prosemirror h3 {
   font-size: 1.05rem;
+}
+.bk-note-prosemirror h4 {
+  font-size: 1rem;
+}
+.bk-note-prosemirror h5 {
+  font-size: 0.95rem;
+}
+.bk-note-prosemirror h6 {
+  font-size: 0.9rem;
+  color: var(--bk-muted);
 }
 .bk-note-prosemirror ul,
 .bk-note-prosemirror ol {
@@ -313,6 +326,16 @@ body {
 .bk-note-prosemirror th {
   background: var(--bk-surface-alt);
   font-weight: 600;
+}
+/* Alignment is carried by classes (CSP style-src 'self' blocks inline style attributes). */
+.bk-note-prosemirror .bk-cell-left {
+  text-align: left;
+}
+.bk-note-prosemirror .bk-cell-center {
+  text-align: center;
+}
+.bk-note-prosemirror .bk-cell-right {
+  text-align: right;
 }
 .bk-note-prosemirror .selectedCell::after {
   content: '';
@@ -402,9 +425,13 @@ body {
   line-height: 1.1;
   overflow: hidden;
   vertical-align: middle;
+  padding: 0;
+  border: 0;
   border-radius: 0.2rem;
   background: var(--bk-fg);
   color: var(--bk-fg);
+  font: inherit;
+  text-align: center;
   letter-spacing: 0.1em;
   cursor: pointer;
   user-select: none;
@@ -468,6 +495,9 @@ body {
 }
 .bk-embed-label {
   font-weight: 600;
+}
+.bk-embed-frame-host {
+  width: 100%;
 }
 .bk-embed-frame {
   width: 100%;

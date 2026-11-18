@@ -38,3 +38,59 @@ export function censorSlice(slice: Slice, schema: Schema): Slice {
   };
   return new Slice(mapFragment(slice.content), slice.openStart, slice.openEnd);
 }
+
+/** Whether a slice contains a censored atom (used to refuse Cut). */
+export function sliceHasCensored(slice: Slice): boolean {
+  let found = false;
+  slice.content.descendants((node) => {
+    if (node.type.name === 'censored') {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+/**
+ * Decision behind the editor's `cut` DOM handler (unit-testable without a real browser): a cut of
+ * a selection containing a censored atom is refused — the caller prevents default, notifies, and
+ * does NOT delete, so the token survives. Returns whether the cut was refused.
+ */
+export function refuseCutIfCensored(slice: Slice, notify: () => void): boolean {
+  if (!sliceHasCensored(slice)) return false;
+  notify();
+  return true;
+}
+
+/**
+ * Review fix (drag/cut): `transformCopied` must not rewrite an internal drag's slice, or moving a
+ * censored span would replace it with the `█████` placeholder. During a drag started inside the
+ * editor the slice is passed through untouched (ProseMirror re-inserts the real node on an
+ * in-editor drop); ordinary Copy/Cut still export only the placeholder. `dragstart`/`dragend`
+ * flip the flag; a drag that leaves the editor is ended by `drop`/`dragend` as well.
+ */
+export interface DragCopyController {
+  markDragStart(): void;
+  markDragEnd(): void;
+  readonly dragging: boolean;
+  transformCopied(slice: Slice, schema: Schema): Slice;
+}
+
+export function createDragCopyController(): DragCopyController {
+  let dragging = false;
+  return {
+    markDragStart() {
+      dragging = true;
+    },
+    markDragEnd() {
+      dragging = false;
+    },
+    get dragging() {
+      return dragging;
+    },
+    transformCopied(slice: Slice, schema: Schema): Slice {
+      return dragging ? slice : censorSlice(slice, schema);
+    },
+  };
+}
