@@ -312,14 +312,21 @@ export async function registerNoteRoutes(
             .returning({ id: noteFiles.id });
           ready = rows[0];
         } catch (err) {
-          // The bytes are on disk but the row's state is unknown. A fresh read decides: `ready`
-          // means the update did take effect (a retry, or an error after commit), so the bytes are
-          // the file's truth and stay; anything else means no row claims them, so both go.
-          const [row] = await db
-            .select({ status: noteFiles.status })
-            .from(noteFiles)
-            .where(eq(noteFiles.id, id));
-          if (row?.status !== 'ready') await release();
+          // The bytes are on disk but the update's outcome is unknown: it may still be waiting to
+          // commit. Remove the reservation only while it is still `uploading`, in one statement
+          // (it waits for that update's row lock, then re-checks), so a late commit to `ready`
+          // keeps its bytes. Unlink only once no row can claim them.
+          const released = await db
+            .delete(noteFiles)
+            .where(and(eq(noteFiles.id, id), eq(noteFiles.status, 'uploading')))
+            .returning({ id: noteFiles.id });
+          const [still] = released.length
+            ? []
+            : await db.select({ id: noteFiles.id }).from(noteFiles).where(eq(noteFiles.id, id));
+          if (!still) {
+            await store.remove(id);
+            await store.removeName(`${id}.part`);
+          }
           app.log.error({ err, noteFileId: id }, 'note file finalization failed');
           return reply.status(500).send({ error: 'internal_error' });
         }

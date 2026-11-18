@@ -191,15 +191,28 @@ describe('censor tokens', () => {
       expect(redactCensored(text), text).toBe(text);
   });
 
-  it('without a closer, redacts to the end of the whitespace-free run', () => {
+  it('without a closer, redacts to the end of the text', () => {
     expect(redactCensored('{{censored')).toBe(CENSOR_PLACEHOLDER);
     expect(redactCensored('{{censored:abc')).toBe(CENSOR_PLACEHOLDER);
-    expect(redactCensored('before {{censored:v1:abc still words')).toBe(
-      `before ${CENSOR_PLACEHOLDER} still words`,
-    );
+    // Words after an unclosed opener may be the span's own: they go too.
+    expect(redactCensored('before {{censored secret words')).toBe(`before ${CENSOR_PLACEHOLDER}`);
     // A closer, however far away, ends the span: words with spaces before it never leak.
     const far = `{{censored secret words ${'a '.repeat(80_000)}}} tail`;
     expect(redactCensored(far)).toBe(`${CENSOR_PLACEHOLDER} tail`);
+  });
+
+  it('never indexes malformed censored text for search', () => {
+    for (const body of [
+      'keep {{ CENSORED secret words }} keep',
+      'keep {{Censored:v1:secret}} keep',
+      'keep {{censored secret words',
+    ]) {
+      const text = toSearchText('title', ['tag'], body);
+      expect(text, body).not.toMatch(/secret|words/);
+      expect(text).toContain('keep');
+    }
+    // An unclosed span in the title does not swallow the body.
+    expect(toSearchText('{{censored oops', [], 'body text')).toContain('body text');
   });
 
   it('scans a hostile megabyte in well under 200 ms', () => {

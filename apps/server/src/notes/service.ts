@@ -139,6 +139,9 @@ function decodeCursor(raw: string): NoteCursor | null {
   const date = new Date(u);
   // Only the canonical ISO string a cursor was issued with: a lenient date would page from a
   // different instant than the caller asked for, and `toISOString` round-trips exactly.
+  // The plain four-digit-year form only: JavaScript also round-trips year 0000 and expanded years
+  // like +010000, which Postgres refuses (a 500 instead of a 400).
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(u) || u.startsWith('0000')) return null;
   if (Number.isNaN(date.getTime()) || date.toISOString() !== u || !uuid(i)) return null;
   return { pinned: p, updatedAt: u, id: i };
 }
@@ -647,19 +650,22 @@ async function rebuildRefs(tx: Tx, note: NoteRow, userId: string): Promise<boole
         ),
       );
   // Files of this note the body no longer names go back to pending from now: the 24 h purge is
-  // measured from the removal, not from the upload.
-  await tx
-    .update(noteFiles)
-    .set({ referenced: false, unreferencedAt: new Date() })
-    .where(
-      and(
-        eq(noteFiles.noteId, note.id),
-        eq(noteFiles.ownerUserId, userId),
-        eq(noteFiles.status, 'ready'),
-        eq(noteFiles.referenced, true),
-        fileIds.length ? notInArray(noteFiles.id, fileIds) : sql`true`,
-      ),
-    );
+  // measured from the removal, not from the upload. Only when the whole body was parsed: past the
+  // parser's budget a reference may have been missed, and dropping its claim would purge a file
+  // the note still shows.
+  if (refs.complete)
+    await tx
+      .update(noteFiles)
+      .set({ referenced: false, unreferencedAt: new Date() })
+      .where(
+        and(
+          eq(noteFiles.noteId, note.id),
+          eq(noteFiles.ownerUserId, userId),
+          eq(noteFiles.status, 'ready'),
+          eq(noteFiles.referenced, true),
+          fileIds.length ? notInArray(noteFiles.id, fileIds) : sql`true`,
+        ),
+      );
   return true;
 }
 

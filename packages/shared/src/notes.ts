@@ -239,10 +239,10 @@ const CENSOR_WHITESPACE = /\s/;
 /**
  * Replace anything that looks like the start of a censored span with the placeholder. This is
  * deliberately lenient: `{{` + optional whitespace + `censored` in any case, then everything up
- * to the next `}}`, however far away (or, when there is no `}}` at all, to the end of the
- * following whitespace-free run) is removed. Over-redacting is the safe direction: a distance
- * cut-off let a span with spaces in it and a far closer leak its words. A malformed or hand-edited token must never leak
- * ciphertext-looking text into a snippet, a search result or an MCP tool result.
+ * to the next `}}`, however far away (or, when there is no `}}` at all, to the end of the text)
+ * is removed. Over-redacting is the safe direction: a span with spaces in it must not leak its
+ * words, whether its closer is far away or missing. A malformed or hand-edited token must never
+ * leak ciphertext-looking text into a snippet, a search result or an MCP tool result.
  *
  * Linear time on purpose: an indexOf scan with one forward pass and no regex backtracking, since
  * note bodies are attacker-controlled up to 512 KiB.
@@ -276,8 +276,8 @@ export function redactCensored(text: string): string {
       end = close + 2;
       close = -1;
     } else {
-      end = after;
-      while (end < text.length && !CENSOR_WHITESPACE.test(text.charAt(end))) end++;
+      // No closer anywhere after it: the rest of the text may be the span.
+      end = text.length;
     }
     parts.push(text.slice(copied, open), CENSOR_PLACEHOLDER);
     copied = end;
@@ -307,7 +307,10 @@ const WHITESPACE = /\s+/g;
  * it. Linear passes only, so a hostile body costs time proportional to its length.
  */
 export function toSearchText(title: string, tags: readonly string[], body: string): string {
+  // Each field is redacted on its own (an unclosed span in the title must not swallow the body),
+  // with the same lenient rules as snippets and MCP: malformed spans are never indexed either.
   return [title, ...tags, body]
+    .map(redactCensored)
     .join(' ')
     .replace(CENSOR_TOKEN, ' ')
     .replace(HTTP_URL, ' ')

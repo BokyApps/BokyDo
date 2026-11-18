@@ -21,6 +21,12 @@ export interface NoteRefs {
   noteIds: string[];
   taskIds: string[];
   fileIds: string[];
+  /**
+   * False when the body went past the parsing budget, so some references may be missing. A caller
+   * must then only add claims, never drop them: an attachment after a hostile run of brackets
+   * would otherwise be marked unreferenced and purged.
+   */
+  complete: boolean;
 }
 
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -39,7 +45,7 @@ const OPEN_BRACKET = 91;
 const MAX_LABEL_OPENERS = 50_000;
 
 /** `body` with every `[` past the budget replaced, so the parser stays bounded on hostile input. */
-function boundedBody(body: string): string {
+function boundedBody(body: string): { text: string; complete: boolean } {
   let opens = 0;
   let parts: string[] | null = null;
   let copied = 0;
@@ -51,9 +57,9 @@ function boundedBody(body: string): string {
     parts.push(body.slice(copied, i), 'a');
     copied = i + 1;
   }
-  if (!parts) return body;
+  if (!parts) return { text: body, complete: true };
   parts.push(body.slice(copied));
-  return parts.join('');
+  return { text: parts.join(''), complete: false };
 }
 
 const parser = new MarkdownIt({ html: false, linkify: false });
@@ -89,12 +95,18 @@ export function extractNoteRefs(body: string): NoteRefs {
   const noteIds = new Set<string>();
   const taskIds = new Set<string>();
   const fileIds = new Set<string>();
-  for (const token of parser.parse(boundedBody(body), {})) {
+  const bounded = boundedBody(body);
+  for (const token of parser.parse(bounded.text, {})) {
     if (token.type !== 'inline') continue;
     for (const child of token.children ?? []) {
       if (child.type === 'link_open') collect(child.attrGet('href'), noteIds, taskIds, fileIds);
       else if (child.type === 'image') collect(child.attrGet('src'), noteIds, taskIds, fileIds);
     }
   }
-  return { noteIds: [...noteIds], taskIds: [...taskIds], fileIds: [...fileIds] };
+  return {
+    noteIds: [...noteIds],
+    taskIds: [...taskIds],
+    fileIds: [...fileIds],
+    complete: bounded.complete,
+  };
 }

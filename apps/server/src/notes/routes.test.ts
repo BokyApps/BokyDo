@@ -482,9 +482,14 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
       encode({ p: decoded.p, u: decoded.u }), // a missing key
       encode({ ...decoded, p: 'true' }), // wrong types
       encode({ ...decoded, i: 'not-a-uuid' }),
-      ...['2026-01-02T00:00:00Z', '2026-01-02T00:00:00.000+00:00', 'not a date'].map((u) =>
-        encode({ ...decoded, u }),
-      ),
+      ...[
+        '2026-01-02T00:00:00Z',
+        '2026-01-02T00:00:00.000+00:00',
+        'not a date',
+        // JavaScript round-trips these; Postgres refuses them (they were a 500).
+        '0000-01-01T00:00:00.000Z',
+        '+010000-01-01T00:00:00.000Z',
+      ].map((u) => encode({ ...decoded, u })),
     ];
     for (const cursor of rejected) {
       const res = await listNotes(alice, `?cursor=${encodeURIComponent(cursor)}`);
@@ -1173,6 +1178,33 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
       .from(noteFiles)
       .where(eq(noteFiles.noteId, bobNote.note.id as string));
     expect(bobs.map((row) => row.referenced)).toEqual([false]);
+  });
+
+  it('keeps file claims when the body is past the parser budget', async () => {
+    const alice = await person('alice');
+    const note = await createNote(alice, { title: 'Brackets' });
+    const noteId = note.note.id as string;
+    const fileId = newId();
+    await t.db.db.insert(noteFiles).values({
+      id: fileId,
+      noteId,
+      ownerUserId: alice.id,
+      filename: 'f.pdf',
+      contentType: 'application/octet-stream',
+      size: 0,
+      sha256: 'x',
+      status: 'ready',
+    });
+    const link = `[f.pdf](/api/v1/note-files/${fileId})`;
+    expect((await alice.http.patch(`/api/v1/notes/${noteId}`, { body: link })).statusCode).toBe(
+      200,
+    );
+    // A fence full of brackets pushes the parse past its budget, so the link after it may be
+    // missed. The claim must survive (and so must the file, through a purge).
+    const body = `\`\`\`\n${'['.repeat(60_000)}\n\`\`\`\n\n${link}`;
+    expect((await alice.http.patch(`/api/v1/notes/${noteId}`, { body })).statusCode).toBe(200);
+    const [row] = await t.db.db.select().from(noteFiles).where(eq(noteFiles.id, fileId));
+    expect(row?.referenced).toBe(true);
   });
 
   it('rejects more than 1000 distinct note and task links in one body', async () => {
