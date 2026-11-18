@@ -11,6 +11,7 @@ export * from './model.js';
 export * from './ordering.js';
 export * from './preferences.js';
 export * from './habits.js';
+export * from './notes.js';
 export * from './push.js';
 export * from './ramble.js';
 export * from './settings.js';

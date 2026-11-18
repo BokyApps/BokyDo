@@ -12,8 +12,8 @@ import { pipeline } from 'node:stream/promises';
  */
 export class AttachmentStore {
   readonly dir: string;
-  constructor(dataDir: string) {
-    this.dir = path.join(dataDir, 'attachments');
+  constructor(dataDir: string, subdirectory = 'attachments') {
+    this.dir = path.join(dataDir, subdirectory);
   }
 
   private file(id: string): string {
