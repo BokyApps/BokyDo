@@ -35,13 +35,14 @@ const AAD = new TextEncoder().encode('bokydo-censor-v1');
 // subtle.* must be ArrayBuffer-backed, not the default Uint8Array<ArrayBufferLike>.
 type Bytes = Uint8Array<ArrayBuffer>;
 
-type CensorErrorCode = 'bad_password' | 'malformed' | 'too_large' | 'empty_password';
+type CensorErrorCode = 'bad_password' | 'malformed' | 'too_large' | 'empty_password' | 'empty_text';
 
 const ERROR_MESSAGES: Record<CensorErrorCode, string> = {
   bad_password: 'Wrong password or tampered censor token.',
   malformed: 'Malformed censor token.',
   too_large: 'Censored text is too large.',
   empty_password: 'Password must not be empty.',
+  empty_text: 'There is no text to censor.',
 };
 
 export class CensorError extends Error {
@@ -163,6 +164,7 @@ async function decryptParsed(parsed: Parsed, key: CryptoKey): Promise<string> {
 export async function censor(plaintext: string, password: string): Promise<string> {
   if (password.length === 0) throw new CensorError('empty_password');
   const data = new TextEncoder().encode(plaintext);
+  if (data.length === 0) throw new CensorError('empty_text');
   if (data.length > MAX_PLAINTEXT_BYTES) throw new CensorError('too_large');
   const salt = randomBytes(SALT_BYTES);
   const iv = randomBytes(IV_BYTES);
