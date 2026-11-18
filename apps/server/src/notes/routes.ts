@@ -75,6 +75,16 @@ export async function registerNoteRoutes(
   const seesNotes = (req: FastifyRequest) =>
     !req.token || scopesAllow(req.token.scopes, ['notes:read']);
   const readOptions = (req: FastifyRequest) => ({ linkedTasks: seesTasks(req) });
+  /** Task visibility is task data: a bearer token needs `tasks:read` to ask about a task at all. */
+  const requireTaskRead = async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.token && !scopesAllow(req.token.scopes, ['tasks:read']))
+      return reply.status(403).send({ error: 'insufficient_scope' });
+  };
+  /** A notes route that also names a task: the notes scope, then the token's task scope. */
+  const accountWideWithTasks = (scope: 'notes:read' | 'notes:write') => {
+    const base = accountWide(scope);
+    return { ...base, preHandler: [base.preHandler, requireTaskRead] };
+  };
   /** A write-only token gets the changed note's identity, not a body it cannot read. */
   const presentNote = (req: FastifyRequest, note: Note) =>
     seesNotes(req) ? { note } : { note: { id: note.id, updatedAt: note.updatedAt } };
@@ -150,19 +160,20 @@ export async function registerNoteRoutes(
     return reply.status(204).send();
   });
 
-  app.put('/api/v1/notes/:id/tasks/:taskId', accountWide('notes:write'), async (req, reply) => {
-    const params = noteTaskParams.safeParse(req.params);
-    if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
-    // Linking needs to know whether the task is visible, and that is task data.
-    if (req.token && !scopesAllow(req.token.scopes, ['tasks:read']))
-      return reply.status(403).send({ error: 'insufficient_scope' });
-    const userId = requireUser(req).id;
-    const result = await linkNoteToTask(db, userId, params.data.id, params.data.taskId);
-    if (!result.ok)
-      return reply.status(result.error === 'not_found' ? 404 : 400).send({ error: result.error });
-    await publish(userId);
-    return reply.status(204).send();
-  });
+  app.put(
+    '/api/v1/notes/:id/tasks/:taskId',
+    accountWideWithTasks('notes:write'),
+    async (req, reply) => {
+      const params = noteTaskParams.safeParse(req.params);
+      if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
+      const userId = requireUser(req).id;
+      const result = await linkNoteToTask(db, userId, params.data.id, params.data.taskId);
+      if (!result.ok)
+        return reply.status(result.error === 'not_found' ? 404 : 400).send({ error: result.error });
+      await publish(userId);
+      return reply.status(204).send();
+    },
+  );
 
   app.delete('/api/v1/notes/:id/tasks/:taskId', accountWide('notes:write'), async (req, reply) => {
     const params = noteTaskParams.safeParse(req.params);
@@ -175,7 +186,7 @@ export async function registerNoteRoutes(
     return reply.status(204).send();
   });
 
-  app.get('/api/v1/tasks/:taskId/notes', accountWide('notes:read'), async (req, reply) => {
+  app.get('/api/v1/tasks/:taskId/notes', accountWideWithTasks('notes:read'), async (req, reply) => {
     const params = taskParams.safeParse(req.params);
     if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
     const result = await notesForTask(db, requireUser(req).id, params.data.taskId);
@@ -275,17 +286,32 @@ export async function registerNoteRoutes(
         const filename = cleanFilename(req.headers['x-filename'] as string | undefined);
         const { type } = sniff(written.head);
         // The row may have vanished with its note (or as a stale reservation) while streaming.
-        const [ready] = await db
-          .update(noteFiles)
-          .set({
-            filename,
-            contentType: type,
-            size: written.size,
-            sha256: written.sha256,
-            status: 'ready',
-          })
-          .where(and(eq(noteFiles.id, id), eq(noteFiles.status, 'uploading')))
-          .returning({ id: noteFiles.id });
+        let ready: { id: string } | undefined;
+        try {
+          const rows = await db
+            .update(noteFiles)
+            .set({
+              filename,
+              contentType: type,
+              size: written.size,
+              sha256: written.sha256,
+              status: 'ready',
+            })
+            .where(and(eq(noteFiles.id, id), eq(noteFiles.status, 'uploading')))
+            .returning({ id: noteFiles.id });
+          ready = rows[0];
+        } catch (err) {
+          // The bytes are on disk but the row's state is unknown. A fresh read decides: `ready`
+          // means the update did take effect (a retry, or an error after commit), so the bytes are
+          // the file's truth and stay; anything else means no row claims them, so both go.
+          const [row] = await db
+            .select({ status: noteFiles.status })
+            .from(noteFiles)
+            .where(eq(noteFiles.id, id));
+          if (row?.status !== 'ready') await release();
+          app.log.error({ err, noteFileId: id }, 'note file finalization failed');
+          return reply.status(500).send({ error: 'internal_error' });
+        }
         if (!ready) {
           await store.remove(id);
           return reply.status(404).send({ error: 'not_found' });

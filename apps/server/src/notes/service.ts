@@ -1,6 +1,5 @@
 import {
   NOTE_REF_LIMIT,
-  extractNoteRefs,
   noteCreateRequestSchema,
   noteListQuerySchema,
   notePatchSchema,
@@ -13,6 +12,7 @@ import {
   type NoteSummary,
   type NoteTagsResponse,
 } from '@bokydo/shared';
+import { extractNoteRefs } from '@bokydo/shared/notes-refs';
 import {
   and,
   asc,
@@ -97,20 +97,34 @@ function encodeCursor(row: { pinned: boolean; updatedAt: Date; id: string }): st
   ).toString('base64url');
 }
 
+/** Canonical unpadded base64url: the alphabet, and at least one character. */
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Decode a `nextCursor` strictly, so a supplied cursor means exactly the page it was issued for:
+ * canonical unpadded base64url (re-encoding it must give the input back), a JSON object with only
+ * `p`, `u` and `i`, a boolean, a canonical ISO instant and a UUID. Anything else is a 400, never a
+ * lenient decode that pages from an instant the caller did not ask for.
+ */
 function decodeCursor(raw: string): NoteCursor | null {
+  if (!BASE64URL.test(raw)) return null;
+  const bytes = Buffer.from(raw, 'base64url');
+  if (bytes.toString('base64url') !== raw) return null;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-    if (!parsed || typeof parsed !== 'object') return null;
-    const { p, u, i } = parsed as Record<string, unknown>;
-    if (typeof p !== 'boolean' || typeof u !== 'string' || typeof i !== 'string') return null;
-    const date = new Date(u);
-    // Only the canonical ISO string a cursor was issued with: a lenient date would page from a
-    // different instant than the caller asked for, and `toISOString` round-trips exactly.
-    if (Number.isNaN(date.getTime()) || date.toISOString() !== u || !uuid(i)) return null;
-    return { pinned: p, updatedAt: u, id: i };
+    parsed = JSON.parse(bytes.toString('utf8'));
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (Object.keys(parsed).sort().join(',') !== 'i,p,u') return null;
+  const { p, u, i } = parsed as Record<string, unknown>;
+  if (typeof p !== 'boolean' || typeof u !== 'string' || typeof i !== 'string') return null;
+  const date = new Date(u);
+  // Only the canonical ISO string a cursor was issued with: a lenient date would page from a
+  // different instant than the caller asked for, and `toISOString` round-trips exactly.
+  if (Number.isNaN(date.getTime()) || date.toISOString() !== u || !uuid(i)) return null;
+  return { pinned: p, updatedAt: u, id: i };
 }
 
 function stateOf(row: { state: 'active' | 'archived'; trashedAt: Date | null }): NoteState {
@@ -153,7 +167,9 @@ export async function listNotes(
     tag = first;
   }
   let cursor: NoteCursor | null = null;
-  if (parsed.data.cursor) {
+  // Any supplied value, including the empty string, must decode: treating `cursor=` as "no
+  // cursor" would silently return the first page to a caller that asked for another one.
+  if (parsed.data.cursor !== undefined) {
     cursor = decodeCursor(parsed.data.cursor);
     if (!cursor) return { ok: false, error: 'validation_failed' };
   }
@@ -218,14 +234,16 @@ export async function getNote(
     .from(notes)
     .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)));
   if (!row) return null;
+  // Every detail query names the note by (id, owner_user_id = caller) in its own join, not only
+  // in an earlier statement, so the data can only ever come from a note of the caller's — a
+  // backlink from the source note, a task link held by this note, a file of this note. The extra
+  // predicate costs one index lookup on `notes(id, owner_user_id)`.
   const [backlinks, linkedTasks, files] = await Promise.all([
     db
       .select({ id: notes.id, title: notes.title })
       .from(noteLinks)
-      .innerJoin(notes, eq(notes.id, noteLinks.fromNoteId))
-      .where(
-        and(eq(noteLinks.toNoteId, row.id), eq(notes.ownerUserId, userId), isNull(notes.trashedAt)),
-      )
+      .innerJoin(notes, and(eq(notes.id, noteLinks.fromNoteId), eq(notes.ownerUserId, userId)))
+      .where(and(eq(noteLinks.toNoteId, row.id), isNull(notes.trashedAt)))
       .orderBy(desc(notes.updatedAt), desc(notes.id)),
     options.linkedTasks === false
       ? Promise.resolve([])
@@ -237,6 +255,7 @@ export async function getNote(
             completed: tasks.isCompleted,
           })
           .from(noteTaskLinks)
+          .innerJoin(notes, and(eq(notes.id, noteTaskLinks.noteId), eq(notes.ownerUserId, userId)))
           .innerJoin(tasks, eq(tasks.id, noteTaskLinks.taskId))
           .innerJoin(projects, eq(projects.id, tasks.projectId))
           .innerJoin(
@@ -259,6 +278,7 @@ export async function getNote(
         size: noteFiles.size,
       })
       .from(noteFiles)
+      .innerJoin(notes, and(eq(notes.id, noteFiles.noteId), eq(notes.ownerUserId, userId)))
       .where(
         and(
           eq(noteFiles.noteId, row.id),
@@ -658,27 +678,33 @@ export async function purgeNotes(
     .returning({ id: noteFiles.id });
   for (const row of pending) await store.remove(row.id);
 
-  // Trashed notes: the select locks the rows, the note delete re-checks the cutoff, and the
-  // whole thing commits before any bytes are unlinked.
+  // Trashed notes: the select locks the rows, a second read re-checks the cutoff on those same
+  // locked rows, and only then are the files of the still-expired notes and the notes deleted.
+  // A restore that happens between the select and the delete (the test hook does exactly that)
+  // therefore keeps the note *and* its bytes: the file delete only ever names rechecked ids.
   const trashBefore = new Date(now.getTime() - NOTE_TRASH_TTL_MS);
   const files = await db.transaction(async (tx) => {
-    const trashed = await tx
+    const candidates = await tx
       .select({ id: notes.id })
       .from(notes)
       .where(and(isNotNull(notes.trashedAt), lt(notes.trashedAt, trashBefore)))
       .for('update', { skipLocked: true });
-    if (trashed.length === 0) return [];
+    if (candidates.length === 0) return [];
     await hooks.afterTrashSelected?.(tx);
-    const ids = trashed.map((row) => row.id);
-    const removed = await tx
-      .delete(noteFiles)
-      .where(inArray(noteFiles.noteId, ids))
-      .returning({ id: noteFiles.id });
-    await tx
-      .delete(notes)
+    const ids = candidates.map((row) => row.id);
+    const expired = await tx
+      .select({ id: notes.id })
+      .from(notes)
       .where(
         and(inArray(notes.id, ids), isNotNull(notes.trashedAt), lt(notes.trashedAt, trashBefore)),
       );
+    const doomed = expired.map((row) => row.id);
+    if (doomed.length === 0) return [];
+    const removed = await tx
+      .delete(noteFiles)
+      .where(inArray(noteFiles.noteId, doomed))
+      .returning({ id: noteFiles.id });
+    await tx.delete(notes).where(inArray(notes.id, doomed));
     return removed.map((row) => row.id);
   });
   for (const id of files) await store.remove(id);

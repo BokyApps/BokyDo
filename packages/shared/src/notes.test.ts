@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   CENSOR_PLACEHOLDER,
-  extractNoteRefs,
   noteSnippet,
   normaliseNoteTags,
   parseCensorToken,
@@ -36,84 +35,6 @@ describe('note tags', () => {
     // Exactly at the limits is fine.
     expect(normaliseNoteTags(['x'.repeat(50)])).toEqual(['x'.repeat(50)]);
     expect(normaliseNoteTags(Array.from({ length: 20 }, (_, i) => `tag-${i}`))).toHaveLength(20);
-  });
-});
-
-describe('reference extraction', () => {
-  const noteA = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
-  const noteB = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c';
-  const task = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d';
-  const file = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e';
-
-  it('finds note, task and note-file links, normalising case and duplicates', () => {
-    const body = [
-      `See [one](bokydo:note/${noteA}) and [two](bokydo:note/${noteB}).`,
-      `![image](/api/v1/note-files/${file})`,
-      `[file](/api/v1/note-files/${file})`,
-      `![inline](/api/v1/note-files/${file}?inline=1)`,
-      `[titled](bokydo:note/${noteA} "a title")`,
-      `Do [this](bokydo:task/${task}).`,
-      `Again [one](bokydo:note/${noteA.toUpperCase()}).`,
-    ].join('\n');
-    expect(extractNoteRefs(body)).toEqual({
-      noteIds: [noteA, noteB],
-      taskIds: [task],
-      fileIds: [file],
-    });
-  });
-
-  it('only counts real link destinations, never code, plain text or look-alikes', () => {
-    const body = [
-      `plain ${noteA} and bokydo:note/${noteB} and bokydo:note/${task}x`,
-      `[x](https://x/api/v1/note-files/${file}/y)`,
-      `[x](https://example.com/?u=bokydo:note/${noteA})`,
-      `\`[x](bokydo:note/${noteA})\``,
-      '``[x](bokydo:note/' + noteB + ')``',
-      '```md',
-      `[x](bokydo:note/${noteA})`,
-      `[x](bokydo:task/${task})`,
-      '```',
-      '~~~',
-      `[x](/api/v1/note-files/${file})`,
-      '~~~',
-      `bare ](bokydo:note/${noteA})`,
-      `[nested text](bokydo:note/${noteB}?x)`,
-    ].join('\n');
-    expect(extractNoteRefs(body)).toEqual({ noteIds: [], taskIds: [], fileIds: [] });
-  });
-
-  it('ignores other schemes, malformed ids and unknown prefixes', () => {
-    const body = [
-      `[x](bokydo:project/${noteA})`,
-      `[x](bokydo:note/not-a-uuid)`,
-      `[x](/api/v1/note-file/${file})`,
-      `[x](bokydo:note/${noteA.slice(1)})`,
-    ].join(' ');
-    expect(extractNoteRefs(body)).toEqual({ noteIds: [], taskIds: [], fileIds: [] });
-  });
-
-  it('stays linear on hostile input', () => {
-    const body = [
-      '['.repeat(300_000),
-      ']('.repeat(100_000),
-      '[label](bokydo:note/'.repeat(30_000),
-      `/api/v1/note-files/${'f'.repeat(10_000)}`,
-      '{{censored:v1:'.repeat(20_000),
-    ].join('');
-    const started = performance.now();
-    const refs = extractNoteRefs(body);
-    expect(performance.now() - started).toBeLessThan(2000);
-    expect(refs.noteIds).toEqual([]);
-    expect(refs.taskIds).toEqual([]);
-    expect(refs.fileIds).toEqual([]);
-  });
-
-  it('scans a hostile megabyte in well under 200 ms', () => {
-    for (const body of ['[[[[(((('.repeat(125_000), '`'.repeat(1024 * 1024)]) {
-      const started = performance.now();
-      expect(extractNoteRefs(body)).toEqual({ noteIds: [], taskIds: [], fileIds: [] });
-      expect(performance.now() - started).toBeLessThan(200);
-    }
   });
 });
 
