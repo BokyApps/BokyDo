@@ -673,8 +673,9 @@ class PdfRenderer {
   private preparedImage(image: LoadedImage): PreparedImage | null {
     const cached = this.prepared.get(image.id);
     if (cached) return cached;
-    // Last line of defence: pdfkit MUST NOT see a PNG whose alpha/tRNS/interlaced class png-js
-    // inflates inside a zlib callback. The loader already filtered, but a caller could not have.
+    // Last line of defence: pdfkit MUST NOT see a PNG of the alpha/indexed-transparency/
+    // interlaced class that png-js inflates inside a zlib callback. The loader already filtered,
+    // but a caller need not have.
     if (!validateImage(image.bytes, 'pdf')) return null;
     // `openImage` is pdfkit's own parser entry point; the validated class never inflates here.
     const opened = (this.doc as PdfDocRuntime).openImage(image.bytes);
