@@ -126,6 +126,10 @@ const noteList = z.object({
   nextCursor: z.string().nullable(),
 });
 const noteSingle = z.object({ note: noteResource });
+/** What a write-only token gets back: identity, without a body it may not read. */
+const noteReceipt = z.object({
+  note: z.object({ id: idSchema, updatedAt: z.iso.datetime() }),
+});
 const noteTags = z.object({
   tags: z.array(z.object({ tag: z.string(), count: z.number().int() })),
 });
@@ -145,6 +149,7 @@ export const RESPONSE_SCHEMAS = {
   projectSingle,
   noteList,
   noteSingle,
+  noteReceipt,
   noteTags,
   taskNotes,
   noteFile,
@@ -191,8 +196,14 @@ interface RestOperation {
   /** Extra string header parameters, such as an upload's display filename. */
   headers?: Record<string, { description: string; required?: boolean }>;
   response?: z.ZodType;
+  /** The success body is one of these schemas (a full note, or the write-only receipt). */
+  responseOneOf?: z.ZodType[];
   /** The success response is raw bytes (a download), not JSON. */
   rawResponse?: true;
+  /** Media types a raw response may use; defaults to `application/octet-stream`. */
+  responseMediaTypes?: string[];
+  /** Extra statuses, or overriding descriptions for the ones every operation has. */
+  responses?: Record<string, { description: string }>;
 }
 
 const habitResource = z.object({
@@ -213,6 +224,12 @@ const habitResource = z.object({
   history: z.array(z.object({ date: z.string(), completed: z.boolean() })),
 });
 const habitSingle = z.object({ habit: habitResource });
+
+/** The notes routes refuse project-limited tokens the way habits do, with a distinct error. */
+const notesForbidden = {
+  description:
+    'The token does not carry the required scope (`insufficient_scope`), or it is limited to projects (`project_limited_token`); notes are account-wide',
+};
 
 export const REST_OPERATIONS: RestOperation[] = [
   {
@@ -364,6 +381,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     scopes: ['notes:read'],
     query: noteListQuerySchema,
     response: noteList,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'get',
@@ -372,6 +390,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:read'],
     response: noteTags,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'post',
@@ -380,7 +399,18 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:write'],
     body: noteCreateRequestSchema,
-    response: noteSingle,
+    responseOneOf: [noteSingle, noteReceipt],
+    responses: {
+      '200': {
+        description:
+          'The note already exists with this id and exactly this content: an idempotent retry',
+      },
+      '409': {
+        description:
+          '`id_conflict`: this id belongs to another account, or to a note with different content',
+      },
+      '403': notesForbidden,
+    },
   },
   {
     method: 'get',
@@ -389,6 +419,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:read'],
     response: noteSingle,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'patch',
@@ -397,7 +428,9 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:write'],
     body: notePatchSchema,
-    response: noteSingle,
+    // A token without notes:read may write, but only gets the identity back.
+    responseOneOf: [noteSingle, noteReceipt],
+    responses: { '403': notesForbidden },
   },
   {
     method: 'delete',
@@ -406,6 +439,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:write'],
     status: 204,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'put',
@@ -414,6 +448,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:write', 'tasks:read'],
     status: 204,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'delete',
@@ -422,6 +457,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:write'],
     status: 204,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'get',
@@ -430,6 +466,7 @@ export const REST_OPERATIONS: RestOperation[] = [
     tag: 'Notes',
     scopes: ['notes:read'],
     response: taskNotes,
+    responses: { '403': notesForbidden },
   },
   {
     method: 'post',
@@ -445,6 +482,14 @@ export const REST_OPERATIONS: RestOperation[] = [
       },
     },
     response: noteFile,
+    responses: {
+      '403': {
+        description:
+          '`uploads_disabled` when this instance disables uploads, `project_limited_token` for a project-limited token, or `insufficient_scope` without notes:write',
+      },
+      '413': { description: '`too_large`: the file is over `attachments.maxSizeMb` or your quota' },
+      '429': { description: '`rate_limited` (120 uploads an hour) or `limit_exceeded` (quota)' },
+    },
   },
   {
     method: 'get',
@@ -454,6 +499,15 @@ export const REST_OPERATIONS: RestOperation[] = [
     scopes: ['notes:read'],
     query: z.object({ inline: z.enum(['1']).optional() }).strict(),
     rawResponse: true,
+    // Only raster images keep their detected type, and only when inline; everything else is
+    // opaque binary so an SVG or HTML upload can never render as active content.
+    responseMediaTypes: [
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'application/octet-stream',
+    ],
   },
 ];
 
@@ -511,10 +565,21 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
         ? { 'application/json': { schema: toJsonSchema(op.body, 'input') } }
         : null;
     const responseContent = op.rawResponse
-      ? { 'application/octet-stream': { schema: binarySchema } }
-      : op.response
-        ? { 'application/json': { schema: toJsonSchema(op.response, 'output') } }
-        : null;
+      ? Object.fromEntries(
+          (op.responseMediaTypes ?? ['application/octet-stream']).map((type) => [
+            type,
+            { schema: binarySchema },
+          ]),
+        )
+      : op.responseOneOf
+        ? {
+            'application/json': {
+              schema: { oneOf: op.responseOneOf.map((schema) => toJsonSchema(schema, 'output')) },
+            },
+          }
+        : op.response
+          ? { 'application/json': { schema: toJsonSchema(op.response, 'output') } }
+          : null;
     paths[path] ??= {};
     paths[path][op.method] = {
       summary: op.summary,
@@ -533,6 +598,7 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
         '401': { description: 'Missing, malformed or unknown bearer token' },
         '403': { description: 'The token does not carry the required scope' },
         '404': { description: 'No such resource, or it is not visible to you' },
+        ...op.responses,
       },
     };
   }

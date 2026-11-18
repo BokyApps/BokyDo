@@ -41,7 +41,13 @@ import {
 } from '../db/schema.js';
 import type { Tx } from '../sync/context.js';
 
-export type NoteFailure = 'validation_failed' | 'not_found' | 'id_conflict' | 'too_many_links';
+export type NoteFailure =
+  | 'validation_failed'
+  | 'not_found'
+  | 'id_conflict'
+  | 'too_many_links'
+  /** MCP only: the note's current body contains censored text a client cannot re-create. */
+  | 'censored_content';
 export type NoteResult<T> = { ok: true; value: T } | { ok: false; error: NoteFailure };
 
 export const NOTE_PENDING_TTL_MS = 24 * 3600 * 1000;
@@ -56,9 +62,27 @@ type NoteRow = typeof notes.$inferSelect;
 /** A body named more distinct notes/tasks than the table will hold. */
 class TooManyLinksError extends Error {}
 
+/** A caller-supplied guard refused the update after the row was locked; nothing was written. */
+class NoteGuardError extends Error {
+  constructor(readonly code: NoteFailure) {
+    super(code);
+  }
+}
+
 export interface NoteReadOptions {
   /** False for a bearer token without `tasks:read`: the response carries no task data. */
   linkedTasks?: boolean;
+}
+
+export interface NoteUpdateOptions extends NoteReadOptions {
+  /**
+   * Called with the row as it is locked, inside the update's transaction and before any write.
+   * Returning an error code aborts the update with that code and leaves the note untouched.
+   * MCP uses it to refuse body changes and trashing for a note with censored text, under the
+   * same lock that protects the write: a pre-read outside the transaction could see a stale
+   * body if a save commits in between.
+   */
+  guard?: (current: { body: string }) => NoteFailure | null;
 }
 
 interface NoteCursor {
@@ -318,7 +342,7 @@ export async function updateNote(
   userId: string,
   noteId: string,
   input: unknown,
-  options: NoteReadOptions = {},
+  options: NoteUpdateOptions = {},
 ): Promise<NoteResult<Note>> {
   const patch = notePatchSchema.safeParse(input);
   if (!patch.success || !uuid(noteId)) return { ok: false, error: 'validation_failed' };
@@ -339,6 +363,10 @@ export async function updateNote(
         .where(and(eq(notes.id, noteId), eq(notes.ownerUserId, userId)))
         .for('update');
       if (!current) return null;
+      // The guard sees the body as it is now, under the lock: not a pre-read that another
+      // committed save could have made stale.
+      const refusal = options.guard?.({ body: current.body });
+      if (refusal) throw new NoteGuardError(refusal);
       const merged = {
         title: patch.data.title ?? current.title,
         body: patch.data.body ?? current.body,
@@ -369,6 +397,7 @@ export async function updateNote(
     });
   } catch (err) {
     if (err instanceof TooManyLinksError) return { ok: false, error: 'too_many_links' };
+    if (err instanceof NoteGuardError) return { ok: false, error: err.code };
     throw err;
   }
   if (!updated) return { ok: false, error: 'not_found' };

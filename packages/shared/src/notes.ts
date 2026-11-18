@@ -209,11 +209,65 @@ export function parseCensorToken(token: string): CensoredToken | null {
   return { salt, iv, ciphertext };
 }
 
-/** Replace every valid censored span with the placeholder; malformed braces stay as text. */
+/**
+ * How far after a `{{` a closing `}}` is still looked for. Beyond that the span is assumed to run
+ * to the end of its whitespace-free run, which keeps a hostile body from hiding text behind an
+ * unbalanced opener at the far end of a megabyte.
+ */
+const CENSOR_REDACT_SCAN = 100_000;
+const CENSOR_NAME = 'censored';
+/** `\s` for one char: a non-global regex has no state and no backtracking. */
+const CENSOR_WHITESPACE = /\s/;
+
+/**
+ * Replace anything that looks like the start of a censored span with the placeholder. This is
+ * deliberately lenient: `{{` + optional whitespace + `censored` in any case, then everything up
+ * to the next `}}` (or, when there is none within 100,000 characters, to the end of the
+ * following whitespace-free run) is removed. A malformed or hand-edited token must never leak
+ * ciphertext-looking text into a snippet, a search result or an MCP tool result.
+ *
+ * Linear time on purpose: an indexOf scan with one forward pass and no regex backtracking, since
+ * note bodies are attacker-controlled up to 512 KiB.
+ */
 export function redactCensored(text: string): string {
-  return text.replace(CENSOR_TOKEN, (match) =>
-    parseCensorToken(match) ? CENSOR_PLACEHOLDER : match,
-  );
+  if (!text.includes('{{')) return text;
+  const parts: string[] = [];
+  /** End of the text already copied into `parts`. */
+  let copied = 0;
+  let search = 0;
+  /** The next `}}` at or after `search`, cached while it is still too far to be a closer. */
+  let close = -1;
+  let noMoreCloses = false;
+  while (search < text.length) {
+    const open = text.indexOf('{{', search);
+    if (open === -1) break;
+    let name = open + 2;
+    while (name < text.length && CENSOR_WHITESPACE.test(text.charAt(name))) name++;
+    if (text.slice(name, name + CENSOR_NAME.length).toLowerCase() !== CENSOR_NAME) {
+      // Only one brace is consumed: a span may start at the second `{` of this pair.
+      search = open + 1;
+      continue;
+    }
+    const after = name + CENSOR_NAME.length;
+    if (!noMoreCloses && (close === -1 || close < after)) {
+      close = text.indexOf('}}', after);
+      if (close === -1) noMoreCloses = true;
+    }
+    let end: number;
+    if (close !== -1 && close - open <= CENSOR_REDACT_SCAN) {
+      end = close + 2;
+      close = -1;
+    } else {
+      end = after;
+      while (end < text.length && !CENSOR_WHITESPACE.test(text.charAt(end))) end++;
+    }
+    parts.push(text.slice(copied, open), CENSOR_PLACEHOLDER);
+    copied = end;
+    search = end;
+  }
+  if (parts.length === 0) return text;
+  parts.push(text.slice(copied));
+  return parts.join('');
 }
 
 // ---------------------------------------------------------------------------------------------

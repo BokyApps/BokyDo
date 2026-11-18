@@ -207,17 +207,35 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
       expect.arrayContaining(['q', 'tag', 'state', 'limit', 'cursor']),
     );
     expect(spec.body.paths['/api/v1/notes/{id}'].delete.responses['204']).toBeDefined();
+    const createNote = spec.body.paths['/api/v1/notes'].post;
+    // A create answers with the full note or the write-only receipt, and a retry is 200 vs 409.
+    expect(createNote.responses['201'].content['application/json'].schema.oneOf).toHaveLength(2);
+    expect(createNote.responses['200']).toBeDefined();
+    expect(createNote.responses['409'].description).toContain('id_conflict');
+    expect(createNote.responses['403'].description).toContain('project_limited_token');
+    expect(
+      spec.body.paths['/api/v1/notes/{id}'].patch.responses['200'].content['application/json']
+        .schema.oneOf,
+    ).toHaveLength(2);
     const upload = spec.body.paths['/api/v1/notes/{id}/files'].post;
     expect(upload.requestBody.content['application/octet-stream'].schema.format).toBe('binary');
     expect(upload.parameters.map((p: { name: string }) => p.name)).toContain('X-Filename');
     expect(upload.responses['201'].content['application/json']).toBeDefined();
+    expect(upload.responses['403'].description).toContain('uploads_disabled');
+    expect(upload.responses['413']).toBeDefined();
+    expect(upload.responses['429']).toBeDefined();
     const download = spec.body.paths['/api/v1/note-files/{id}'].get;
     expect(
       download.parameters.find((p: { name: string }) => p.name === 'inline')?.schema.enum,
     ).toEqual(['1']);
-    expect(download.responses['200'].content['application/octet-stream'].schema.format).toBe(
-      'binary',
-    );
+    // Raster images keep their type inline; everything else is opaque binary.
+    expect(Object.keys(download.responses['200'].content)).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'application/octet-stream',
+    ]);
 
     const page = await new Client(t.app, null).request({ method: 'GET', url: '/api/docs' });
     expect(page.statusCode).toBe(200);
@@ -429,6 +447,41 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: notes with bearer tokens', () => {
     const refused = await get(taskOnly, '/api/v1/notes');
     expect(refused.status).toBe(403);
     expect(refused.body.error).toBe('insufficient_scope');
+  });
+
+  it('answers a write-only token with the receipt, and maps retries to 200 and 409', async () => {
+    const writeOnly = bearer(await notesToken('alice', ['notes:write']));
+    const noteId = id();
+    const created = await call(writeOnly, 'POST', '/api/v1/notes', {
+      id: noteId,
+      title: 'Receipt',
+      body: 'x',
+    });
+    expect(created.status).toBe(201);
+    expect(RESPONSE_SCHEMAS.noteReceipt.safeParse(created.body).error).toBeUndefined();
+    expect(created.body).toEqual({ note: { id: noteId, updatedAt: expect.any(String) } });
+
+    // The same id and content is the same create: 200, not 201.
+    const retried = await call(writeOnly, 'POST', '/api/v1/notes', {
+      id: noteId,
+      title: 'Receipt',
+      body: 'x',
+    });
+    expect(retried.status).toBe(200);
+    expect(RESPONSE_SCHEMAS.noteReceipt.safeParse(retried.body).error).toBeUndefined();
+
+    const conflict = await call(writeOnly, 'POST', '/api/v1/notes', {
+      id: noteId,
+      title: 'Other',
+      body: 'x',
+    });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toBe('id_conflict');
+
+    const patched = await call(writeOnly, 'PATCH', `/api/v1/notes/${noteId}`, { title: 'Renamed' });
+    expect(patched.status).toBe(200);
+    expect(RESPONSE_SCHEMAS.noteReceipt.safeParse(patched.body).error).toBeUndefined();
+    expect(patched.body).toEqual({ note: { id: noteId, updatedAt: expect.any(String) } });
   });
 });
 
