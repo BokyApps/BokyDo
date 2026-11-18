@@ -219,7 +219,8 @@ async function removeNoteFiles(
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
         log?.warn(
-          { err, fileId: id },
+          // The error code only: the message would carry the absolute storage path.
+          { code: (err as NodeJS.ErrnoException).code ?? 'unknown', fileId: id },
           'note file could not be removed; left for the stray-file sweep',
         );
       }

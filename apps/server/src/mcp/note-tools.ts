@@ -128,6 +128,9 @@ async function apply(
    */
   destructive = patch.body !== undefined || patch.trashed === true,
 ): Promise<Note> {
+  // The guard's answer reveals whether a body is censored, so only a reader may ask it.
+  if (destructive && !scopesAllow(ctx.scopes, ['notes:read']))
+    fail('Changing a note’s body or moving it to the trash over MCP also needs notes:read.');
   const guard = censorGuard(destructive);
   const result = await updateNote(ctx.db, ctx.userId, noteId, patch, {
     ...readOptions(ctx),
