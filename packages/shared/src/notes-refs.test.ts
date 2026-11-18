@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { extractNoteRefs } from './notes-refs.js';
 
+/** The references alone; `complete` is asserted where it matters. */
+function refsOf(body: string) {
+  const { complete: _complete, ...refs } = extractNoteRefs(body);
+  return refs;
+}
+
 const noteA = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
 const noteB = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c';
 const task = '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d';
@@ -18,7 +24,7 @@ describe('reference extraction', () => {
       `Do [this](bokydo:task/${task}).`,
       `Again [one](bokydo:note/${noteA.toUpperCase()}).`,
     ].join('\n');
-    expect(extractNoteRefs(body)).toEqual({
+    expect(refsOf(body)).toEqual({
       noteIds: [noteA, noteB],
       taskIds: [task],
       fileIds: [file],
@@ -43,7 +49,7 @@ describe('reference extraction', () => {
       `bare ](bokydo:note/${noteA})`,
       `[nested text](bokydo:note/${noteB}?x)`,
     ].join('\n');
-    expect(extractNoteRefs(body)).toEqual(none);
+    expect(refsOf(body)).toEqual(none);
   });
 
   it('ignores other schemes, malformed ids and unknown prefixes', () => {
@@ -56,7 +62,7 @@ describe('reference extraction', () => {
       `[x](/api/v1/note-files/${file}?x=1)`,
       `[x](/api/v1/note-files/${file}/)`,
     ].join(' ');
-    expect(extractNoteRefs(body)).toEqual(none);
+    expect(refsOf(body)).toEqual(none);
   });
 
   it('understands escaped brackets in labels and angle-bracket destinations', () => {
@@ -67,7 +73,7 @@ describe('reference extraction', () => {
       `[task](<bokydo:task/${task}>)`,
       `[file](</api/v1/note-files/${file}?inline=1>)`,
     ].join('\n');
-    expect(extractNoteRefs(body)).toEqual({
+    expect(refsOf(body)).toEqual({
       noteIds: [noteA],
       taskIds: [task],
       fileIds: [file],
@@ -75,9 +81,9 @@ describe('reference extraction', () => {
   });
 
   it('does not claim an unterminated destination', () => {
-    expect(extractNoteRefs(`[x](/api/v1/note-files/${file}`)).toEqual(none);
-    expect(extractNoteRefs(`[x](bokydo:note/${noteA}`)).toEqual(none);
-    expect(extractNoteRefs(`[x] (/api/v1/note-files/${file})`)).toEqual(none);
+    expect(refsOf(`[x](/api/v1/note-files/${file}`)).toEqual(none);
+    expect(refsOf(`[x](bokydo:note/${noteA}`)).toEqual(none);
+    expect(refsOf(`[x] (/api/v1/note-files/${file})`)).toEqual(none);
   });
 
   it('resolves reference-style links and images, and nested images inside a link', () => {
@@ -90,7 +96,7 @@ describe('reference extraction', () => {
       `[collapsed]: /api/v1/note-files/${file}`,
       `[shortcut]: bokydo:task/${task}`,
     ].join('\n');
-    expect(extractNoteRefs(body)).toEqual({
+    expect(refsOf(body)).toEqual({
       noteIds: [noteA],
       taskIds: [task],
       fileIds: [file],
@@ -110,7 +116,7 @@ describe('reference extraction', () => {
       `[Finish \\*the\\* report](bokydo:task/${task})`,
       `![screenshot](/api/v1/note-files/${file}?inline=1)`,
     ].join('\n');
-    expect(extractNoteRefs(body)).toEqual({
+    expect(refsOf(body)).toEqual({
       noteIds: [noteA],
       taskIds: [task],
       fileIds: [file],
@@ -134,10 +140,17 @@ describe('reference extraction', () => {
     ];
     for (const body of bodies) {
       const started = performance.now();
-      const refs = extractNoteRefs(body);
+      const refs = refsOf(body);
       const elapsed = performance.now() - started;
       expect(elapsed, `${body.slice(0, 12)}… took ${elapsed.toFixed(0)} ms`).toBeLessThan(500);
       expect(refs).toEqual(none);
     }
+  });
+
+  it('says when the body went past the parsing budget, so callers keep existing claims', () => {
+    const file = '11111111-1111-4111-8111-111111111111';
+    expect(extractNoteRefs(`[f](/api/v1/note-files/${file})`).complete).toBe(true);
+    const hostile = `\`\`\`\n${'['.repeat(60_000)}\n\`\`\`\n\n[f](/api/v1/note-files/${file})`;
+    expect(extractNoteRefs(hostile).complete).toBe(false);
   });
 });
