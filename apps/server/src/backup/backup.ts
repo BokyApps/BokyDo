@@ -1,6 +1,6 @@
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -59,6 +59,11 @@ export interface BackupServiceDeps {
    * before those files are read, so a test can remove bytes the snapshot still expects.
    */
   afterSnapshot?: () => Promise<void>;
+  /**
+   * A file whose row still exists but whose bytes are gone: lost before this backup, so a retry
+   * cannot help. The backup carries on without it (as restore would), and this reports it.
+   */
+  onMissingFile?: (kind: 'attachments' | 'note-files', id: string) => void;
 }
 
 /**
@@ -238,20 +243,31 @@ export class BackupService {
   }
 
   /**
-   * Archive exactly `ids` from `dir` as `<prefix>/<id>`. The list comes from the database
-   * snapshot, so a row whose bytes cannot be read fails the backup — the instance changed while
-   * the snapshot was being taken and a retry will see a consistent state — instead of producing a
-   * silently incomplete archive. Only an empty list may find no directory at all.
+   * Archive exactly `ids` from `dir` as `<prefix>/<id>`; the list comes from the database
+   * snapshot. Each file is opened before its entry starts. A missing file whose row is gone now
+   * was purged after the snapshot, so the backup fails as `busy` and a retry sees a consistent
+   * state. A missing file whose row still exists was lost earlier: nothing a retry fixes, so it
+   * is reported and skipped rather than blocking every future backup (and every restore, which
+   * takes one first). Any other read error fails the backup.
    */
   private async archiveFiles(
     archive: ArchiveWriter,
     dir: string,
-    prefix: string,
+    prefix: 'attachments' | 'note-files',
     ids: readonly string[],
   ): Promise<void> {
     for (const id of ids) {
       if (!/^[0-9a-f-]{36}$/.test(id)) throw new BackupError('invalid');
-      const stream = createReadStream(path.join(dir, id));
+      let handle;
+      try {
+        handle = await open(path.join(dir, id), 'r');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw new BackupError('busy');
+        if (!(await this.rowStillLive(prefix, id))) throw new BackupError('busy');
+        this.deps.onMissingFile?.(prefix, id);
+        continue;
+      }
+      const stream = handle.createReadStream();
       // Only read errors become `busy`; a failure of the archive or encryption layer is not
       // disguised as a transient one.
       const guarded = (async function* (): AsyncGenerator<Buffer> {
@@ -261,8 +277,22 @@ export class BackupService {
           throw new BackupError('busy');
         }
       })();
-      await archive.entry(`${prefix}/${id}`, guarded);
+      try {
+        await archive.entry(`${prefix}/${id}`, guarded);
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
     }
+  }
+
+  /** Whether the row that named a file in the snapshot still names it now. */
+  private async rowStillLive(prefix: 'attachments' | 'note-files', id: string): Promise<boolean> {
+    const sql = this.deps.sql;
+    const rows =
+      prefix === 'attachments'
+        ? await sql`select 1 from attachments where id = ${id} and deleted_at is null`
+        : await sql`select 1 from note_files where id = ${id} and status = 'ready'`;
+    return rows.length > 0;
   }
 
   /** Store an uploaded backup file (checked to look like one) so it can be restored by name. */

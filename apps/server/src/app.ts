@@ -137,6 +137,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     sql: deps.db.sql,
     dataDir: deps.dataDir,
     secretsDir: deps.secretsDir ?? path.join(deps.dataDir, 'secrets'),
+    onMissingFile: (kind, id) =>
+      app.log.warn({ kind, fileId: id }, 'backup skipped a file whose bytes are missing'),
   });
   let lastOAuthPurge = 0;
   const sync = new SyncService(

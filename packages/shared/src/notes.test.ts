@@ -168,8 +168,8 @@ describe('censor tokens', () => {
     expect(redactCensored('before {{censored:v1:abc still words')).toBe(
       `before ${CENSOR_PLACEHOLDER} still words`,
     );
-    // A closer beyond the 100,000-character window is treated as absent.
-    const far = `{{censored${'a'.repeat(100_001)}}} tail`;
+    // A closer, however far away, ends the span: words with spaces before it never leak.
+    const far = `{{censored secret words ${'a '.repeat(80_000)}}} tail`;
     expect(redactCensored(far)).toBe(`${CENSOR_PLACEHOLDER} tail`);
   });
 
