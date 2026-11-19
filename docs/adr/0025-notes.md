@@ -143,9 +143,51 @@ same output.
 
 - `md` is a single `.md` file. A note with files is exported as a `.zip` that also holds a
   `files/` folder, with links rewritten to it.
-- `docx` uses the `docx` library and `pdf` uses `pdfkit`. Both embed PNG and JPEG images under
-  10 MB and 40 megapixels (dimensions read from the header before decoding). Other files appear
-  as their names. Embeds export as links. Censored spans export as `█████`.
+- `docx` uses the `docx` library and `pdf` uses `pdfkit`. Embeds export as links. Censored spans
+  export as `█████`, and censor tokens are also redacted from titles and file names wherever
+  they appear (headers, document metadata, zip paths).
+- Images are validated structurally before any decoder sees them. PNG chunks are checked by CRC.
+  For PDF a PNG is rebuilt from `IHDR`, `IDAT` and an empty `IEND` only, and only the 8-bit grey
+  or RGB, non-interlaced class is embedded, because pdfkit passes that class through without
+  inflating it. A JPEG is embedded through its first `EOI`, so a Motion Photo's appended video is
+  dropped. Any other image is shown as its name.
+- Rendering runs in a `worker_threads` worker for each export, never on the main thread. That
+  covers parsing, the AST and DOCX/PDF generation. Review showed that capping work item by item
+  on the main thread does not converge for attacker-controlled Markdown. The worker has a
+  256 MB old-generation heap, a 30-second deadline from slot acquisition, and is terminated on
+  disconnect. A worker crash or out-of-memory fails that one request (413 or 500). Limits: one
+  export per user and three at once, 50 MB of images, 100 MB of output. Bodies over 20,000
+  lines or 50,000 `|` are refused before parsing.
+
+### Concurrent edits
+
+`PATCH /api/v1/notes/:id` takes an optional `expectedUpdatedAt` (the `updatedAt` the client last
+saw). The server compares it under the row lock and answers 409 `stale_revision` when it is out
+of date. Every write advances `updated_at` by at least 1 ms. The web app always sends it:
+
+- A stale tab with no local edits adopts the newer version.
+- A stale tab with local edits shows a conflict banner: Load theirs, Keep mine or Copy mine.
+- Keep mine asks again when it would bring back text that was censored elsewhere.
+
+Without this, a whole-body save from an old tab could restore plaintext that another tab had
+just censored.
+
+### MCP and censored notes
+
+An AI client cannot see censored text or recreate it. On a note whose body contains anything
+censor-like, MCP may change the title, tags, pin and archive state. It may not change the body
+or move the note to the trash. The check runs under the row lock, and it needs `notes:read`,
+because the refusal itself reveals that a note holds censored text. This protection is
+MCP-only; REST clients with `notes:write` are not restricted. All text MCP returns (titles,
+tags, snippets, file names) is redacted.
+
+### Backups
+
+Note files are backed up from `<dataDir>/note-files` alongside attachments. Each backup holds
+exactly the files named by its own database snapshot. A file purged after the snapshot (its row
+is gone too) fails the backup as `busy`, and a retry is consistent. A file whose row still
+exists but whose bytes were already lost is skipped and logged rather than failing every
+future backup, and with it every restore, which takes a backup first.
 
 ## Consequences
 
