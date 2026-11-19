@@ -128,6 +128,7 @@ let patchCalls: Record<string, unknown>[];
 let patchHandler: (body: Record<string, unknown>) => Response | Promise<Response>;
 let getNote: () => Note;
 let getFails: boolean;
+let getGone: boolean;
 let writeText: ReturnType<typeof vi.fn>;
 
 function tree(): ReactNode {
@@ -210,6 +211,7 @@ beforeEach(() => {
   patchHandler = (patch) => json({ note: savedFrom(patch, R2) });
   getNote = () => makeNote();
   getFails = false;
+  getGone = false;
   writeText = vi.fn(async () => undefined);
   router.blocker.status = 'idle';
   router.proceed.mockClear();
@@ -231,6 +233,7 @@ beforeEach(() => {
         return patchHandler(patch);
       }
       if (url.startsWith('/api/v1/notes/') && (!init?.method || init.method === 'GET')) {
+        if (getGone) return json({ error: 'not_found' }, 404);
         if (getFails) return json({ error: 'error' }, 500);
         return json({ note: getNote() });
       }
@@ -470,6 +473,26 @@ describe('MED: conflict recovery when the saved version cannot be fetched', () =
     await settle();
     expect(body().value).toBe('Their newest');
     expect(banner()).toBeNull();
+  });
+
+  it('a note deleted between the 409 and the reload takes the deleted path', async () => {
+    patchHandler = () => staleBody(R2);
+    await render();
+    getNote = () => makeNote({ body: 'Their body', updatedAt: R2 });
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await settle();
+    expect(banner()).not.toBeNull();
+
+    getGone = true;
+    await click('Load their version');
+    await settle();
+    expect(banner()).toBeNull();
+    expect(container.textContent).toContain('This note was deleted');
+    expect(body().disabled).toBe(true);
+    expect(patchCalls).toHaveLength(1); // the deleted path never resends the draft
   });
 
   it('the leave dialog offers Resolve conflict instead of a blind retry after a 409', async () => {
