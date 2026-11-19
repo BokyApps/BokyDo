@@ -108,6 +108,8 @@ export class ExportOverloadedError extends Error {
 
 /** The planned peak of one DOCX/PDF export: worker heap, image copies and stream buffers. */
 export const EXPORT_PEAK_BYTES = 400 * 1024 * 1024;
+/** The planned peak of one Markdown export: a worker heap for the parse, no images or packing. */
+export const MARKDOWN_EXPORT_PEAK_BYTES = 250 * 1024 * 1024;
 /** Admit a new export only while 15 % of the memory limit stays free. */
 export const EXPORT_MEMORY_FRACTION = 0.85;
 
@@ -130,11 +132,6 @@ export async function readMemoryLimitBytes(): Promise<number> {
   return totalmem();
 }
 
-/** Whether one more export fits under the memory limit. Exported for its own test. */
-export function exportAdmitted(limitBytes: number, rssBytes: number): boolean {
-  return rssBytes + EXPORT_PEAK_BYTES <= limitBytes * EXPORT_MEMORY_FRACTION;
-}
-
 /**
  * Run one export. Throws `ExportNotFoundError`, `ExportBusyError`, `TooLargeError` or
  * `ExportTimeoutError`; anything else is a real failure. The returned output holds the slot
@@ -149,13 +146,19 @@ export async function runNoteExport(
   // compared with what an OOM kill would cost every other request in the process.
   const memoryLimit = await (deps.memoryLimitBytes ?? readMemoryLimitBytes)();
   const rss = deps.rssBytes?.() ?? process.memoryUsage().rss;
-  if (!exportAdmitted(memoryLimit, rss)) throw new ExportOverloadedError();
   const semaphore = deps.semaphore ?? exportSemaphore;
-  const release = semaphore.tryAcquire(
-    request.userId,
-    request.format === 'md' ? 'markdown' : 'file',
-  );
-  if (!release) throw new ExportBusyError();
+  const kind = request.format === 'md' ? 'markdown' : 'file';
+  // The memory check and the slot are one synchronous step, with this export's planned peak
+  // reserved until it releases: overlapping requests cannot all pass on the same headroom.
+  const admitted = semaphore.tryAdmit(request.userId, kind, {
+    limitBytes: memoryLimit,
+    rssBytes: rss,
+    peakBytes: kind === 'file' ? EXPORT_PEAK_BYTES : MARKDOWN_EXPORT_PEAK_BYTES,
+    fraction: EXPORT_MEMORY_FRACTION,
+  });
+  if (admitted === 'overloaded') throw new ExportOverloadedError();
+  if (admitted === 'busy') throw new ExportBusyError();
+  const release = admitted;
   // The 30 s clock starts here, not when the worker starts: queueing/auth/DB time is part of it.
   const deadline = new ExportDeadline(limits.deadlineMs);
   let released = false;
@@ -488,8 +491,6 @@ export function redactExportText(text: string): string {
   return redactEncodedCensorMarkers(redactCensored(text));
 }
 
-const CENSOR_MARKER_CHARS = ['{', '{', 'c', 'e', 'n', 's', 'o', 'r', 'e', 'd'] as const;
-
 /** A raw character or one `%XX` escape, without throwing on a malformed escape. */
 function readEncodedChar(text: string, at: number): { char: string; next: number } | null {
   if (at >= text.length) return null;
@@ -501,10 +502,27 @@ function readEncodedChar(text: string, at: number): { char: string; next: number
   return { char: text.charAt(at), next: at + 1 };
 }
 
-/** The index after `{{censored` at `start` (raw or encoded, any case), or -1. */
+const CENSOR_MARKER_NAME = 'censored';
+
+/**
+ * The index after `{{` + optional whitespace + `censored` at `start` (each character raw or
+ * `%XX`-encoded, the name in any case), or -1. Same grammar as `redactCensored`, which allows
+ * whitespace between the braces and the name. Names and titles are at most a few hundred
+ * characters, so the per-position scan stays cheap.
+ */
 function censorMarkerEnd(text: string, start: number): number {
   let at = start;
-  for (const expected of CENSOR_MARKER_CHARS) {
+  for (let brace = 0; brace < 2; brace++) {
+    const read = readEncodedChar(text, at);
+    if (read?.char !== '{') return -1;
+    at = read.next;
+  }
+  for (;;) {
+    const read = readEncodedChar(text, at);
+    if (!read || !/\s/.test(read.char)) break;
+    at = read.next;
+  }
+  for (const expected of CENSOR_MARKER_NAME) {
     const read = readEncodedChar(text, at);
     if (!read || read.char.toLowerCase() !== expected) return -1;
     at = read.next;

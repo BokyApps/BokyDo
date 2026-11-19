@@ -34,6 +34,18 @@ describe('export name redaction', () => {
     expect(redactExportText(`x ${mixed}`)).toBe(`x ${PLACEHOLDER}`);
   });
 
+  it('finds an encoded marker with whitespace after the braces, like the shared redactor', () => {
+    // `{{ censored` is censored for `redactCensored`; the encoded scan must agree.
+    for (const marker of [
+      `%7B%7B%20censored secret words%7D%7D`,
+      `%7B%7B%09CeNsOrEd:${CIPHERTEXT}`,
+    ]) {
+      const text = redactExportText(`title ${marker} tail`);
+      expect(text, marker).not.toMatch(/secret|censored|c2VjcmV0/i);
+      expect(text).toContain('title');
+    }
+  });
+
   it('ignores a malformed escape elsewhere and still finds the marker', () => {
     const text = redactExportText(`100%zz ${ENCODED}`);
     expect(text).toBe(`100%zz ${PLACEHOLDER}`);

@@ -49,6 +49,12 @@ export interface PdfRenderOptions {
   maxLinkAnnotations?: number;
   /** Abort the render as soon as pdfkit has produced more than this many bytes. */
   maxOutputBytes?: number;
+  /**
+   * Set by `buildPdf`: throws once pdfkit has pushed more than the budget. pdfkit pushes output
+   * synchronously while it draws and ignores backpressure, so a stream counter would only see the
+   * bytes after the whole document was built; this is checked between blocks and table rows.
+   */
+  outputCheck?: () => void;
 }
 
 type PdfDoc = PDFKit.PDFDocument;
@@ -429,6 +435,7 @@ class PdfRenderer {
 
   private block(block: Block, opts: { indent: number; italic: boolean; listLevel: number }): void {
     this.opts.deadline?.check();
+    this.opts.outputCheck?.();
     switch (block.type) {
       case 'heading': {
         if (this.y > this.top) this.y += 10;
@@ -573,9 +580,17 @@ class PdfRenderer {
     };
     measureRow(block.header, true);
     for (const row of block.rows) measureRow(row, false);
-    const total = natural.reduce((sum, value) => sum + value, 0) || 1;
-    const scale = this.width / total;
-    const widths = natural.map((value) => Math.max(TABLE_MIN_COLUMN, Math.floor(value * scale)));
+    // Every column gets its minimum, and the rest of the text width is shared in proportion to
+    // what each column wants beyond it. `table` has already checked that the minimums fit, so the
+    // widths always sum to the text width and none falls below the minimum (scaling the natural
+    // widths and clamping afterwards could push the table past the page edge).
+    const spare = Math.max(0, this.width - columns * TABLE_MIN_COLUMN);
+    const wants = natural.map((value) => Math.max(0, value - TABLE_MIN_COLUMN));
+    const wanted = wants.reduce((sum, value) => sum + value, 0);
+    const widths = wants.map(
+      (want) =>
+        TABLE_MIN_COLUMN + Math.floor(wanted > 0 ? (spare * want) / wanted : spare / columns),
+    );
     const used = widths.reduce((sum, value) => sum + value, 0);
     // Rounding leaves a pixel or two over; give it to the widest column so the table is square.
     let widest = 0;
@@ -662,9 +677,14 @@ class PdfRenderer {
     widths: readonly number[],
     lineHeight: number,
   ): { cells: Atom[][][]; lines: number } {
-    // One line of the page is kept for the table body: a header that fills the page would be
-    // repeated on a page that can never show a row.
-    const room = Math.max(1, Math.floor((this.bottom - this.top - TABLE_PAD * 2) / lineHeight) - 1);
+    // Room is kept for one full body row (a line plus its own padding): a header that fills the
+    // page would be repeated on a page that can never show a row.
+    const room = Math.max(
+      1,
+      Math.floor(
+        (this.bottom - this.top - TABLE_PAD * 2 - (lineHeight + TABLE_PAD * 2)) / lineHeight,
+      ),
+    );
     const needed = Math.max(1, ...header.map((cell) => cell.length));
     if (needed <= room) return { cells: header.map((cell) => cell), lines: needed };
     const ellipsis = this.textAtom('…', helix(false, false), BODY_SIZE, null, false);
@@ -739,6 +759,7 @@ class PdfRenderer {
         }
       }
       this.opts.deadline?.check();
+      this.opts.outputCheck?.();
     }
     this.y += 8;
   }
@@ -850,9 +871,24 @@ export function buildPdf(
   // A pdfkit error must never be an unhandled 'error' event on a stream nothing is reading yet;
   // the route listens too and destroys the response.
   doc.on('error', () => undefined);
-  const out = guardPdfOutput(doc as unknown as Readable, maxOutputBytes);
+  // Count bytes where pdfkit produces them (its synchronous `push`), not where a reader consumes
+  // them: the renderer checks this between blocks and stops early instead of finishing the PDF.
+  let produced = 0;
+  const readable = doc as unknown as Readable;
+  const push = readable.push.bind(readable);
+  readable.push = (chunk: unknown, encoding?: BufferEncoding) => {
+    if (chunk && typeof (chunk as { length?: unknown }).length === 'number')
+      produced += (chunk as { length: number }).length;
+    return push(chunk, encoding);
+  };
+  const outputCheck = () => {
+    if (produced > maxOutputBytes)
+      throw new TooLargeError(`export exceeded ${maxOutputBytes} bytes`);
+  };
+  const out = guardPdfOutput(readable, maxOutputBytes);
   try {
-    new PdfRenderer(doc, ctx, opts).render(title, blocks);
+    new PdfRenderer(doc, ctx, { ...opts, outputCheck }).render(title, blocks);
+    outputCheck();
   } catch (err) {
     doc.destroy();
     throw err;

@@ -316,6 +316,34 @@ describe('note export PDF', () => {
     expect(text).toContain('head39: value39');
   });
 
+  it('keeps every column of a skewed table inside the page', async () => {
+    // Regression: scaling natural widths and clamping to the minimum afterwards pushed a grid
+    // line of a 19-column table with mixed headings past the right edge of an A4 page.
+    const columns = 19;
+    const header = Array.from({ length: columns }, (_, index) =>
+      index % 4 === 0 ? 'a much longer heading that wants room' : `h${index}`,
+    );
+    const values = Array.from({ length: columns }, (_, index) => `v${index}`);
+    const body = [
+      `| ${header.join(' | ')} |`,
+      `| ${header.map(() => '---').join(' | ')} |`,
+      `| ${values.join(' | ')} |`,
+    ].join('\n');
+    const { pdf } = await render(body, 'Skewed');
+    const content = pdf.toString('latin1');
+    const right = 595.28 - 56.7 + 0.5; // A4 width minus the right margin, plus rounding
+    // Walk the content stream's tokens: `x y m`, `x y l` and `x y w h re` place grid lines.
+    const tokens = content.split(/\s+/);
+    const xs: number[] = [];
+    tokens.forEach((token, index) => {
+      if (token === 'm' || token === 'l') xs.push(Number(tokens[index - 2]));
+      if (token === 're') xs.push(Number(tokens[index - 4]) + Number(tokens[index - 2]));
+    });
+    const finite = xs.filter(Number.isFinite);
+    expect(finite.length).toBeGreaterThan(0);
+    expect(Math.max(...finite)).toBeLessThanOrEqual(right);
+  });
+
   it('truncates a header taller than a page with an ellipsis instead of looping', async () => {
     const columns = 19;
     const header = Array.from({ length: columns }, (_, index) =>
@@ -352,15 +380,22 @@ describe('note export PDF', () => {
     expect(pages.length).toBeGreaterThan(1);
   });
 
-  it('aborts the render as soon as pdfkit produces more than the output budget', async () => {
-    const doc = parseNoteBody(BODY);
-    const stream = buildPdf(
-      'Too big',
-      doc.blocks,
-      { images, fileNames },
-      { compress: false, maxOutputBytes: 256 },
-    );
-    await expect(collect(stream)).rejects.toBeInstanceOf(TooLargeError);
+  it('stops rendering as soon as pdfkit has produced more than the output budget', () => {
+    // pdfkit pushes synchronously while drawing, so the budget must stop the render itself, not
+    // just a downstream stream: count the blocks visited (via the per-block deadline check).
+    const doc = parseNoteBody(Array.from({ length: 300 }, (_, i) => `Paragraph ${i}`).join('\n\n'));
+    let visited = 0;
+    const deadline = { check: () => void visited++ } as unknown as ExportDeadline;
+    expect(() =>
+      buildPdf(
+        'Too big',
+        doc.blocks,
+        { images, fileNames },
+        { compress: false, maxOutputBytes: 4096, deadline },
+      ),
+    ).toThrow(TooLargeError);
+    expect(visited).toBeGreaterThan(0);
+    expect(visited).toBeLessThan(150);
   });
 
   it('abandons a render that has run past its deadline', () => {
