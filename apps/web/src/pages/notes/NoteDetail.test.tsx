@@ -11,17 +11,38 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+const router = vi.hoisted(() => ({
+  blocker: { status: 'idle' as 'idle' | 'blocked' },
+  proceed: vi.fn(),
+  reset: vi.fn(),
+}));
+
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, className }: { children?: ReactNode; className?: string }) => (
     <a className={className}>{children}</a>
   ),
   useNavigate: () => vi.fn(),
-  useBlocker: () => ({ status: 'idle', proceed: vi.fn(), reset: vi.fn() }),
+  useBlocker: () => ({
+    status: router.blocker.status,
+    proceed: router.proceed,
+    reset: router.reset,
+  }),
 }));
 
 vi.mock('../../lib/sync.js', () => ({
   useSyncState: () => ({ tasks: new Map(), projects: new Map(), sections: new Map() }),
 }));
+
+// The marker's own storage/digest semantics are covered by notes-censor-marker.test.ts; here the
+// page only has to react to the three outcomes. Mocking the async check keeps the page test
+// deterministic (real SHA-256 runs on the thread pool, not on fake timers).
+const marker = vi.hoisted(() => ({
+  check: vi.fn<() => Promise<'none' | 'saved' | 'missing'>>(),
+}));
+vi.mock('../../lib/notes-censor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof NotesCensor>();
+  return { ...actual, checkPendingCensor: () => marker.check() };
+});
 
 vi.mock('./PasswordDialog.js', () => ({
   usePasswordPrompt: () => ({ askPassword: async () => null, dialog: null }),
@@ -41,6 +62,7 @@ vi.mock('../../components/notes/NoteEditor.js', () => ({
   }) => (
     <textarea
       aria-label="Note body"
+      className="bk-note-prosemirror"
       value={markdown}
       disabled={editable === false}
       onChange={(e) => onChange(e.target.value)}
@@ -48,8 +70,10 @@ vi.mock('../../components/notes/NoteEditor.js', () => ({
   ),
 }));
 
+import type * as NotesCensor from '../../lib/notes-censor.js';
 import { ConfirmProvider } from '../../lib/confirm.js';
 import { notesKeys } from '../../lib/notes.js';
+import { censorTokenDigest } from '../../lib/notes-censor.js';
 import { ToastProvider } from '../../lib/toasts.js';
 import { NoteDetail } from './NoteDetail.js';
 
@@ -103,6 +127,7 @@ let root: Root;
 let patchCalls: Record<string, unknown>[];
 let patchHandler: (body: Record<string, unknown>) => Response | Promise<Response>;
 let getNote: () => Note;
+let getFails: boolean;
 let writeText: ReturnType<typeof vi.fn>;
 
 function tree(): ReactNode {
@@ -162,10 +187,14 @@ async function type(el: HTMLTextAreaElement | HTMLInputElement, value: string): 
   });
 }
 
-async function click(label: string): Promise<void> {
-  const button = Array.from(container.querySelectorAll('button')).find(
+function buttonByText(label: string): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll('button')).find(
     (b) => b.textContent?.trim() === label,
   );
+}
+
+async function click(label: string): Promise<void> {
+  const button = buttonByText(label);
   if (!button) throw new Error(`no "${label}" button in: ${container.textContent ?? ''}`);
   await act(async () => {
     button.click();
@@ -180,7 +209,14 @@ beforeEach(() => {
   patchCalls = [];
   patchHandler = (patch) => json({ note: savedFrom(patch, R2) });
   getNote = () => makeNote();
+  getFails = false;
   writeText = vi.fn(async () => undefined);
+  router.blocker.status = 'idle';
+  router.proceed.mockClear();
+  router.reset.mockClear();
+  marker.check.mockReset();
+  marker.check.mockResolvedValue('none');
+  sessionStorage.clear();
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
     value: { writeText },
@@ -195,6 +231,7 @@ beforeEach(() => {
         return patchHandler(patch);
       }
       if (url.startsWith('/api/v1/notes/') && (!init?.method || init.method === 'GET')) {
+        if (getFails) return json({ error: 'error' }, 500);
         return json({ note: getNote() });
       }
       throw new Error(`unexpected request ${init?.method ?? 'GET'} ${url}`);
@@ -398,6 +435,173 @@ describe('P5: linked-task provenance comes from the server', () => {
     expect(container.querySelectorAll('button[aria-label="Unlink task"]')).toHaveLength(2);
     // No per-note detail request was made (the fetch mock would throw for one).
     expect(patchCalls).toHaveLength(0);
+  });
+});
+
+describe('MED: conflict recovery when the saved version cannot be fetched', () => {
+  it('shows Retry fetch instead of a version choice, and Load theirs never falls back', async () => {
+    patchHandler = () => staleBody(R2);
+    await render();
+    getNote = () => makeNote({ body: 'Their body', updatedAt: R2 });
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await settle();
+    expect(banner()).not.toBeNull();
+
+    getFails = true;
+    await click('Load their version');
+    await settle();
+    expect(body().value).toBe('Mine'); // never adopts the cached conflict snapshot
+    expect(banner()?.textContent).toContain("couldn't be fetched");
+    expect(buttonByText('Retry fetch')).toBeTruthy();
+    expect(buttonByText('Load their version')).toBeUndefined();
+
+    getFails = false;
+    getNote = () => makeNote({ body: 'Their newest', updatedAt: R3 });
+    await click('Retry fetch');
+    await settle();
+    // Fetching works again: the normal choice is back and the draft is untouched.
+    expect(banner()?.textContent).toContain('This note changed elsewhere');
+    expect(body().value).toBe('Mine');
+
+    await click('Load their version');
+    await settle();
+    expect(body().value).toBe('Their newest');
+    expect(banner()).toBeNull();
+  });
+
+  it('the leave dialog offers Resolve conflict instead of a blind retry after a 409', async () => {
+    patchHandler = () => staleBody(R2);
+    await render();
+    getNote = () => makeNote({ body: 'Their body', updatedAt: R2 });
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await settle();
+
+    // A navigation hit the conflict while flushing: the router blocks and opens the leave dialog.
+    router.blocker.status = 'blocked';
+    await type(title(), 'T2');
+    expect(buttonByText('Resolve conflict')).toBeTruthy();
+    expect(buttonByText('Try again')).toBeUndefined();
+
+    await click('Resolve conflict');
+    expect(router.reset).toHaveBeenCalledOnce();
+    expect(banner()?.textContent).toContain('This note changed elsewhere');
+    expect(patchCalls).toHaveLength(1); // resolving does not resend anything
+  });
+});
+
+describe('MED: the censor warning is lenient', () => {
+  it('asks before keeping a draft over a saved body that merely looks censored', async () => {
+    patchHandler = () => staleBody(R2);
+    await render();
+    getNote = () => makeNote({ body: 'a {{ censored: hand-written b', updatedAt: R2 });
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await settle();
+
+    await click('Keep mine');
+    expect(patchCalls).toHaveLength(1); // nothing is sent before the confirmation
+    expect(banner()?.textContent).toContain('This would bring back censored text');
+  });
+});
+
+describe('MED 2c: a censor marker warns on the next visit', () => {
+  it('warns when the saved body lacks the token this tab censored', async () => {
+    marker.check.mockResolvedValue('missing');
+    await render();
+    await settle();
+    expect(container.textContent).toContain('Your last censor may not have been saved');
+  });
+
+  it('stays quiet when the token reached the server', async () => {
+    marker.check.mockResolvedValue('saved');
+    await render();
+    await settle();
+    expect(container.textContent).not.toContain('Your last censor may not have been saved');
+  });
+
+  it('clears the marker when a save acknowledges the token body', async () => {
+    await render(); // the open check runs with no marker
+    sessionStorage.setItem(
+      'bokydo:note-censor-pending:note-1',
+      JSON.stringify({ noteId: 'note-1', tokenDigest: await censorTokenDigest(TOKEN) }),
+    );
+
+    // The editor hands over the token document after a censor: this is its save.
+    await type(body(), TOKEN);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(patchCalls).toEqual([{ body: TOKEN, expectedUpdatedAt: R1 }]);
+    expect(sessionStorage.getItem('bokydo:note-censor-pending:note-1')).toBeNull();
+  });
+});
+
+describe('LOW: focus after a conflict resolution', () => {
+  it('returns focus to the editor after Load their version', async () => {
+    patchHandler = () => staleBody(R2);
+    await render();
+    getNote = () => makeNote({ body: 'Their body', updatedAt: R2 });
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await settle();
+
+    await click('Load their version');
+    await settle();
+    expect(document.activeElement).toBe(body());
+  });
+
+  it('returns focus to the editor after Keep mine', async () => {
+    patchHandler = () => staleBody(R2);
+    await render();
+    getNote = () => makeNote({ body: 'Their body', updatedAt: R2 });
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await settle();
+
+    patchHandler = (patch) => json({ note: savedFrom(patch, R3) });
+    await click('Keep mine');
+    await settle();
+    expect(document.activeElement).toBe(body());
+  });
+});
+
+describe('MED: live sync during an in-flight save', () => {
+  it('keeps the newest snapshot and adopts it once the queue is idle', async () => {
+    let respond!: (response: Response) => void;
+    patchHandler = () => new Promise<Response>((resolve) => (respond = resolve));
+
+    await render();
+    await type(body(), 'Mine');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(patchCalls).toHaveLength(1);
+
+    // A live hint brings a newer revision while this tab's older PATCH is still in flight.
+    getNote = () => makeNote({ body: 'Remote newer', updatedAt: R3 });
+    await refetch();
+    expect(body().value).toBe('Mine'); // the draft stays while saving
+
+    // The older PATCH answers at R2: it must not replace the R3 now in the cache.
+    respond(json({ note: savedFrom({ body: 'Mine' }, R2) }));
+    await settle();
+    await settle();
+
+    expect(client.getQueryData<Note>(notesKeys.detail('note-1'))?.updatedAt).toBe(R3);
+    expect(body().value).toBe('Remote newer');
+    expect(patchCalls).toHaveLength(1); // adopting the server note never saves
   });
 });
 

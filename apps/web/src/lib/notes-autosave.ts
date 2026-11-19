@@ -1,5 +1,5 @@
 import type { NotePatch } from '@bokydo/shared';
-import { diffNotePatch, isStaleRevisionError, type NoteDraft } from './notes.js';
+import { censorTokensIn, diffNotePatch, isStaleRevisionError, type NoteDraft } from './notes.js';
 
 /**
  * Debounced, diff-only autosave for a note. `update` is called as the draft changes; a PATCH with
@@ -67,6 +67,12 @@ export class NoteAutosave {
    * verified token draft arrives.
    */
   private holdBody = false;
+  /**
+   * MED (pagehide + censor, 2b): censor tokens added by the revision the censor flow handed over
+   * and which the server has not acknowledged yet. While one is still pending and this tab's own
+   * older PATCH is in flight, a keepalive may drop the revision premise (see `keepaliveRequest`).
+   */
+  private censorRevisionTokens: string[] = [];
   private stopped = false;
   private conflicted = false;
   private flushRequested = false;
@@ -90,19 +96,31 @@ export class NoteAutosave {
 
   /** Record the current draft and (re)start the debounce when there is something to save. */
   update(draft: NoteDraft): void {
+    const previousBody = this.draft.body;
     this.draft = clone(draft);
+    // A token that the next failed/undone edit removes must stop counting as a pending censor
+    // revision, or a later keepalive could drop its premise for the wrong reason.
+    this.pruneCensorRevision(this.draft.body);
     if (this.stopped || this.conflicted) return;
     if (this.flushRequested) {
       // The verified token document has been handed over: the plaintext no longer exists in the
       // draft, so release the hold and save it now instead of after the debounce.
       this.paused = false;
       this.holdBody = false;
+      const before = new Set(censorTokensIn(previousBody));
+      this.censorRevisionTokens = censorTokensIn(draft.body).filter((token) => !before.has(token));
       this.clearTimer();
       void this.run();
       return;
     }
     if (this.paused) return;
     this.schedule();
+  }
+
+  /** Forget pending censor tokens that are no longer part of the draft. */
+  private pruneCensorRevision(body: string): void {
+    if (this.censorRevisionTokens.length === 0) return;
+    this.censorRevisionTokens = this.censorRevisionTokens.filter((token) => body.includes(token));
   }
 
   private clearTimer(): void {
@@ -146,6 +164,11 @@ export class NoteAutosave {
       const revision = await this.deps.save(patch, this.baseRevisionValue);
       this.baseRevisionValue = revision;
       this.baseline = target;
+      // The acknowledged body carries the censor token now; only tokens still missing from it are
+      // unacknowledged (an older PATCH may answer after the censor revision was queued).
+      this.censorRevisionTokens = this.censorRevisionTokens.filter(
+        (token) => !target.body.includes(token),
+      );
       if (!silent) this.deps.onStatus('saved');
       ok = true;
     } catch (err) {
@@ -257,6 +280,28 @@ export class NoteAutosave {
   }
 
   /**
+   * What a `pagehide` keepalive must send: the patch and the revision premise, or `null` when
+   * everything is acknowledged.
+   *
+   * MED (2b): the premise is dropped only for the one case where it would lose censored text. A
+   * censor token revision is unacknowledged because this tab's own older PATCH is still in flight,
+   * so the only write an unguarded PATCH could override is that older save of this tab. Protecting
+   * the freshly censored body wins over concurrency there. In every other case the premise stays:
+   * another tab may have saved, and this tab must not overwrite it.
+   */
+  keepaliveRequest(): { patch: NotePatch; expectedUpdatedAt: string | null } | null {
+    const patch = this.prepare(diffNotePatch(this.baseline, this.draft));
+    if (patch === null) return null;
+    const body = patch.body;
+    const protectsCensor =
+      this.saving &&
+      this.censorRevisionTokens.length > 0 &&
+      typeof body === 'string' &&
+      this.censorRevisionTokens.some((token) => body.includes(token));
+    return { patch, expectedUpdatedAt: protectsCensor ? null : this.baseRevisionValue };
+  }
+
+  /**
    * Save pending edits now and resolve once every change is acknowledged. `true` means the server
    * has the latest draft; `false` means a save failed (the draft is kept), the note is gone, or a
    * revision conflict needs the user. A conflict is never retried in a loop.
@@ -336,6 +381,7 @@ export class NoteAutosave {
     this.paused = false;
     this.holdBody = false;
     this.flushRequested = false;
+    this.censorRevisionTokens = [];
     this.baseRevisionValue = revision;
     this.baseline = clone(snapshot);
     this.draft = clone(snapshot);
@@ -346,6 +392,7 @@ export class NoteAutosave {
     this.stopped = true;
     this.paused = false;
     this.holdBody = false;
+    this.censorRevisionTokens = [];
     this.clearTimer();
     this.pending = false;
   }

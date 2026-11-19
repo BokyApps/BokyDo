@@ -4,14 +4,15 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from './api.js';
 import {
   bodyLinksTask,
+  censorConflictWarning,
   censorTokensIn,
   isNoteGoneError,
   isStaleRevisionError,
+  newestNote,
   noteExportAvailability,
   noteExportPath,
   noteLoadPhase,
   pathFor,
-  restoresCensoredText,
 } from './notes.js';
 
 const TASK = '123e4567-e89b-12d3-a456-426614174000';
@@ -54,14 +55,45 @@ describe('stale revisions', () => {
     expect(censorTokensIn('no tokens here')).toEqual([]);
   });
 
-  it('requires a confirmation when the remote censors text this draft does not', () => {
-    expect(restoresCensoredText(`before ${TOKEN} after`, `before plaintext after`)).toBe(true);
-    // The same token in both versions is not a restored span.
-    expect(restoresCensoredText(`a ${TOKEN} b`, `a ${TOKEN} b`)).toBe(false);
-    // A different token is a different span, so it would be restored too.
-    expect(restoresCensoredText(`a ${TOKEN} b`, 'a {{censored:v1:ZZZ:YYY:XXX}} b')).toBe(true);
-    expect(restoresCensoredText('plain', `a ${TOKEN} b`)).toBe(false);
-    expect(restoresCensoredText('', 'plain')).toBe(false);
+  it('requires a confirmation whenever a differing saved body looks censor-like', () => {
+    expect(censorConflictWarning(`before ${TOKEN} after`, 'before plaintext after')).toBe(true);
+    // MED: lenient — any `{{censored` spelling counts, even one the strict parser rejects.
+    expect(censorConflictWarning('a {{ censored: hand-written b', 'a plaintext b')).toBe(true);
+    expect(censorConflictWarning('a {{CENSORED:v1:ZZZ:YYY:XXX}} b', 'a plaintext b')).toBe(true);
+    // Identical bodies mean Keep mine restores nothing.
+    expect(censorConflictWarning(`a ${TOKEN} b`, `a ${TOKEN} b`)).toBe(false);
+    expect(censorConflictWarning('plain', `a ${TOKEN} b`)).toBe(false);
+    expect(censorConflictWarning('', 'plain')).toBe(false);
+  });
+});
+
+describe('MED: the newest server snapshot wins in the cache', () => {
+  const note = (updatedAt: string, body: string): Note =>
+    ({
+      id: 'n',
+      title: 'T',
+      body,
+      snippet: body,
+      tags: [],
+      state: 'active',
+      pinned: false,
+      createdAt: '2026-11-18T09:00:00.000Z',
+      updatedAt,
+      trashedAt: null,
+      backlinks: [],
+      linkedTasks: [],
+      files: [],
+    }) satisfies Note;
+  const R2 = '2026-11-18T10:00:01.000Z';
+  const R3 = '2026-11-18T10:00:02.000Z';
+
+  it('keeps a newer cached note over an older PATCH answer', () => {
+    const cached = note(R3, 'newer');
+    expect(newestNote(cached, note(R2, 'older'))).toBe(cached);
+    expect(newestNote(undefined, note(R2, 'first'))).toEqual(note(R2, 'first'));
+    // An answer at the same revision (or newer) is accepted.
+    const saved = note(R3, 'saved');
+    expect(newestNote(cached, saved)).toBe(saved);
   });
 });
 

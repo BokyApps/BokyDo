@@ -5,6 +5,7 @@ import {
   type LockReason,
 } from './censor-lock.js';
 import { CensorError, censor, censorKeys, uncensor } from './censor.js';
+import { censorTokensIn } from './notes.js';
 
 export { censorLockGeneration, lockCensored, onCensorLock };
 export type { LockReason };
@@ -142,6 +143,115 @@ export async function censorWithBodyPause(
     else autosave.flushNextUpdate();
   }
   return token;
+}
+
+// ---------------------------------------------------------------------------------------------
+// "Did my last censor save?" marker (MED 2c). A censor produces its token in the browser and the
+// save that follows can lose a race with a closed tab. The marker holds a SHA-256 digest of the
+// token — never the token's plaintext, never the password — so opening the note later can tell
+// whether the censored span actually reached the server.
+// ---------------------------------------------------------------------------------------------
+
+const MARKER_PREFIX = 'bokydo:note-censor-pending:';
+
+export interface PendingCensorMarker {
+  noteId: string;
+  /** SHA-256 hex of the whole token. */
+  tokenDigest: string;
+}
+
+/** SHA-256 hex of a censor token. Only the digest is ever persisted. */
+export async function censorTokenDigest(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** sessionStorage can be unavailable (privacy modes, SSR/tests); the censor must still work. */
+function markerStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+export function readPendingCensor(noteId: string): PendingCensorMarker | null {
+  const store = markerStorage();
+  if (!store) return null;
+  try {
+    const raw = store.getItem(`${MARKER_PREFIX}${noteId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingCensorMarker>;
+    if (parsed.noteId !== noteId || typeof parsed.tokenDigest !== 'string') return null;
+    return { noteId, tokenDigest: parsed.tokenDigest };
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingCensor(noteId: string): void {
+  try {
+    markerStorage()?.removeItem(`${MARKER_PREFIX}${noteId}`);
+  } catch {
+    // Storage is unavailable; nothing to clear.
+  }
+}
+
+/**
+ * Remember the token this tab just produced, synchronously with respect to the save: the page
+ * awaits this before it hands the token document to the editor, so the marker exists before the
+ * first PATCH that carries the token can race a tab close.
+ */
+export async function markPendingCensor(noteId: string, token: string): Promise<void> {
+  const store = markerStorage();
+  if (!store) return;
+  try {
+    const marker: PendingCensorMarker = { noteId, tokenDigest: await censorTokenDigest(token) };
+    store.setItem(`${MARKER_PREFIX}${noteId}`, JSON.stringify(marker));
+  } catch {
+    // Digesting or writing failed; the save is still attempted and the worst case is no marker.
+  }
+}
+
+async function bodyHasToken(body: string, digest: string): Promise<boolean> {
+  try {
+    for (const token of censorTokensIn(body)) {
+      if ((await censorTokenDigest(token)) === digest) return true;
+    }
+  } catch {
+    // WebCrypto unavailable: assume the token is missing, so the user is asked to check.
+  }
+  return false;
+}
+
+/**
+ * A PATCH was acknowledged: clear the marker only when the saved body carries the exact token.
+ * An older save answering after the censor revision was queued must not clear it.
+ */
+export async function acknowledgePendingCensor(noteId: string, body: string): Promise<boolean> {
+  const marker = readPendingCensor(noteId);
+  if (!marker) return false;
+  if (!(await bodyHasToken(body, marker.tokenDigest))) return false;
+  clearPendingCensor(noteId);
+  return true;
+}
+
+export type PendingCensorState = 'none' | 'saved' | 'missing';
+
+/**
+ * When a note is opened: is the token this tab censored present in the server's body? The marker
+ * is cleared either way — `saved` means the acknowledgement was simply lost, `missing` means the
+ * censor may never have reached the server.
+ */
+export async function checkPendingCensor(
+  noteId: string,
+  body: string,
+): Promise<PendingCensorState> {
+  const marker = readPendingCensor(noteId);
+  if (!marker) return 'none';
+  const saved = await bodyHasToken(body, marker.tokenDigest);
+  clearPendingCensor(noteId);
+  return saved ? 'saved' : 'missing';
 }
 
 export class CensorFlow {
