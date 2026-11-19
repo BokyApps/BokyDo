@@ -7,6 +7,7 @@ import { requireUser } from '../http/access.js';
 import {
   ExportBusyError,
   ExportNotFoundError,
+  ExportOverloadedError,
   exportFilename,
   runNoteExport,
   type NoteExportFormat,
@@ -34,6 +35,9 @@ export interface NoteExportRouteDeps {
   /** `<dataDir>/note-files`: note files live apart from comment attachments. */
   store: AttachmentStore;
   limits?: Partial<ExportLimits>;
+  /** Memory-limit and RSS readers; injectable so the admission check is testable. */
+  memoryLimitBytes?: () => number | Promise<number>;
+  rssBytes?: () => number;
   /** Test-only worker hooks; the production app never sets this. */
   internal?: NoteExportInternal;
 }
@@ -73,6 +77,8 @@ export function registerNoteExportRoutes(app: FastifyInstance, deps: NoteExportR
           db: deps.db,
           store: deps.store,
           ...(deps.limits ? { limits: deps.limits } : {}),
+          ...(deps.memoryLimitBytes ? { memoryLimitBytes: deps.memoryLimitBytes } : {}),
+          ...(deps.rssBytes ? { rssBytes: deps.rssBytes } : {}),
           ...(deps.internal ? { internal: deps.internal } : {}),
         },
         { noteId: params.data.id, userId, format, signal: abort.signal },
@@ -85,6 +91,10 @@ export function registerNoteExportRoutes(app: FastifyInstance, deps: NoteExportR
       }
       if (err instanceof ExportNotFoundError) return reply.status(404).send({ error: 'not_found' });
       if (err instanceof ExportBusyError) return reply.status(429).send({ error: 'export_busy' });
+      // Not "another export is running" but "there is no memory headroom for one": the same
+      // client-visible word, a different status, and a Retry-After so a client backs off.
+      if (err instanceof ExportOverloadedError)
+        return reply.status(503).header('retry-after', '30').send({ error: 'export_busy' });
       if (err instanceof ExportTimeoutError)
         return reply.status(503).send({ error: 'export_timeout' });
       if (err instanceof TooLargeError) return reply.status(413).send({ error: 'too_large' });

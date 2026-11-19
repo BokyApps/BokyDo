@@ -47,13 +47,23 @@ export const MAX_BODY_PIPES = 50_000;
  * letting markdown-it allocate tokens for every empty cell, and a body with a huge number of
  * one-line blocks is refused before the parser sees it. The worker's heap limit is the backstop
  * for anything this cannot predict.
+ *
+ * Line breaks are normalised: `\r\n` is one break, and a lone `\r` is a break too, because
+ * CommonMark treats all three forms as line endings. Counting only `\n` would let a body of
+ * 100,000 `\r`-separated lines reach the parser while the cheap guard saw one line.
  */
 export function checkBodyShape(body: string): void {
   let lines = body === '' ? 0 : 1;
   let pipes = 0;
   for (let index = 0; index < body.length; index++) {
     const code = body.charCodeAt(index);
-    if (code === 0x0a) {
+    if (code === 0x0d) {
+      // CRLF is one line break; swallowing the LF here also means it cannot count twice.
+      if (body.charCodeAt(index + 1) === 0x0a) index++;
+      lines++;
+      if (lines > MAX_BODY_LINES)
+        throw new TooLargeError(`note body has more than ${MAX_BODY_LINES} lines`);
+    } else if (code === 0x0a) {
       lines++;
       if (lines > MAX_BODY_LINES)
         throw new TooLargeError(`note body has more than ${MAX_BODY_LINES} lines`);
@@ -180,26 +190,39 @@ export class ExportDeadline {
 }
 
 /**
- * At most one export per user and three in the whole process: an export is CPU-heavy, and a
- * handful of concurrent PDFs would starve the rest of the API. A fourth caller gets
- * `429 export_busy` instead of queueing behind an unbounded backlog.
+ * The global concurrency gate. An export is CPU- and memory-heavy, so the pools are counted
+ * separately: DOCX/PDF (which build a document in a worker and stream it) run one at a time,
+ * while at most two Markdown exports (a render plus an I/O-bound zip) may run alongside them.
+ * Every kind still counts against the caller's own limit, so one user never has more than one
+ * export in flight whatever the mix. A caller over a limit gets `429 export_busy` instead of
+ * queueing behind an unbounded backlog.
  */
+export type ExportKind = 'file' | 'markdown';
+
 export class ExportSemaphore {
   private readonly perUser = new Map<string, number>();
-  private active = 0;
+  private activeFiles = 0;
+  private activeMarkdown = 0;
 
   constructor(
     private readonly perUserLimit = 1,
-    private readonly globalLimit = 3,
+    private readonly fileLimit = 1,
+    private readonly markdownLimit = 2,
   ) {}
 
   /** The release function, or `null` when this caller has to wait (and is refused). */
-  tryAcquire(userId: string): (() => void) | null {
-    if (this.active >= this.globalLimit) return null;
+  tryAcquire(userId: string, kind: ExportKind = 'file'): (() => void) | null {
     const current = this.perUser.get(userId) ?? 0;
     if (current >= this.perUserLimit) return null;
+    if (
+      kind === 'file'
+        ? this.activeFiles >= this.fileLimit
+        : this.activeMarkdown >= this.markdownLimit
+    )
+      return null;
     this.perUser.set(userId, current + 1);
-    this.active++;
+    if (kind === 'file') this.activeFiles++;
+    else this.activeMarkdown++;
     let released = false;
     return () => {
       if (released) return;
@@ -207,13 +230,14 @@ export class ExportSemaphore {
       const left = (this.perUser.get(userId) ?? 1) - 1;
       if (left <= 0) this.perUser.delete(userId);
       else this.perUser.set(userId, left);
-      this.active--;
+      if (kind === 'file') this.activeFiles--;
+      else this.activeMarkdown--;
     };
   }
 
   /** Exports in flight: for tests and diagnostics. */
   get running(): number {
-    return this.active;
+    return this.activeFiles + this.activeMarkdown;
   }
 }
 

@@ -1,6 +1,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { parseNoteBody, documentFileIds, type NoteDocument } from './ast.js';
 import { buildDocx } from './docx.js';
+import { prepareImage } from './image-info.js';
 import type { LoadedImage } from './images.js';
 import {
   ExportDeadline,
@@ -49,9 +50,6 @@ export interface WorkerLimits {
 export interface WorkerImage {
   id: string;
   filename: string;
-  type: 'png' | 'jpeg';
-  width: number;
-  height: number;
   /** Transferred, not cloned: the buffer belongs to the worker after the post. */
   bytes: ArrayBuffer;
 }
@@ -117,15 +115,20 @@ function transferable(bytes: Buffer): ArrayBuffer {
 }
 
 function imagesFrom(message: WorkerRenderMessage): Map<string, LoadedImage> {
+  const format = message.format === 'pdf' ? 'pdf' : 'docx';
   const images = new Map<string, LoadedImage>();
   for (const image of message.images ?? []) {
+    // Full structural validation lives here, in the isolate: the PNG chunk/CRC walk and the
+    // JPEG marker walk (once, with the EOI offset) both run under the worker's heap and deadline.
+    const prepared = prepareImage(Buffer.from(image.bytes), format);
+    if (!prepared) continue;
     images.set(image.id, {
       id: image.id,
       filename: image.filename,
-      type: image.type,
-      width: image.width,
-      height: image.height,
-      bytes: Buffer.from(image.bytes),
+      type: prepared.type,
+      width: prepared.width,
+      height: prepared.height,
+      bytes: prepared.bytes,
     });
   }
   return images;
@@ -156,7 +159,7 @@ async function testRender(mode: TestRenderer): Promise<void> {
     case 'throw':
       throw new Error('injected worker render failure');
     case 'oom': {
-      // Unbounded until the isolate's 256 MB resourceLimit kills it.
+      // Unbounded until the isolate's 192 MB resourceLimit kills it.
       const hog: number[][] = [];
       for (;;) hog.push(new Array(1_000_000).fill(1));
     }
@@ -233,13 +236,14 @@ async function render(message: WorkerRenderMessage): Promise<void> {
     return;
   }
   const images = imagesFrom(message);
+  const maxOutputBytes = limits.maxOutputBytes;
   const source =
     message.format === 'docx'
       ? buildDocx(
           message.title,
           document.blocks,
           { images, fileNames },
-          deadline ? { deadline } : {},
+          { ...(deadline ? { deadline } : {}), maxOutputBytes },
         )
       : buildPdf(
           message.title,
@@ -248,9 +252,10 @@ async function render(message: WorkerRenderMessage): Promise<void> {
           {
             ...(deadline ? { deadline } : {}),
             maxLinkAnnotations: limits.maxLinkAnnotations,
+            maxOutputBytes,
           },
         );
-  await renderChunks(source, limits.maxOutputBytes);
+  await renderChunks(source, maxOutputBytes);
 }
 
 async function handle(message: WorkerRequest): Promise<void> {

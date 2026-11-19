@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ZipWriter, safeEntryName } from './zip-writer.js';
 import { collect, readZipEntries } from '../note-export/test-support.js';
@@ -40,6 +43,17 @@ describe('archive entry names', () => {
     expect(safeEntryName('files/LPT³.log')).toBe('files/_LPT³.log');
     expect(safeEntryName('files/COM¹⁰.txt')).toBe('files/COM¹⁰.txt');
     expect(safeEntryName('files/LPT¹0.txt')).toBe('files/LPT¹0.txt');
+  });
+
+  it('folds compatibility forms and trailing spaces before the device check', () => {
+    // NFKC folds full-width letters and superscript digits: these are the same devices.
+    expect(safeEntryName('files/ＣＯＮ.txt')).toBe('files/_ＣＯＮ.txt');
+    expect(safeEntryName('files/COM².txt')).toBe('files/_COM².txt');
+    expect(safeEntryName('files/con .txt')).toBe('files/_con .txt');
+    expect(safeEntryName('files/con. .txt')).toBe('files/_con. .txt');
+    // …but a longer number is not a device, in any form.
+    expect(safeEntryName('files/COM10.txt')).toBe('files/COM10.txt');
+    expect(safeEntryName('files/COM¹¹.txt')).toBe('files/COM¹¹.txt');
   });
 
   it('bounds every component to 200 UTF-8 bytes without splitting a character', () => {
@@ -96,6 +110,76 @@ describe('ZipWriter', () => {
       expect(unhandled).toEqual([]);
     } finally {
       process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('does not accumulate close listeners on the shared output over 100 entries', async () => {
+    const warnings: Error[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning);
+    process.on('warning', onWarning);
+    try {
+      const zip = new ZipWriter();
+      const written = collect(zip.stream);
+      // Two permanent listeners: the entry teardown and the signal cleanup. The point is that
+      // neither grows by one per entry.
+      const closeListeners = zip.stream.listenerCount('close');
+      expect(closeListeners).toBeGreaterThan(0);
+      for (let index = 0; index < 100; index++) {
+        await zip.add(`entry-${index}.txt`, `value ${index}`);
+        expect(zip.stream.listenerCount('close'), `after entry ${index}`).toBe(closeListeners);
+      }
+      await zip.finish();
+      const entries = readZipEntries(await written);
+      expect(entries.size).toBe(100);
+      // The stream's own close cleanup removes one listener when it finishes; nothing added.
+      expect(zip.stream.listenerCount('close')).toBeLessThanOrEqual(closeListeners);
+    } finally {
+      process.off('warning', onWarning);
+    }
+    expect(warnings.filter((warning) => warning.name === 'MaxListenersExceededWarning')).toEqual(
+      [],
+    );
+  });
+
+  it('stops reading a file between chunks when the signal is aborted', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'bokydo-zip-'));
+    const file = path.join(dir, 'big.bin');
+    try {
+      await writeFile(file, randomBytes(4 * 1024 * 1024));
+      const abort = new AbortController();
+      const zip = new ZipWriter({ signal: abort.signal });
+      zip.stream.on('error', () => undefined);
+      zip.stream.resume();
+      let reads = 0;
+      const done = zip.addFile('big.bin', file, {
+        onRead: () => {
+          reads++;
+          if (reads === 1) abort.abort(new Error('client went away'));
+        },
+      });
+      await expect(done).rejects.toThrow('client went away');
+      // The first 64 KiB chunk was read; the abort stopped the rest of the 4 MiB file.
+      expect(reads).toBe(1);
+      zip.abort(new Error('client went away'));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('destroys a producer stalled on a reader that never reads when its deadline fires', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'bokydo-zip-'));
+    const file = path.join(dir, 'big.bin');
+    try {
+      await writeFile(file, randomBytes(4 * 1024 * 1024));
+      const abort = new AbortController();
+      const zip = new ZipWriter({ signal: abort.signal });
+      zip.stream.on('error', () => undefined);
+      // No consumer: the shared stream buffers its 16 KiB and the producer waits on backpressure.
+      const done = zip.addFile('big.bin', file);
+      setTimeout(() => abort.abort(new Error('deadline')), 25);
+      await expect(done).rejects.toThrow(/deadline|zip stream closed/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
