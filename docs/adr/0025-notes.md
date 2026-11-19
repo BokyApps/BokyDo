@@ -152,12 +152,17 @@ same output.
   inflating it. A JPEG is embedded through its first `EOI`, so a Motion Photo's appended video is
   dropped. Any other image is shown as its name.
 - Rendering runs in a `worker_threads` worker for each export, never on the main thread. That
-  covers parsing, the AST and DOCX/PDF generation. Review showed that capping work item by item
-  on the main thread does not converge for attacker-controlled Markdown. The worker has a
-  256 MB old-generation heap, a 30-second deadline from slot acquisition, and is terminated on
-  disconnect. A worker crash or out-of-memory fails that one request (413 or 500). Limits: one
-  export per user and three at once, 50 MB of images, 100 MB of output. Bodies over 20,000
-  lines or 50,000 `|` are refused before parsing.
+  covers parsing, the AST, image validation and DOCX/PDF generation. Review showed that capping
+  work item by item on the main thread does not converge for attacker-controlled Markdown. The
+  worker has a 192 MB old-generation heap and a 30-second deadline from slot acquisition, and is
+  terminated on disconnect. A worker crash or out-of-memory fails that one request (413 or 500).
+- Limits: one DOCX/PDF export at a time per instance, up to two Markdown exports, one export per
+  user, 25 MB of images and 100 MB of output (counted while it is generated). A new export is
+  refused (503, `Retry-After`) when the process plus a planned 400 MiB peak would pass 85% of
+  the container's memory limit. Measured peaks for the heaviest allowed export are about
+  325 MiB (DOCX) and 305 MiB (PDF). Bodies over 20,000 lines or 50,000 `|` are refused before
+  parsing. Worker heap limits do not bound native memory exactly, so a residual risk remains,
+  documented in `docs/note-export.md`.
 
 ### Concurrent edits
 
