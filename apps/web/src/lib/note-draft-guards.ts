@@ -19,6 +19,12 @@ export interface DraftSaver {
   pendingPatch(): NotePatch | null;
   /** The server revision the draft is based on; the keepalive PATCH must carry it. */
   baseRevision(): string;
+  /**
+   * The pagehide request: the patch plus its premise, or `null` when everything is acknowledged.
+   * The premise is `null` for the single censor-safety exception (an unacknowledged censor
+   * revision while this tab's own older PATCH is still in flight).
+   */
+  keepaliveRequest(): { patch: NotePatch; expectedUpdatedAt: string | null } | null;
   flush(): Promise<boolean>;
   stop(): void;
 }
@@ -40,12 +46,13 @@ export function installDraftGuards(
     (event as BeforeUnloadEvent).returnValue = '';
   };
   const onPageHide = () => {
-    const patch = saver.pendingPatch();
-    if (patch === null) return;
+    const request = saver.keepaliveRequest();
+    if (request === null) return;
     // Also covers "still saving": the draft is newer than the last acknowledged snapshot, so
     // re-sending it is correct and idempotent. The revision premise makes it a no-op (409) if
-    // another tab saved first, instead of overwriting that save.
-    keepalivePatch(pathFor(noteId), patch, saver.baseRevision());
+    // another tab saved first, instead of overwriting that save. The one exception is a censor
+    // token revision held up by this tab's own in-flight PATCH; the controller decides that.
+    keepalivePatch(pathFor(noteId), request.patch, request.expectedUpdatedAt);
   };
   target.addEventListener('beforeunload', onBeforeUnload);
   target.addEventListener('pagehide', onPageHide);

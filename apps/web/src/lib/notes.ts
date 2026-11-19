@@ -194,6 +194,15 @@ export function toNoteDraft(note: Pick<Note, 'title' | 'body' | 'tags' | 'pinned
   return { title: note.title, body: note.body, tags: [...note.tags], pinned: note.pinned };
 }
 
+/**
+ * The newest of two server snapshots. Every write advances `updated_at` by at least 1 ms, and
+ * `updatedAt` is a canonical ISO-8601 instant, so a string comparison is the revision order. A
+ * PATCH answer that resolves after a live refetch must not put the older note back in the cache.
+ */
+export function newestNote(current: Note | undefined, next: Note): Note {
+  return current && current.updatedAt > next.updatedAt ? current : next;
+}
+
 function tagsEqual(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
 }
@@ -237,14 +246,20 @@ export function censorTokensIn(body: string): string[] {
 }
 
 /**
- * Whether replacing `localBody` with `remoteBody` would bring back censored text: the remote body
- * carries a censor token this draft does not. That means the text was censored elsewhere after
- * this tab loaded, so "Keep mine" needs an explicit confirmation. Token text must match exactly;
- * a different token is a different span.
+ * A lenient detector for "the saved version looks like it holds censored text". A planted note can
+ * contain malformed or hand-written tokens that the strict parser refuses to treat as atoms, and
+ * a warning is cheap while bringing back plaintext is not.
  */
-export function restoresCensoredText(remoteBody: string, localBody: string): boolean {
-  const local = new Set(censorTokensIn(localBody));
-  return censorTokensIn(remoteBody).some((token) => !local.has(token));
+const CENSOR_LIKE_PATTERN = /\{\{\s*censored/i;
+
+/**
+ * Whether "Keep mine" needs the censor confirmation: the saved body differs from the draft and
+ * carries anything censor-like (`{{censored`, any case, optional whitespace). This is deliberately
+ * more cautious than comparing real tokens: a version written by another tab may censor text in a
+ * form this tab does not model yet, and keeping the older draft would put that plaintext back.
+ */
+export function censorConflictWarning(remoteBody: string, draftBody: string): boolean {
+  return remoteBody !== draftBody && CENSOR_LIKE_PATTERN.test(remoteBody);
 }
 
 /** Loading/error/ready for the note view: a background refetch error must not unmount the draft. */

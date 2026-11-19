@@ -5,6 +5,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { closeHistory } from '@tiptap/pm/history';
 import { DOMSerializer, type Fragment, type Slice } from '@tiptap/pm/model';
+import { EditorState } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -45,6 +46,13 @@ export interface NoteEditorProps {
   markdown: string;
   onChange: (markdown: string) => void;
   editable?: boolean;
+  /**
+   * Bumped when the page adopts a whole new document from the server (Load their version,
+   * Copy mine, a live-sync adoption). The next external Markdown application then rebuilds the
+   * editor state with a fresh history — the same mechanism a local censor commit uses — so Undo
+   * can never step back to a body the server replaced, including plaintext another tab censored.
+   */
+  historyResetKey?: number;
   /** Upload a pasted/dropped/picked file; resolves to its note-file id. */
   onUploadFile?: (file: File) => Promise<{ id: string; filename: string; contentType: string }>;
   /** Navigate to an internal target (bokydo:note/<id> or bokydo:task/<id>). */
@@ -120,6 +128,24 @@ const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph', con
  */
 export function closeHistoryBeforeSourceApply(editor: Editor): void {
   editor.view.dispatch(closeHistory(editor.state.tr));
+}
+
+/**
+ * Replace the undo history with an empty one, keeping the current document, selection and
+ * plugins. Adopting a remote body must use this: the document before the adoption can hold
+ * plaintext that another tab has since censored, and an undoable document replacement would let
+ * Undo put it back (and emit it through onChange, which the autosave would PATCH).
+ */
+export function resetEditorHistory(editor: Editor): void {
+  if (editor.isDestroyed) return;
+  const state = editor.state;
+  editor.view.updateState(
+    EditorState.create({
+      doc: state.doc,
+      plugins: state.plugins,
+      selection: state.selection,
+    }),
+  );
 }
 
 /**
@@ -278,7 +304,7 @@ async function insertFiles(files: File[], editor: Editor, callbacks: NoteCallbac
  * and markdown-it land in their own lazy chunk and never bloat the entry bundle.
  */
 export function NoteEditor(props: NoteEditorProps) {
-  const { markdown, editable = true, revealState, onCloseReveal } = props;
+  const { markdown, editable = true, historyResetKey = 0, revealState, onCloseReveal } = props;
   const { t } = useTranslation();
   const [markdownMode, setMarkdownMode] = useState(false);
 
@@ -302,6 +328,10 @@ export function NoteEditor(props: NoteEditorProps) {
   const applyingExternal = useRef(false);
   // A textarea edit is a distinct history entry: applying it must not merge into earlier steps.
   const sourceEdit = useRef(false);
+  // The page's adoption counter as last seen. A change asks for an external application with a
+  // fresh history; it stays pending across the Markdown source view (applied on leaving it).
+  const appliedHistoryKey = useRef(historyResetKey);
+  const historyResetPending = useRef(false);
   // A state object (not a ref) because editorProps is built during render with its controller.
   const [drag] = useState<DragCopyController>(createDragCopyController);
 
@@ -406,7 +436,19 @@ export function NoteEditor(props: NoteEditorProps) {
   // edit as a single undo boundary.
   useEffect(() => {
     if (!editor) return;
-    if (markdown === lastEmitted.current) return;
+    if (historyResetKey !== appliedHistoryKey.current) {
+      appliedHistoryKey.current = historyResetKey;
+      historyResetPending.current = true;
+    }
+    if (markdown === lastEmitted.current) {
+      // The document already matches (an adoption that changed no visible text, e.g. only the
+      // revision). A requested reset still has to drop the Undo steps that preceded it.
+      if (historyResetPending.current) {
+        historyResetPending.current = false;
+        resetEditorHistory(editor);
+      }
+      return;
+    }
     if (markdownMode) return;
     const parsed = parseForEditor(markdown);
     const invalid = !parsed.valid;
@@ -417,7 +459,13 @@ export function NoteEditor(props: NoteEditorProps) {
       safeModeRef.current = invalid;
     }
     if (invalid) return;
-    if (docToMarkdown(editor.getJSON()) === markdown) return;
+    if (docToMarkdown(editor.getJSON()) === markdown) {
+      if (historyResetPending.current) {
+        historyResetPending.current = false;
+        resetEditorHistory(editor);
+      }
+      return;
+    }
     applyingExternal.current = true;
     try {
       // Review fix (undo): an edit made in the Markdown source view is a whole-document change.
@@ -427,12 +475,17 @@ export function NoteEditor(props: NoteEditorProps) {
         sourceEdit.current = false;
         closeHistoryBeforeSourceApply(editor);
       }
+      const resetHistory = historyResetPending.current;
+      historyResetPending.current = false;
       editor.commands.setContent(parsed.doc, { emitUpdate: false });
+      // A remote adoption is not undoable: history is wiped AFTER the replacement, so there is
+      // no step left that could restore the pre-adoption body (plaintext another tab censored).
+      if (resetHistory) resetEditorHistory(editor);
     } finally {
       applyingExternal.current = false;
     }
     lastEmitted.current = markdown;
-  }, [markdown, editor, markdownMode, safeMode]);
+  }, [markdown, editor, historyResetKey, markdownMode, safeMode]);
 
   useEffect(() => {
     if (editor) editor.setEditable(editable && !safeMode, false);
