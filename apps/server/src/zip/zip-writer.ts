@@ -1,5 +1,5 @@
 import { open, type FileHandle } from 'node:fs/promises';
-import { PassThrough, Readable, Transform } from 'node:stream';
+import { PassThrough, Readable, Transform, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createDeflateRaw, crc32 } from 'node:zlib';
 
@@ -42,19 +42,12 @@ export class ZipWriter {
   private readonly central: Buffer[] = [];
   private count = 0;
   private finished = false;
-  /** Entry destinations currently piped into the shared output, so a close reaches all of them. */
-  private readonly entries = new Set<PassThrough>();
   private readonly onAbort: () => void;
 
   constructor(private readonly options: ZipWriterOptions = {}) {
     // A producer may fail before the response is attached (a hostile note is parsed first). An
     // unobserved `'error'` event would otherwise be uncaught; the route's own listener still runs.
     this.stream.on('error', () => undefined);
-    // One permanent close/error handler for every entry, instead of one per entry pipeline that
-    // could outlive it. Nothing is added to the shared output per entry, so its listener count
-    // is the same after 1 entry and after 10,000.
-    this.stream.on('close', () => this.destroyEntries(new Error('zip stream closed')));
-    this.stream.on('error', (err: Error) => this.destroyEntries(err));
     this.stream.once('close', () =>
       this.options.signal?.removeEventListener('abort', this.onAbort),
     );
@@ -99,39 +92,30 @@ export class ZipWriter {
         callback(null, chunk);
       },
     });
-    /** Counts compressed bytes; the deflate stream's own output is not buffered here. */
-    const count = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        compressed += chunk.length;
-        callback(null, chunk);
-      },
-    });
     const input: Readable =
       typeof data === 'string' || Buffer.isBuffer(data)
         ? Readable.from([typeof data === 'string' ? Buffer.from(data) : data])
         : data;
     const deflate = createDeflateRaw({ level: 6 });
-    // A per-entry destination wrapper: the pipeline owns it and tears it down in `finally`, and
-    // it is piped into the shared output with `end: false`. The shared output never gets a
-    // listener from the entry itself (it already has one permanent close/error handler), so a
-    // long archive cannot accumulate them and trip MaxListenersExceededWarning.
-    const entryOut = new PassThrough();
-    this.entries.add(entryOut);
-    entryOut.pipe(this.stream, { end: false });
+    // The entry's sink writes each compressed chunk straight to the shared output and calls back
+    // only once that write is accepted (after 'drain' when the reader is slow). So the pipeline
+    // resolves only when every byte of the entry has reached the output, before the descriptor
+    // records its length; nothing is left buffered in between to be discarded. `this.write`
+    // waits with self-cleaning listeners, so the shared output gains none per entry, and a
+    // closed output rejects the pending write, which rejects the pipeline once.
+    const sink = new Writable({
+      write: (chunk: Buffer, _encoding, callback) => {
+        compressed += chunk.length;
+        this.write(chunk).then(() => callback(), callback);
+      },
+    });
     try {
-      // One pipeline, one promise per entry. `pipeline` observes every error — a reader that goes
-      // away (backpressure, then `destroy`) rejects this promise once — so there is no second,
-      // unobserved rejection. Both ends are destroyed explicitly in `finally`.
-      await pipeline(input, digest, deflate, count, entryOut);
+      await pipeline(input, digest, deflate, sink);
     } finally {
-      this.entries.delete(entryOut);
-      entryOut.unpipe(this.stream);
-      if (!entryOut.destroyed) entryOut.destroy();
       if (!input.destroyed) input.destroy();
       if (!deflate.destroyed) deflate.destroy();
     }
     this.checkOpen();
-    this.offset += compressed;
     if (size > 0xfffffffe || this.offset > 0xfffffffe) throw new ZipLimitError('archive too large');
 
     const descriptor = Buffer.alloc(16);
@@ -211,10 +195,6 @@ export class ZipWriter {
   private checkOpen(): void {
     if (this.options.signal?.aborted) throw abortReason(this.options.signal);
     this.options.deadline?.check();
-  }
-
-  private destroyEntries(err: Error): void {
-    for (const entry of this.entries) if (!entry.destroyed) entry.destroy(err);
   }
 
   /** One file's bytes, 64 KiB at a time, checking the signal and deadline before each read. */
