@@ -77,6 +77,42 @@ describe('ZipWriter', () => {
     expect(entries.get('b/c.txt')?.toString()).toBe('world');
   });
 
+  it('writes every byte of each entry behind a slow reader', async () => {
+    // Regression: entry bytes left buffered between the compressor and the output were dropped
+    // while the descriptor recorded the full length, so the archive failed to inflate.
+    const zip = new ZipWriter();
+    // A reader that takes one chunk at a time and pauses 20 ms between them, so entries finish
+    // compressing while their output is still waiting to be read.
+    const slow = new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      zip.stream.on('error', reject);
+      zip.stream.on('end', () => resolve(Buffer.concat(chunks)));
+      const pull = () => {
+        const chunk = zip.stream.read() as Buffer | null;
+        if (chunk) chunks.push(chunk);
+        if (!zip.stream.readableEnded) setTimeout(pull, 20);
+      };
+      setTimeout(pull, 20);
+    });
+    const big = randomBytes(300_000); // incompressible, so many compressed chunks
+    const dir = await mkdtemp(path.join(tmpdir(), 'bokydo-zip-'));
+    try {
+      const file = path.join(dir, 'file.bin');
+      const onDisk = randomBytes(200_000);
+      await writeFile(file, onDisk);
+      await zip.add('big.bin', big);
+      expect(await zip.addFile('file.bin', file)).toBe(true);
+      await zip.add('small.txt', 'after');
+      await zip.finish();
+      const entries = readZipEntries(await slow);
+      expect(entries.get('big.bin')?.equals(big)).toBe(true);
+      expect(entries.get('file.bin')?.equals(onDisk)).toBe(true);
+      expect(entries.get('small.txt')?.toString()).toBe('after');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects an add whose reader is destroyed, instead of hanging on drain', async () => {
     const zip = new ZipWriter();
     zip.stream.on('error', () => undefined);
