@@ -214,8 +214,8 @@ describe('P3: capture the lock generation before the first await', () => {
   });
 });
 
-describe('P1: the body autosave is paused before the censor prompt opens', () => {
-  it('pauses synchronously, flushes the token revision and resumes', async () => {
+describe('P1/H2: the body autosave is paused before the censor prompt opens', () => {
+  it('pauses synchronously, marks the token revision urgent and keeps the body held', async () => {
     const events: string[] = [];
     const autosave = {
       pauseBody: vi.fn(() => events.push('pause')),
@@ -229,8 +229,10 @@ describe('P1: the body autosave is paused before the censor prompt opens', () =>
       }),
     };
     expect(await censorWithBodyPause(autosave, flow, 'secret')).toBe('TOKEN');
-    // pause happens before the prompt, and the token revision is marked urgent before resume.
-    expect(events).toEqual(['pause', 'prompt', 'flush-next', 'resume']);
+    // Pause happens before the prompt; on success the pause is deliberately NOT released here:
+    // the editor still has to hand the verified token draft to autosave (H2).
+    expect(events).toEqual(['pause', 'prompt', 'flush-next']);
+    expect(autosave.resumeBody).not.toHaveBeenCalled();
   });
 
   it('resumes without a flush when the prompt is cancelled', async () => {
@@ -251,6 +253,46 @@ describe('P1: the body autosave is paused before the censor prompt opens', () =>
     await expect(censorWithBodyPause(autosave, flow, 'secret')).rejects.toThrow('boom');
     expect(autosave.resumeBody).toHaveBeenCalledOnce();
     expect(autosave.flushNextUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('M2: a lock during a bad-password decrypt never reopens the prompt', () => {
+  it('hides the tab while decrypting: settles as cancelled, one prompt only', async () => {
+    mockUncensor.mockImplementationOnce(async () => {
+      lockCensored('hidden');
+      throw new CensorError('bad_password');
+    });
+    const askPassword = vi.fn(async () => 'pw');
+    const flow = new CensorFlow(prompts({ askPassword }), { warned: false });
+    expect(await flow.onReveal('TOKEN')).toBeNull();
+    expect(askPassword).toHaveBeenCalledTimes(1);
+    expect(mockUncensor).toHaveBeenCalledTimes(1);
+  });
+
+  it('a lock during a rejected encryption never reopens the password dialog', async () => {
+    mockCensor.mockImplementationOnce(async () => {
+      lockCensored('pagehide');
+      throw new CensorError('empty_text');
+    });
+    const askPassword = vi.fn(async () => 'pw');
+    const flow = new CensorFlow(prompts({ askPassword }), { warned: false });
+    expect(await flow.onCensor('secret')).toBeNull();
+    expect(askPassword).toHaveBeenCalledTimes(1);
+  });
+
+  it('a lock before a retry prompt stops the loop (no second decrypt)', async () => {
+    mockUncensor.mockRejectedValueOnce(new CensorError('bad_password')).mockResolvedValue('plain');
+    const askPassword = vi
+      .fn()
+      .mockResolvedValueOnce('pw')
+      .mockImplementationOnce(async () => {
+        lockCensored('hidden');
+        return 'pw';
+      });
+    const flow = new CensorFlow(prompts({ askPassword }), { warned: false });
+    expect(await flow.onReveal('TOKEN')).toBeNull();
+    expect(askPassword).toHaveBeenCalledTimes(2);
+    expect(mockUncensor).toHaveBeenCalledTimes(1);
   });
 });
 

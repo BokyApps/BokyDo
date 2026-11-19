@@ -110,7 +110,13 @@ const noteResource = noteSummaryResource.extend({
   trashedAt: z.iso.datetime().nullable(),
   backlinks: z.array(z.object({ id: idSchema, title: z.string() })),
   linkedTasks: z.array(
-    z.object({ id: idSchema, content: z.string(), projectId: idSchema, completed: z.boolean() }),
+    z.object({
+      id: idSchema,
+      content: z.string(),
+      projectId: idSchema,
+      completed: z.boolean(),
+      sources: z.array(z.enum(['body', 'manual'])),
+    }),
   ),
   files: z.array(
     z.object({
@@ -133,7 +139,9 @@ const noteReceipt = z.object({
 const noteTags = z.object({
   tags: z.array(z.object({ tag: z.string(), count: z.number().int() })),
 });
-const taskNotes = z.object({ notes: z.array(noteSummaryResource) });
+const taskNotes = z.object({
+  notes: z.array(noteSummaryResource.extend({ sources: z.array(z.enum(['body', 'manual'])) })),
+});
 const noteFile = z.object({
   id: idSchema,
   filename: z.string(),

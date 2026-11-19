@@ -121,6 +121,44 @@ describe('autosave debounce / diff / flush', () => {
   });
 });
 
+describe('H4: preparePatch runs before every save, including keepalive', () => {
+  it('rewrites the body on the debounce and in pendingPatch', async () => {
+    const preparePatch = vi.fn((patch: { body?: string }) =>
+      patch.body === undefined ? patch : { ...patch, body: `${patch.body} verified` },
+    );
+    const save = vi.fn(async () => NEXT);
+    const controller = new NoteAutosave(
+      { save, onStatus: vi.fn(), preparePatch, delayMs: 800 },
+      draft(),
+      REV,
+    );
+    controller.update(draft({ body: 'B2' }));
+    await vi.advanceTimersByTimeAsync(800);
+    expect(save).toHaveBeenCalledWith({ body: 'B2 verified' }, REV);
+    controller.update(draft({ body: 'B3' }));
+    expect(controller.pendingPatch()).toEqual({ body: 'B3 verified' });
+  });
+
+  it('keeps the original patch when the verifier throws', async () => {
+    const save = vi.fn(async () => NEXT);
+    const controller = new NoteAutosave(
+      {
+        save,
+        onStatus: vi.fn(),
+        preparePatch: () => {
+          throw new Error('boom');
+        },
+        delayMs: 800,
+      },
+      draft(),
+      REV,
+    );
+    controller.update(draft({ body: 'B2' }));
+    await vi.advanceTimersByTimeAsync(800);
+    expect(save).toHaveBeenCalledWith({ body: 'B2' }, REV);
+  });
+});
+
 const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
 
 describe('P1: the censor prompt pauses the body autosave', () => {
@@ -133,12 +171,31 @@ describe('P1: the censor prompt pauses the body autosave', () => {
     expect(save).not.toHaveBeenCalled();
 
     controller.flushNextUpdate(); // censor succeeded: the next revision is urgent
-    controller.resumeBody();
-    controller.update(draft({ body: TOKEN })); // the editor applied the token
+    // The pause is NOT released here (H2): the token document has not reached autosave yet.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(save).not.toHaveBeenCalled();
+    expect(controller.pendingPatch()).toBeNull();
+    controller.update(draft({ body: TOKEN })); // the editor applied the verified token
     await vi.advanceTimersByTimeAsync(0); // no debounce: saved on the next turn
     expect(save).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith({ body: TOKEN }, REV);
     expect(JSON.stringify(save.mock.calls)).not.toContain('TOPSECRET');
+    expect(controller.isBodyHeld()).toBe(false);
+  });
+
+  it('omits a paused body from the keepalive patch but still sends other fields (H2)', () => {
+    const { controller } = setup();
+    controller.update(draft({ title: 'New title', body: 'TOPSECRET' }));
+    controller.pauseBody();
+    expect(controller.pendingPatch()).toEqual({ title: 'New title' });
+    expect(JSON.stringify(controller.pendingPatch())).not.toContain('TOPSECRET');
+  });
+
+  it('a paused body-only change produces no keepalive patch at all (H2)', () => {
+    const { controller } = setup();
+    controller.update(draft({ body: 'TOPSECRET' }));
+    controller.pauseBody();
+    expect(controller.pendingPatch()).toBeNull();
   });
 
   it('a cancelled prompt resumes normally and saves the (unchanged) draft', async () => {

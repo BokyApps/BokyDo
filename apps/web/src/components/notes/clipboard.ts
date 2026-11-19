@@ -1,11 +1,13 @@
 import { Fragment, Slice, type Node as PMNode, type Schema } from '@tiptap/pm/model';
 import { CENSORED_PLACEHOLDER } from './markdown.js';
+import { stripPrivateAttrsFromSlice } from './source-meta.js';
 
 /**
  * Clipboard guards for censored spans (ADR 0025: "copying, the Markdown view … never [reveal]
  * cleartext"). The cleartext is never part of the document in the first place, but these two
- * functions guarantee that *both* text/plain and text/html carry only `█████`, even while a
- * reveal overlay is on screen.
+ * functions guarantee that *both* text/plain and text/html carry only `█████` (and no source-meta
+ * attribute that might still hold the pre-censor plaintext), even while a reveal overlay is on
+ * screen.
  */
 
 /** text/plain: leaf nodes with no text (censored atoms) render as the placeholder. */
@@ -20,7 +22,9 @@ export function clipboardTextSerializer(slice: Slice): string {
 
 /**
  * text/html: replace every censored atom with a plain `█████` text node *before* the DOM
- * serializer runs, so no token (let alone cleartext) is ever written to the HTML clipboard.
+ * serializer runs, so no token (let alone cleartext) is ever written to the HTML clipboard, and
+ * drop every source-meta/transient attribute (ProseMirror copies the openStart/openEnd ancestor
+ * attributes into `data-pm-slice`, and a retained `src` holds the block's pre-censor plaintext).
  */
 export function censorSlice(slice: Slice, schema: Schema): Slice {
   const mapFragment = (fragment: Fragment): Fragment => {
@@ -36,7 +40,8 @@ export function censorSlice(slice: Slice, schema: Schema): Slice {
     });
     return Fragment.fromArray(out);
   };
-  return new Slice(mapFragment(slice.content), slice.openStart, slice.openEnd);
+  const content = mapFragment(slice.content);
+  return stripPrivateAttrsFromSlice(new Slice(content, slice.openStart, slice.openEnd));
 }
 
 /** Whether a slice contains a censored atom (used to refuse Cut). */
@@ -72,29 +77,41 @@ export function refuseCutIfCensored(slice: Slice, notify: () => void): boolean {
  *
  * The controller is kept (dragstart/dragend still mark state) so the decision stays unit-testable
  * and a drag is never mistaken for an ordinary copy. `transformCopied` ignores the flag by design.
+ * Review fix (N1): the slice ProseMirror actually passed to `transformCopied` during the drag is
+ * captured here, so an internal drop restores exactly that slice (with its openStart/openEnd
+ * node-selection metadata) instead of re-reading the selection.
  */
 export interface DragCopyController {
   markDragStart(): void;
   markDragEnd(): void;
   readonly dragging: boolean;
+  /** The real (un-censored) slice ProseMirror handed to transformCopied for this drag. */
+  readonly originalSlice: Slice | null;
   transformCopied(slice: Slice, schema: Schema): Slice;
 }
 
 export function createDragCopyController(): DragCopyController {
   let dragging = false;
+  let original: Slice | null = null;
   return {
     markDragStart() {
       dragging = true;
+      original = null;
     },
     markDragEnd() {
       dragging = false;
+      original = null;
     },
     get dragging() {
       return dragging;
     },
+    get originalSlice() {
+      return original;
+    },
     transformCopied(slice: Slice, schema: Schema): Slice {
-      // Always the placeholder. `view.dragging.slice` (ProseMirror's in-memory drag slice) is not
-      // derived from this return value, so an internal drop still inserts the real token.
+      // Capture the slice ProseMirror passed BEFORE censoring it: `view.dragging.slice` is not
+      // derived from this return value, so an in-editor drop can still insert the real token.
+      if (dragging && original === null) original = slice;
       return censorSlice(slice, schema);
     },
   };

@@ -34,6 +34,12 @@ export interface AutosaveDeps {
   onError?(err: unknown): void;
   /** A 409 `stale_revision`: the queue stops until the page resolves the conflict. */
   onConflict?(err: unknown): void;
+  /**
+   * Last pass over every patch that is about to be sent (debounce, flush and keepalive). The notes
+   * page uses it to verify that the Markdown still re-parses to the editor document, off the
+   * keystroke path. Must be synchronous and must not throw.
+   */
+  preparePatch?(patch: NotePatch): NotePatch;
   delayMs?: number;
 }
 
@@ -54,6 +60,13 @@ export class NoteAutosave {
   private saving = false;
   private pending = false;
   private paused = false;
+  /**
+   * H2: while a censor prompt is open the draft body is the plaintext the user is about to
+   * replace. Even if the pause is released before the token document reaches React (it is handed
+   * over through a state update), the body must stay out of every lifecycle save until the
+   * verified token draft arrives.
+   */
+  private holdBody = false;
   private stopped = false;
   private conflicted = false;
   private flushRequested = false;
@@ -61,6 +74,8 @@ export class NoteAutosave {
   private readonly delay: number;
   private baseRevisionValue: string;
   private conflictListener: (() => void) | undefined;
+  /** Registered after mount so the page's verifier can read its latest editor state. */
+  private prepareHook: ((patch: NotePatch) => NotePatch) | undefined;
 
   constructor(
     private readonly deps: AutosaveDeps,
@@ -76,13 +91,17 @@ export class NoteAutosave {
   /** Record the current draft and (re)start the debounce when there is something to save. */
   update(draft: NoteDraft): void {
     this.draft = clone(draft);
-    if (this.stopped || this.paused || this.conflicted) return;
+    if (this.stopped || this.conflicted) return;
     if (this.flushRequested) {
-      // The revision that follows a successful censor saves now, not after the debounce.
+      // The verified token document has been handed over: the plaintext no longer exists in the
+      // draft, so release the hold and save it now instead of after the debounce.
+      this.paused = false;
+      this.holdBody = false;
       this.clearTimer();
       void this.run();
       return;
     }
+    if (this.paused) return;
     this.schedule();
   }
 
@@ -111,7 +130,9 @@ export class NoteAutosave {
   }
 
   private async commit(silent: boolean, full = false): Promise<boolean> {
-    const patch = full ? fullPatch(this.draft) : diffNotePatch(this.baseline, this.draft);
+    const patch = this.prepare(
+      full ? fullPatch(this.draft) : diffNotePatch(this.baseline, this.draft),
+    );
     if (patch === null) {
       this.flushRequested = false;
       return true;
@@ -181,6 +202,15 @@ export class NoteAutosave {
     this.conflictListener = listener;
   }
 
+  /**
+   * Register the page's last-pass patch hook (H4). A setter rather than only a constructor dep:
+   * the page builds the controller in `useState`, and the hook must read the editor's latest
+   * snapshot from a ref that only exists after mount.
+   */
+  setPreparePatch(hook: ((patch: NotePatch) => NotePatch) | undefined): void {
+    this.prepareHook = hook;
+  }
+
   /** Whether a 409 is waiting for the user's choice. */
   isConflicted(): boolean {
     return this.conflicted;
@@ -201,9 +231,29 @@ export class NoteAutosave {
     return this.saving || this.isDirty();
   }
 
+  /** Apply the page's last-pass hook, and drop the body while a censor prompt owns it. */
+  private prepare(patch: NotePatch | null): NotePatch | null {
+    if (patch === null) return null;
+    let next: NotePatch | null = patch;
+    if (this.holdBody && 'body' in next) {
+      const { body: _body, ...rest } = next;
+      void _body;
+      next = Object.keys(rest).length ? rest : null;
+    }
+    if (next === null) return null;
+    const prepare = this.prepareHook ?? this.deps.preparePatch;
+    if (!prepare) return next;
+    try {
+      return prepare(next);
+    } catch {
+      // A verification failure must never lose the edit: send the patch as it stands.
+      return next;
+    }
+  }
+
   /** The patch a `pagehide` keepalive request must send, or null when everything is saved. */
   pendingPatch(): NotePatch | null {
-    return diffNotePatch(this.baseline, this.draft);
+    return this.prepare(diffNotePatch(this.baseline, this.draft));
   }
 
   /**
@@ -229,25 +279,38 @@ export class NoteAutosave {
   /** Stop the body debounce while the censor prompt is open (cancels its pending save). */
   pauseBody(): void {
     this.paused = true;
+    this.holdBody = true;
     this.clearTimer();
   }
 
-  /** Resume after the prompt; a pending revision is rescheduled unless a flush is queued. */
+  /**
+   * Ordinary abort (cancelled prompt / failed censor): release the pause and restore the
+   * debounce. Only used when no token is going to be applied.
+   */
   resumeBody(): void {
     this.paused = false;
+    this.holdBody = false;
     if (this.stopped) return;
     if (this.flushRequested) return; // wait for the token revision, then save it immediately
     this.schedule();
   }
 
   /**
-   * The next `update` (the censored token document) is saved immediately, without debounce. It
-   * deliberately does NOT save the current draft: while a censor prompt is open that draft is the
-   * plaintext the user is about to replace.
+   * A token was produced: the next `update` (the verified token document) is saved immediately
+   * and releases the pause. This deliberately does NOT save the current draft: while a censor
+   * prompt is open that draft is the plaintext the user is about to replace, and a page hide
+   * between here and the token update must still omit it.
    */
   flushNextUpdate(): void {
     this.flushRequested = true;
+    this.paused = true;
+    this.holdBody = true;
     this.clearTimer();
+  }
+
+  /** Whether the body is currently withheld from lifecycle saves (censor prompt in progress). */
+  isBodyHeld(): boolean {
+    return this.holdBody;
   }
 
   /**
@@ -270,6 +333,8 @@ export class NoteAutosave {
     this.conflicted = false;
     this.saving = false;
     this.pending = false;
+    this.paused = false;
+    this.holdBody = false;
     this.flushRequested = false;
     this.baseRevisionValue = revision;
     this.baseline = clone(snapshot);
@@ -279,6 +344,8 @@ export class NoteAutosave {
   /** A 404: stop autosaving altogether (the draft stays on screen). */
   stop(): void {
     this.stopped = true;
+    this.paused = false;
+    this.holdBody = false;
     this.clearTimer();
     this.pending = false;
   }

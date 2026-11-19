@@ -420,6 +420,7 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: notes with bearer tokens', () => {
     const linked = await get(rw, `/api/v1/tasks/${taskId}/notes`);
     expect(linked.status).toBe(200);
     expect(linked.body.notes.map((n: { id: string }) => n.id)).toEqual([noteId]);
+    expect(linked.body.notes[0].sources).toEqual(['manual']);
     expect(RESPONSE_SCHEMAS.taskNotes.safeParse(linked.body).error).toBeUndefined();
     expect(
       (await rw.request({ method: 'DELETE', url: `/api/v1/notes/${noteId}/tasks/${taskId}` }))

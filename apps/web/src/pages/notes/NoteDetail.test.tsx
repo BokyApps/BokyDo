@@ -363,6 +363,44 @@ describe('409 stale_revision', () => {
   });
 });
 
+describe('P5: linked-task provenance comes from the server', () => {
+  it('uses the sources array instead of reading note bodies', async () => {
+    getNote = () =>
+      makeNote({
+        linkedTasks: [
+          {
+            id: 't-body',
+            content: 'Body task',
+            projectId: 'p',
+            completed: false,
+            sources: ['body'],
+          },
+          {
+            id: 't-manual',
+            content: 'Manual task',
+            projectId: 'p',
+            completed: false,
+            sources: ['manual'],
+          },
+          {
+            id: 't-both',
+            content: 'Both task',
+            projectId: 'p',
+            completed: false,
+            sources: ['body', 'manual'],
+          },
+        ],
+      });
+    await render();
+    expect(container.textContent).toContain('Linked in the note text');
+    expect(container.textContent).toContain('Linked manually');
+    // Only the two tasks with a manual link offer Unlink; body-only links cannot be unlinked here.
+    expect(container.querySelectorAll('button[aria-label="Unlink task"]')).toHaveLength(2);
+    // No per-note detail request was made (the fetch mock would throw for one).
+    expect(patchCalls).toHaveLength(0);
+  });
+});
+
 describe('live sync adoption', () => {
   it('adopts a refetched note while the draft is clean', async () => {
     await render();

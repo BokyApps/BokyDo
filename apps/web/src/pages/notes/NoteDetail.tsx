@@ -23,7 +23,6 @@ import {
 import { useConfirm } from '../../lib/confirm.js';
 import { DraftLeaveGuard, installDraftGuards } from '../../lib/note-draft-guards.js';
 import {
-  bodyLinksTask,
   deleteNote,
   isNoteGoneError,
   linkNoteTask,
@@ -50,7 +49,7 @@ import {
   onCensorLock,
   type CensorPrompts,
 } from '../../lib/notes-censor.js';
-import type { RevealAnchor } from '../../components/notes/callbacks.js';
+import type { RevealAnchor, SerializedNoteBody } from '../../components/notes/callbacks.js';
 import type { RevealState } from '../../components/notes/RevealOverlay.js';
 import {
   RevealController,
@@ -124,6 +123,8 @@ function NoteDetailInner({ note }: { note: Note }) {
   const [dirty, setDirty] = useState(false);
   const [lockKey, setLockKey] = useState(0);
   const [linkTaskOpen, setLinkTaskOpen] = useState(false);
+  /** The latest WYSIWYG serialisation and its verifier, used right before a save. */
+  const serializedRef = useRef<SerializedNoteBody | null>(null);
   /** The `updatedAt` last seen through the query, so a live refetch is adopted exactly once. */
   const seenRevision = useRef(note.updatedAt);
   /** Identifies the newest conflict refresh; a late answer for an older one is dropped. */
@@ -204,6 +205,18 @@ function NoteDetailInner({ note }: { note: Note }) {
   useEffect(() => {
     if (gone) autosave.stop();
   }, [gone, autosave]);
+
+  // H4: verification runs on the autosave debounce/flush/keepalive — never on a keystroke. Only
+  // the exact Markdown the editor emitted is verified; a source-view edit has no editor document
+  // and is saved as typed. Registered in an effect so the hook reads the latest snapshot ref.
+  useEffect(() => {
+    autosave.setPreparePatch((patch) => {
+      const snapshot = serializedRef.current;
+      if (patch.body === undefined || !snapshot || snapshot.markdown !== patch.body) return patch;
+      return { ...patch, body: snapshot.verified() };
+    });
+    return () => autosave.setPreparePatch(undefined);
+  }, [autosave]);
 
   /** GET the newest note, bypassing any fresh cached copy: a revision premise needs the truth. */
   const refreshRemote = useCallback(async (): Promise<Note | null> => {
@@ -410,6 +423,29 @@ function NoteDetailInner({ note }: { note: Note }) {
       toast({
         message: t('notes.censor.cutBlocked', {
           defaultValue: "Censored text can't be cut; delete it or remove the censor first.",
+        }),
+      }),
+    [toast, t],
+  );
+  // H2: the editor reports an abort after a token was produced (stale document / a save form it
+  // cannot verify); the page releases the body pause itself. On success the coming token update
+  // does that, so the plaintext is never saved in the gap.
+  const onCensorSettled = useCallback(
+    (outcome: 'ok' | 'cancelled' | 'aborted' | 'unsupported') => {
+      if (outcome !== 'ok') autosave.resumeBody();
+    },
+    [autosave],
+  );
+  const onSerialized = useCallback((snapshot: SerializedNoteBody) => {
+    serializedRef.current = snapshot;
+  }, []);
+  const onRemoveCensorFailed = useCallback(
+    () =>
+      toast({
+        tone: 'error',
+        message: t('notes.censor.removeFailed', {
+          defaultValue:
+            'That censored text changed while unlocking. Nothing was changed — please try again.',
         }),
       }),
     [toast, t],
@@ -663,6 +699,9 @@ function NoteDetailInner({ note }: { note: Note }) {
             onReveal={onReveal}
             onUncensor={onUncensor}
             onProtectedCut={onProtectedCut}
+            onCensorSettled={onCensorSettled}
+            onRemoveCensorFailed={onRemoveCensorFailed}
+            onSerialized={onSerialized}
             revealState={revealState}
             onCloseReveal={() => reveal.close()}
           />
@@ -672,7 +711,6 @@ function NoteDetailInner({ note }: { note: Note }) {
       <LinkedFrom note={note} />
       <LinkedTasks
         note={note}
-        body={draft.body}
         onLink={() => setLinkTaskOpen(true)}
         onUnlink={(id) => unlinkTask.mutate(id)}
       />
@@ -752,13 +790,10 @@ function LinkedFrom({ note }: { note: Note }) {
 
 function LinkedTasks({
   note,
-  body,
   onLink,
   onUnlink,
 }: {
   note: Note;
-  /** The live draft body: provenance is derived from the text, not from a stale snapshot. */
-  body: string;
   onLink: () => void;
   onUnlink: (id: string) => void;
 }) {
@@ -779,9 +814,10 @@ function LinkedTasks({
       ) : (
         <ul className="flex flex-wrap gap-2 text-sm">
           {note.linkedTasks.map((task) => {
-            // P5: Unlink only removes a MANUAL link; a body link would be re-derived on the next
-            // save, so the no-op is replaced by telling the reader where the link lives.
-            const inBody = bodyLinksTask(body, task.id);
+            // P5: the server reports where each link comes from. A body link is re-derived on
+            // every save, so it cannot be unlinked here; only a manual link can.
+            const inBody = task.sources.includes('body');
+            const manual = task.sources.includes('manual');
             return (
               <li
                 key={task.id}
@@ -796,14 +832,15 @@ function LinkedTasks({
                 >
                   <LinkIcon /> {task.content}
                 </button>
-                {inBody ? (
+                {inBody && (
                   <span className="text-xs text-muted">
                     {t('notes.linkedInBody', { defaultValue: 'Linked in the note text' })} —{' '}
                     {t('notes.unlinkBodyHint', {
                       defaultValue: 'remove the link from the note text to unlink.',
                     })}
                   </span>
-                ) : (
+                )}
+                {manual && (
                   <>
                     <span className="text-xs text-muted">
                       {t('notes.linkedManual', { defaultValue: 'Linked manually' })}

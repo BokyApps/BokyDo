@@ -9,6 +9,7 @@ import {
   censorSelection,
   censorableSelection,
   censorRoundTripSurvives,
+  CensoredRemovalTracker,
   commitCensored,
   findRemovalTarget,
   markCensoredForRemoval,
@@ -44,7 +45,7 @@ function makeEditor(content = '<p>hello TOPSECRET world</p>', extra: AnyExtensio
   const onChange: string[] = [];
   const editor = new Editor({
     element: el,
-    extensions: [StarterKit, ...safeTableExtensions, Censored, ...extra],
+    extensions: [StarterKit, ...safeTableExtensions, Censored, CensoredRemovalTracker, ...extra],
     content,
     onUpdate: ({ editor }) => onChange.push(editor.state.doc.textContent),
   });
@@ -143,7 +144,7 @@ describe('HIGH: Remove censor is bound to the atom the user confirmed (P3)', () 
     // Move the atom by typing text before it, then remove by the transient id.
     editor.commands.insertContentAt(1, 'leading ');
     expect(findRemovalTarget(editor.state.doc, removeId)).not.toBeNull();
-    expect(applyUncensored(editor, removeId, 'revealed')).toBe(true);
+    expect(applyUncensored(editor, removeId, 'revealed')).toBe('ok');
     expect(editor.state.doc.textContent).toContain('revealed');
     expect(editor.state.doc.textContent).not.toContain(SECRET);
   });
@@ -161,7 +162,7 @@ describe('HIGH: Remove censor is bound to the atom the user confirmed (P3)', () 
     editor.commands.deleteRange({ from: pos, to: pos + size });
     // Exactly one identical token still exists; the late Remove must NOT apply to it.
     const before = editor.state.doc.textContent;
-    expect(applyUncensored(editor, removeId, 'revealed')).toBe(false);
+    expect(applyUncensored(editor, removeId, 'revealed')).toBe('missing');
     expect(editor.state.doc.textContent).toBe(before);
     expect(editor.state.doc.textContent).not.toContain('revealed');
   });
@@ -170,7 +171,7 @@ describe('HIGH: Remove censor is bound to the atom the user confirmed (P3)', () 
     const { editor } = makeEditor();
     editor.commands.setTextSelection({ from: 7, to: 7 + SECRET.length });
     commitCensored(editor, 7, 7 + SECRET.length, TOKEN);
-    expect(applyUncensored(editor, 'rm-does-not-exist', 'revealed')).toBe(false);
+    expect(applyUncensored(editor, 'rm-does-not-exist', 'revealed')).toBe('missing');
   });
 
   it('requires an editable editor', () => {
@@ -179,7 +180,7 @@ describe('HIGH: Remove censor is bound to the atom the user confirmed (P3)', () 
     commitCensored(editor, 7, 7 + SECRET.length, TOKEN);
     const removeId = markCensoredForRemoval(editor, firstCensoredPos(editor))!;
     editor.setEditable(false, false);
-    expect(applyUncensored(editor, removeId, 'revealed')).toBe(false);
+    expect(applyUncensored(editor, removeId, 'revealed')).toBe('missing');
   });
 });
 

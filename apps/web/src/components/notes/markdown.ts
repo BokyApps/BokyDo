@@ -2,9 +2,13 @@
    Index access below is bounds-checked by the surrounding loop/length conditions. */
 import { safeHref } from '@bokydo/shared';
 import type { JSONContent } from '@tiptap/core';
-import MarkdownIt, { type Token } from 'markdown-it';
+import MarkdownIt, { type Env, type StateBlock, type StateInline, type Token } from 'markdown-it';
 import { parseToken } from '../../lib/censor.js';
 import { formatEmbedLine, parseEmbedLine, parseEmbedUrl } from './embed.js';
+import {
+  SOURCE_META_ATTRS as SOURCE_META_ATTRS_LIST,
+  TRANSIENT_ATTRS as TRANSIENT_ATTRS_LIST,
+} from './source-meta.js';
 
 /**
  * Markdown <-> ProseMirror conversion for the notes editor (ADR 0025).
@@ -52,7 +56,8 @@ export const CENSORED_PLACEHOLDER = '█████';
 /** `{{censored:v1:<salt>:<iv>:<ct>}}` — shape only; validity is checked with strict parseToken. */
 const CENSOR_BODY = '\\{\\{censored:v1:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+\\}\\}';
 export const CENSOR_TOKEN_EXACT = new RegExp(`^${CENSOR_BODY}$`);
-const CENSOR_GLOBAL = new RegExp(CENSOR_BODY, 'g');
+/** Sticky: the inline rule asks whether the token starts exactly at the cursor. */
+const CENSOR_AT = new RegExp(CENSOR_BODY, 'y');
 
 export type HrefKind =
   | { kind: 'link'; href: string }
@@ -182,11 +187,12 @@ const INLINE_TYPES = new Set([
 
 /**
  * Attributes written by `markdownToDoc` for source preservation. They are bookkeeping, never
- * document content, so block equality ignores them.
+ * document content, so block equality ignores them. The list itself lives in `source-meta.ts` so
+ * the clipboard/drop guards strip exactly the same names.
  */
-const SOURCE_META_ATTRS = new Set(['src', 'sep', 'lead', 'blockId', 'prevId', 'nextId']);
+const SOURCE_META_ATTRS = new Set<string>(SOURCE_META_ATTRS_LIST);
 /** Editor-only attributes (e.g. Remove-censor's transient id); never persisted, never compared. */
-const TRANSIENT_ATTRS = new Set(['removeId']);
+const TRANSIENT_ATTRS = new Set<string>(TRANSIENT_ATTRS_LIST);
 
 /** Older/other CR forms become LF: offsets are computed on the string markdown-it parses. */
 export function normaliseLineEndings(src: string): string {
@@ -205,162 +211,92 @@ function clampLevel(value: number): number {
 }
 
 /**
- * Whether `index` in `text` sits behind an odd number of backslashes, i.e. is escaped. Every
- * custom-syntax check below uses this on the RAW source, so a literal construct and an identical
- * active one in the same paragraph can never be confused (review: escaped censor syntax active).
+ * Censor tokens are a markdown-it INLINE rule, not a private-use sentinel substituted into the
+ * source: the parser's own escape, code-span and link rules run first, so an escaped
+ * `\{\{censored…` and a token inside a code span or a link destination can never be promoted,
+ * while a token in ordinary (or link-label) text becomes an atom exactly where it stands.
  */
-export function isEscapedAt(text: string, index: number): boolean {
-  let slashes = 0;
-  for (let i = index - 1; i >= 0 && text.charAt(i) === '\\'; i--) slashes++;
-  return slashes % 2 === 1;
+function censorTokenRule(state: StateInline, silent: boolean): boolean {
+  if (state.src.charCodeAt(state.pos) !== 0x7b /* { */) return false;
+  if (state.src.charCodeAt(state.pos + 1) !== 0x7b) return false;
+  CENSOR_AT.lastIndex = state.pos;
+  const match = CENSOR_AT.exec(state.src);
+  if (!match || match.index !== state.pos) return false;
+  const token = match[0];
+  if (state.pos + token.length > state.posMax) return false;
+  // Shape alone is not enough: strict parseToken checks the salt/IV/ciphertext sizes.
+  if (!isValidCensorToken(token)) return false;
+  if (!silent) {
+    const node = state.push('censored', 'span', 0);
+    node.content = token;
+    node.markup = '{{censored:';
+  }
+  state.pos += token.length;
+  return true;
 }
 
 /**
- * Custom inline syntax is represented to markdown-it by a unique private-use sentinel, substituted
- * BEFORE parsing. That way:
- *  - an escaped `\{\{censored…` can never be promoted just because the identical unescaped token
- *    exists elsewhere in the paragraph, and the atom keeps the marks around it;
- *  - a table cell's `<br>` becomes a real hard break without splitting emphasis (`**a<br>b**`
- *    stays one bold run with a break in the middle), which raw splitting cannot do.
- * The random nonce makes the sentinel impossible to predict (or forge) from note content.
+ * `<br>` inside a GFM table cell is a hard break (a table row cannot hold a newline). The rule is
+ * enabled only for the inline parse of a cell through the shared env, so `<br>` anywhere else
+ * stays literal text. Escapes are handled by the `escape` rule, and code spans by `backticks`,
+ * both of which run before this one.
  */
-const SENTINEL_START = '\uE000';
-const SENTINEL_END = '\uE001';
-
-type SentinelValue = { kind: 'censored'; token: string } | { kind: 'hardBreak' };
-
-/** The sentinels for one inline block; `prefix` is random, so note text cannot contain it. */
-interface Sentinels {
-  prefix: string;
-  values: Map<string, SentinelValue>;
-}
-
-function sentinelNonce(): string {
-  return Math.random().toString(36).slice(2);
-}
-
-/** Unescaped `<br>` / `<br/>` / `<br />` tags outside code spans, with their raw offsets. */
-function cellHardBreaks(raw: string): { index: number; length: number }[] {
-  const breaks: { index: number; length: number }[] = [];
-  let i = 0;
-  let fence = 0; // length of the code-span fence we are inside, 0 when outside
-  while (i < raw.length) {
-    const ch = raw.charAt(i);
-    if (ch === '`') {
-      let run = 0;
-      while (raw.charAt(i + run) === '`') run++;
-      if (fence === 0) fence = run;
-      else if (run === fence) fence = 0;
-      i += run;
-      continue;
-    }
-    if (ch === '<' && fence === 0 && !isEscapedAt(raw, i)) {
-      const tag = /^<br\s*\/?>/i.exec(raw.slice(i));
-      if (tag && !isEscapedAt(raw, i + tag[0].length - 1)) {
-        breaks.push({ index: i, length: tag[0].length });
-        i += tag[0].length;
-        continue;
-      }
-    }
-    i++;
-  }
-  return breaks;
+function cellHardBreakRule(state: StateInline, silent: boolean): boolean {
+  const env = state.env as Env & { inTableCell?: boolean };
+  if (!env.inTableCell) return false;
+  if (state.src.charCodeAt(state.pos) !== 0x3c /* < */) return false;
+  const match = /^<br\s*\/?>/i.exec(state.src.slice(state.pos, state.posMax));
+  if (!match) return false;
+  if (!silent) state.push('hardbreak', 'br', 0);
+  state.pos += match[0].length;
+  return true;
 }
 
 /**
- * Replace the custom inline syntax of one block's raw source with sentinels. `inCell` also turns
- * `<br>` into a hard break; `inTableCell` is the only place that construct is meaningful.
+ * A `::embed[label](url)` line as a BLOCK rule. Escaped `\::embed` never matches (the backslash is
+ * the line's first character); a line that is part of a longer paragraph is left to the paragraph
+ * rule, so the atom only forms when the line stands alone.
  */
-function substituteSentinels(
-  raw: string,
-  inCell: boolean,
-): { text: string; sentinels: Sentinels | null } {
-  const maybeBreak = inCell && raw.toLowerCase().includes('<br');
-  if (!raw.includes('{{censored:') && !maybeBreak) return { text: raw, sentinels: null };
-  const prefix = `${SENTINEL_START}${sentinelNonce()}:`;
-  const values = new Map<string, SentinelValue>();
-  const replacements: { index: number; length: number; value: SentinelValue }[] = [];
-
-  CENSOR_GLOBAL.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = CENSOR_GLOBAL.exec(raw)) !== null) {
-    const token = match[0];
-    // Odd backslashes before the first `{` escape it: leave the raw text untouched.
-    if (isEscapedAt(raw, match.index) || !isValidCensorToken(token)) continue;
-    replacements.push({
-      index: match.index,
-      length: token.length,
-      value: { kind: 'censored', token },
-    });
+function embedBlockRule(
+  state: StateBlock,
+  startLine: number,
+  endLine: number,
+  silent: boolean,
+): boolean {
+  if (state.sCount[startLine]! - state.blkIndent >= 4) return false; // indented code
+  const start = state.bMarks[startLine]! + state.tShift[startLine]!;
+  const max = state.eMarks[startLine]!;
+  if (start >= max) return false;
+  const raw = state.src.slice(start, max);
+  if (!raw.startsWith('::embed[')) return false;
+  const parsed = parseEmbedLine(raw);
+  if (!parsed) return false;
+  // A lazy continuation line means this is a paragraph, not a standalone atom.
+  if (startLine + 1 < endLine) {
+    const line = startLine + 1;
+    const nextStart = state.bMarks[line]! + state.tShift[line]!;
+    if (state.sCount[line]! - state.blkIndent < 4 && nextStart < state.eMarks[line]!) return false;
   }
-  if (maybeBreak) {
-    for (const br of cellHardBreaks(raw)) {
-      replacements.push({ index: br.index, length: br.length, value: { kind: 'hardBreak' } });
-    }
-  }
-  if (replacements.length === 0) return { text: raw, sentinels: null };
-  replacements.sort((a, b) => a.index - b.index);
-
-  const parts: string[] = [];
-  let copied = 0;
-  for (const replacement of replacements) {
-    if (replacement.index < copied) continue; // overlapping matches: the first one wins
-    const sentinel = `${prefix}${values.size}${SENTINEL_END}`;
-    values.set(sentinel, replacement.value);
-    parts.push(raw.slice(copied, replacement.index), sentinel);
-    copied = replacement.index + replacement.length;
-  }
-  parts.push(raw.slice(copied));
-  return { text: parts.join(''), sentinels: { prefix, values } };
+  if (silent) return true;
+  const token = state.push('embed', 'div', 0);
+  token.map = [startLine, startLine + 1];
+  // A non-allow-listed URL is still recognised as an embed *line*; readBlock turns it into the
+  // same safe-link paragraph the old raw-source grammar produced (ADR 0025: "shown as a link").
+  token.meta = {
+    label: parsed.label,
+    url: parsed.url,
+    raw,
+  };
+  token.markup = '::embed';
+  state.line = startLine + 1;
+  return true;
 }
 
-/**
- * Walk an already-decoded inline string at the sentinels of THIS parse. Linear: the random prefix
- * cannot occur in note text, so `split`/`indexOf` never rescan, and there is no regex quantifier
- * that a hostile run of private-use characters could make quadratic.
- */
-function walkSentinels(
-  text: string,
-  sentinels: Sentinels | null,
-  onText: (part: string) => void,
-  onValue: (value: SentinelValue) => void,
-): void {
-  if (!sentinels || !text.includes(sentinels.prefix)) {
-    onText(text);
-    return;
-  }
-  const parts = text.split(sentinels.prefix);
-  onText(parts[0] ?? '');
-  for (let i = 1; i < parts.length; i++) {
-    const part = parts[i]!;
-    const end = part.indexOf(SENTINEL_END);
-    const key = end === -1 ? null : `${sentinels.prefix}${part.slice(0, end + 1)}`;
-    const value = key === null ? undefined : sentinels.values.get(key);
-    if (value === undefined) {
-      onText(`${sentinels.prefix}${part}`);
-      continue;
-    }
-    onValue(value);
-    onText(part.slice(end + 1));
-  }
-}
-
-/** Turn any sentinel in an already-decoded string back into the literal source spelling. */
-function restoreSentinels(text: string, sentinels: Sentinels | null): string {
-  if (!sentinels) return text;
-  let out = '';
-  walkSentinels(
-    text,
-    sentinels,
-    (part) => {
-      out += part;
-    },
-    (value) => {
-      out += value.kind === 'censored' ? value.token : '<br>';
-    },
-  );
-  return out;
-}
+md.inline.ruler.before('emphasis', 'censor', censorTokenRule);
+md.inline.ruler.before('html_inline', 'cellHardBreak', cellHardBreakRule);
+md.block.ruler.before('paragraph', 'embed', embedBlockRule, {
+  alt: ['paragraph', 'reference', 'blockquote', 'list'],
+});
 
 function collectLinkInner(children: Token[], start: number): { inner: Token[]; next: number } {
   let depth = 0;
@@ -378,7 +314,10 @@ function collectLinkInner(children: Token[], start: number): { inner: Token[]; n
 function labelFromInline(inner: Token[]): string {
   let label = '';
   for (const t of inner) {
-    if (t.type === 'text' || t.type === 'code_inline') label += t.content;
+    // A chip label is a string attribute, so a censor token in it stays literal token text (it
+    // is still encrypted; the chip renders the label, never decrypts). Dropping it would lose
+    // the token on save.
+    if (t.type === 'text' || t.type === 'code_inline' || t.type === 'censored') label += t.content;
     else if (t.type === 'softbreak' || t.type === 'hardbreak') label += ' ';
   }
   return label;
@@ -388,11 +327,7 @@ function withMarks(marks: Mark[]): { marks: Mark[] } | Record<string, never> {
   return marks.length ? { marks: [...marks] } : {};
 }
 
-function parseInlineChildren(
-  children: Token[],
-  initialMarks: Mark[] = [],
-  sentinels: Sentinels | null = null,
-): JSONContent[] {
+function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSONContent[] {
   const out: JSONContent[] = [];
   let marks = [...initialMarks];
   let i = 0;
@@ -405,13 +340,11 @@ function parseInlineChildren(
     const t = children[i]!;
     switch (t.type) {
       case 'text':
-        walkSentinels(t.content, sentinels, pushText, (value) => {
-          if (value.kind === 'censored') {
-            out.push({ type: 'censored', attrs: { token: value.token }, ...withMarks(marks) });
-          } else {
-            out.push({ type: 'hardBreak', ...withMarks(marks) });
-          }
-        });
+        pushText(t.content);
+        i++;
+        break;
+      case 'censored':
+        out.push({ type: 'censored', attrs: { token: t.content }, ...withMarks(marks) });
         i++;
         break;
       case 'strong_open':
@@ -440,10 +373,10 @@ function parseInlineChildren(
         break;
       case 'code_inline':
         // A token inside a code span is literal text, never an atom (it could not survive a
-        // reload as an atom either).
+        // reload as an atom either); markdown-it already kept it out of the censor rule.
         out.push({
           type: 'text',
-          text: restoreSentinels(t.content, sentinels),
+          text: t.content,
           marks: [...marks, { type: 'code' }],
         });
         i++;
@@ -464,7 +397,7 @@ function parseInlineChildren(
         const cls = classifyHref(href);
         const { inner, next } = collectLinkInner(children, i + 1);
         if (cls.kind === 'file' || cls.kind === 'note' || cls.kind === 'task') {
-          const label = restoreSentinels(labelFromInline(inner), sentinels);
+          const label = labelFromInline(inner);
           if (cls.kind === 'file') {
             out.push({ type: 'fileChip', attrs: { id: cls.id, name: label }, ...withMarks(marks) });
           } else {
@@ -479,9 +412,9 @@ function parseInlineChildren(
             type: 'link',
             attrs: { href: cls.href, ...(title ? { title } : {}) },
           };
-          out.push(...parseInlineChildren(inner, [...marks, linkMark], sentinels));
+          out.push(...parseInlineChildren(inner, [...marks, linkMark]));
         } else {
-          out.push(...parseInlineChildren(inner, marks, sentinels));
+          out.push(...parseInlineChildren(inner, marks));
         }
         i = next;
         break;
@@ -489,7 +422,7 @@ function parseInlineChildren(
       case 'image': {
         const src = String(t.attrGet('src') ?? '');
         // A token can only reach here from inside an image's label; keep it as literal text.
-        const alt = restoreSentinels(t.content, sentinels);
+        const alt = t.content;
         const cls = classifyHref(src);
         if (cls.kind === 'file') {
           out.push({ type: 'noteImage', attrs: { id: cls.id, alt }, ...withMarks(marks) });
@@ -509,19 +442,19 @@ function parseInlineChildren(
 }
 
 /**
- * Inline nodes for one block. Custom syntax is substituted in the RAW source before parsing, so
- * only unescaped occurrences become atoms/breaks; documents without any reuse markdown-it's tokens.
- * `inCell` enables the table-cell `<br>` hard break.
+ * Inline nodes for one block. Censor tokens and table-cell breaks are markdown-it rules, so the
+ * parser's own escapes/code spans/references apply. `inCell` re-parses the raw cell source with
+ * `inTableCell` in the shared env, which is what enables the `<br>` rule there.
  */
-function parseInline(inline: Token | undefined, inCell = false): JSONContent[] {
+function parseInline(inline: Token | undefined, inCell = false, env: Env = {}): JSONContent[] {
   if (inline?.type !== 'inline') return [];
   const raw = inline.content ?? '';
-  const hasSyntax = raw.includes('{{censored:') || (inCell && raw.toLowerCase().includes('<br'));
-  if (!hasSyntax) return stripEmptyText(parseInlineChildren(inline.children ?? []));
-  const { text, sentinels } = substituteSentinels(raw, inCell);
-  if (!sentinels) return stripEmptyText(parseInlineChildren(inline.children ?? []));
-  const substituted = md.parseInline(text, {}).find((t) => t.type === 'inline');
-  return stripEmptyText(parseInlineChildren(substituted?.children ?? [], [], sentinels));
+  if (inCell && raw.toLowerCase().includes('<br')) {
+    const cellEnv: Env = { ...env, inTableCell: true };
+    const cell = md.parseInline(raw, cellEnv).find((token) => token.type === 'inline');
+    return stripEmptyText(parseInlineChildren(cell?.children ?? []));
+  }
+  return stripEmptyText(parseInlineChildren(inline.children ?? []));
 }
 
 function firstTextNode(nodes: JSONContent[]): JSONContent | null {
@@ -560,7 +493,7 @@ function alignFromToken(t: Token): string | null {
   return m ? m[1]!.toLowerCase() : null;
 }
 
-function parseTable(tokens: Token[], i: number): { node: JSONContent; next: number } {
+function parseTable(tokens: Token[], i: number, env: Env): { node: JSONContent; next: number } {
   const rows: JSONContent[] = [];
   let cells: JSONContent[] = [];
   let j = i + 1;
@@ -578,7 +511,7 @@ function parseTable(tokens: Token[], i: number): { node: JSONContent; next: numb
       j++;
     } else if (t.type === 'th_open' || t.type === 'td_open') {
       const inline = tokens[j + 1];
-      const content = parseInline(inline, true);
+      const content = parseInline(inline, true, env);
       const align = alignFromToken(t);
       cells.push({
         type: t.type === 'th_open' ? 'tableHeader' : 'tableCell',
@@ -602,27 +535,15 @@ function parseStart(t: Token): number {
 function readBlock(
   tokens: Token[],
   i: number,
+  env: Env,
 ): { node: JSONContent | null; next: number; map: Token['map'] } {
   const t = tokens[i]!;
   const map = t.map;
   switch (t.type) {
     case 'paragraph_open': {
       const inline = tokens[i + 1];
-      const raw = inline?.content?.trim() ?? '';
-      // Raw-source grammar (not a decoded line): an escaped `\::embed` can never become an atom.
-      const em = parseEmbedLine(raw);
-      if (em) {
-        if (parseEmbedUrl(em.url)) {
-          return {
-            node: { type: 'embed', attrs: { label: em.label, url: em.url } },
-            next: i + 3,
-            map,
-          };
-        }
-        return { node: invalidEmbedParagraph(em.label, em.url, raw), next: i + 3, map };
-      }
       return {
-        node: { type: 'paragraph', content: parseInline(inline) },
+        node: { type: 'paragraph', content: parseInline(inline, false, env) },
         next: i + 3,
         map,
       };
@@ -656,7 +577,7 @@ function readBlock(
       };
     }
     case 'blockquote_open': {
-      const inner = parseSequence(tokens, i + 1, 'blockquote_close');
+      const inner = parseSequence(tokens, i + 1, 'blockquote_close', undefined, env);
       return {
         node: {
           type: 'blockquote',
@@ -669,7 +590,7 @@ function readBlock(
     case 'bullet_list_open':
     case 'ordered_list_open': {
       const closeType = t.type.replace('_open', '_close');
-      const inner = parseSequence(tokens, i + 1, closeType);
+      const inner = parseSequence(tokens, i + 1, closeType, undefined, env);
       const items = inner.nodes;
       const markers = t.type === 'bullet_list_open' ? items.map(taskMarker) : [];
       const allTasks =
@@ -695,12 +616,27 @@ function readBlock(
       return { node, next: inner.next, map };
     }
     case 'list_item_open': {
-      const inner = parseSequence(tokens, i + 1, 'list_item_close');
+      const inner = parseSequence(tokens, i + 1, 'list_item_close', undefined, env);
       const content = inner.nodes.length ? inner.nodes : [{ type: 'paragraph', content: [] }];
       return { node: { type: 'listItem', content }, next: inner.next, map };
     }
     case 'table_open':
-      return { ...parseTable(tokens, i), map };
+      return { ...parseTable(tokens, i, env), map };
+    case 'embed': {
+      const meta = (t.meta ?? {}) as { label?: unknown; url?: unknown; raw?: unknown };
+      const label = typeof meta.label === 'string' ? meta.label : '';
+      const url = typeof meta.url === 'string' ? meta.url : '';
+      const raw = typeof meta.raw === 'string' ? meta.raw : formatEmbedLine(label, url);
+      // The block rule only marks allow-listed URLs as `valid`; this is defence in depth so a
+      // future rule change cannot create a node the renderer refuses.
+      return {
+        node: parseEmbedUrl(url)
+          ? { type: 'embed', attrs: { label, url } }
+          : invalidEmbedParagraph(label, url, raw),
+        next: i + 1,
+        map,
+      };
+    }
     default:
       return { node: null, next: i + 1, map };
   }
@@ -711,12 +647,13 @@ function parseSequence(
   start: number,
   stopType?: string,
   maps?: Token['map'][],
+  env: Env = {},
 ): { nodes: JSONContent[]; next: number } {
   const nodes: JSONContent[] = [];
   let i = start;
   while (i < tokens.length) {
     if (stopType && tokens[i]!.type === stopType) return { nodes, next: i + 1 };
-    const r = readBlock(tokens, i);
+    const r = readBlock(tokens, i, env);
     if (r.node) {
       nodes.push(r.node);
       if (maps) maps.push(r.map);
@@ -816,9 +753,10 @@ export function markdownToDoc(src: string): JSONContent {
   // Normalise line endings BEFORE parsing and before slicing: markdown-it's token.map counts LF
   // lines, so a CR-only body used to yield overlapping source slices (duplicated tokens/text).
   const text = normaliseLineEndings(src ?? '');
-  const tokens = md.parse(text, {});
+  const env: Env = {};
+  const tokens = md.parse(text, env);
   const maps: Token['map'][] = [];
-  const { nodes } = parseSequence(tokens, 0, undefined, maps);
+  const { nodes } = parseSequence(tokens, 0, undefined, maps, env);
   const content = stripEmptyText(nodes.length ? nodes : [{ type: 'paragraph', content: [] }]);
   if (nodes.length) attachSourceMeta(content, maps, text);
   else if (content[0]) content[0].attrs = { ...(content[0].attrs ?? {}), lead: text };
@@ -967,37 +905,62 @@ function serializeTable(node: JSONContent): string {
   return out.join('\n');
 }
 
-function listLines(node: JSONContent, baseIndent: string): string[] {
+/** Two physically distinct list markers, so adjacent lists of one family never merge. */
+type ListMarker = 'a' | 'b';
+type ListFamily = 'bullet' | 'ordered';
+
+function flipMarker(marker: ListMarker): ListMarker {
+  return marker === 'a' ? 'b' : 'a';
+}
+
+function listFamily(node: JSONContent | undefined): ListFamily | null {
+  if (!node) return null;
+  if (node.type === 'orderedList') return 'ordered';
+  if (node.type === 'bulletList' || node.type === 'taskList') return 'bullet';
+  return null;
+}
+
+function listLines(node: JSONContent, baseIndent: string, marker: ListMarker = 'a'): string[] {
   const kind = node.type;
   const start = kind === 'orderedList' ? Number(node.attrs?.start ?? 1) || 1 : 1;
   const lines: string[] = [];
   const items = node.content ?? [];
   items.forEach((item, idx) => {
-    let marker: string;
-    if (kind === 'taskList') marker = item.attrs?.checked ? '- [x] ' : '- [ ] ';
-    else if (kind === 'orderedList') marker = `${start + idx}. `;
-    else marker = '- ';
+    let itemMarker: string;
+    if (kind === 'taskList')
+      itemMarker = `${marker === 'b' ? '*' : '-'} [${item.attrs?.checked ? 'x' : ' '}] `;
+    else if (kind === 'orderedList') itemMarker = `${start + idx}${marker === 'b' ? ')' : '.'} `;
+    else itemMarker = `${marker === 'b' ? '*' : '-'} `;
     const blocks = item.content?.length ? item.content : [{ type: 'paragraph', content: [] }];
-    const contIndent = baseIndent + ' '.repeat(marker.length);
+    const contIndent = baseIndent + ' '.repeat(itemMarker.length);
     const firstLines = serializeBlock(blocks[0]!).split('\n');
-    lines.push(baseIndent + marker + (firstLines[0] ?? ''));
+    lines.push(baseIndent + itemMarker + (firstLines[0] ?? ''));
     for (let k = 1; k < firstLines.length; k++) lines.push(contIndent + firstLines[k]);
+    // Adjacent nested lists of the same family alternate their marker too (inside one item there
+    // is no blank line between them, so a repeated marker would merge them on the next load).
+    let previousFamily = listFamily(blocks[0]);
+    let previousMarker: ListMarker = 'a';
     for (let j = 1; j < blocks.length; j++) {
       const b = blocks[j]!;
-      if (b.type === 'bulletList' || b.type === 'orderedList' || b.type === 'taskList') {
-        lines.push(...listLines(b, contIndent));
+      const family = listFamily(b);
+      const nestedMarker: ListMarker =
+        family !== null && family === previousFamily ? flipMarker(previousMarker) : 'a';
+      if (family !== null) {
+        lines.push(...listLines(b, contIndent, nestedMarker));
       } else {
         // A blank line makes the item a *loose* list, keeping its multiple paragraphs distinct
         // instead of merging them into one paragraph with a soft break (review: loose lists).
         lines.push('');
         for (const l of serializeBlock(b).split('\n')) lines.push(contIndent + l);
       }
+      previousFamily = family;
+      previousMarker = nestedMarker;
     }
   });
   return lines;
 }
 
-function serializeBlock(node: JSONContent): string {
+function serializeBlock(node: JSONContent, marker: ListMarker = 'a'): string {
   switch (node.type) {
     case 'paragraph': {
       const body = serializeInline(node.content);
@@ -1032,7 +995,7 @@ function serializeBlock(node: JSONContent): string {
     case 'bulletList':
     case 'orderedList':
     case 'taskList':
-      return listLines(node, '').join('\n');
+      return listLines(node, '', marker).join('\n');
     case 'table':
       return serializeTable(node);
     case 'embed': {
@@ -1047,12 +1010,25 @@ function serializeBlock(node: JSONContent): string {
   }
 }
 
-/** Pure serialization from node content (no source preservation) — used for clipboard slices. */
+/**
+ * Pure serialization from node content (no source preservation). Adjacent lists of the same
+ * family always get a different bullet/delimiter character, because `- a` followed by `- b` (with
+ * or without a blank line) is one list on the next load.
+ */
 function serializeBlocks(nodes: JSONContent[]): string {
-  return nodes
-    .map(serializeBlock)
-    .filter((s) => s.length > 0)
-    .join('\n\n');
+  const out: string[] = [];
+  let previousFamily: ListFamily | null = null;
+  let previousMarker: ListMarker = 'a';
+  for (const node of nodes) {
+    const family = listFamily(node);
+    const marker: ListMarker =
+      family !== null && family === previousFamily ? flipMarker(previousMarker) : 'a';
+    const text = serializeBlock(node, marker);
+    if (text.length > 0) out.push(text);
+    previousFamily = family;
+    previousMarker = marker;
+  }
+  return out.join('\n\n');
 }
 
 /**
@@ -1082,15 +1058,46 @@ function canonicalValue(value: unknown): unknown {
   return value;
 }
 
+/** Adjacent text nodes with equal marks are one text run to Markdown; merge them for equality. */
+function marksKey(node: JSONContent): string {
+  return JSON.stringify(node.marks ?? []);
+}
+
+function mergeAdjacentText(node: JSONContent): JSONContent {
+  const copy: JSONContent = { ...node };
+  if (node.content) {
+    const merged: JSONContent[] = [];
+    for (const child of node.content) {
+      const next = mergeAdjacentText(child);
+      const previous = merged[merged.length - 1];
+      if (
+        next.type === 'text' &&
+        previous?.type === 'text' &&
+        marksKey(previous) === marksKey(next)
+      ) {
+        merged[merged.length - 1] = {
+          ...previous,
+          text: `${previous.text ?? ''}${next.text ?? ''}`,
+        };
+      } else {
+        merged.push(next);
+      }
+    }
+    copy.content = merged;
+  }
+  return copy;
+}
+
 /** A block's JSON without bookkeeping attributes, as a stable string for exact comparison. */
 export function canonicalBlockJson(node: JSONContent): string {
+  const normalised = mergeAdjacentText(node);
   return JSON.stringify(
     canonicalValue({
-      type: node.type,
-      text: node.text,
-      attrs: node.attrs,
-      marks: node.marks,
-      content: node.content,
+      type: normalised.type,
+      text: normalised.text,
+      attrs: normalised.attrs,
+      marks: normalised.marks,
+      content: normalised.content,
     }),
   );
 }
@@ -1146,33 +1153,63 @@ export function blockPreservesSource(block: JSONContent): boolean {
   return canonicalBlockJson(block) === parsed.canonical;
 }
 
-/** The separator to emit after block `index`: stored whitespace only for the same neighbour. */
+/** Non-whitespace lines in a stored separator: link reference definitions, which parse to no block. */
+function definitionLines(sep: unknown): string[] {
+  if (typeof sep !== 'string' || sep.trim() === '') return [];
+  return sep.split('\n').filter((line) => line.trim() !== '');
+}
+
+/** A separator that keeps any reference definitions the stored separator carried. */
+function withDefinitions(sep: unknown): string {
+  const defs = definitionLines(sep);
+  return defs.length ? `\n\n${defs.join('\n')}\n\n` : '\n\n';
+}
+
+/**
+ * The separator to emit after block `index`. The stored separator may only be reused when BOTH
+ * neighbours are unchanged: a table followed by a line without a blank line swallows it as a row,
+ * and two same-family lists on consecutive lines are one list. Review round 3 (H4): the next block
+ * must be preserved too, and a table is always followed by a blank line.
+ */
 function boundaryAfter(blocks: JSONContent[], index: number, preserved: boolean): string {
   const block = blocks[index]!;
   const last = index === blocks.length - 1;
-  if (preserved) {
-    const { sep, nextId } = (block.attrs ?? {}) as Record<string, unknown>;
-    if (!last) {
-      // Both sides must still name each other: a block inserted (or pasted) between them breaks
-      // the pair even if one id happens to match.
-      const next = blocks[index + 1]!;
+  const next = last ? null : blocks[index + 1]!;
+  const { sep, nextId } = (block.attrs ?? {}) as Record<string, unknown>;
+  const stored = typeof sep === 'string' ? sep : null;
+  if (preserved && stored !== null) {
+    if (last) {
+      // The block was last at parse time and still is: keep its trailing whitespace (and any
+      // reference definitions that follow it), even if it was edited — they are invisible to the
+      // document and must survive, or existing reference links stop resolving.
+      if (nextId === null) return stored;
+    } else {
+      // Both sides must still name each other AND still match their own source; a block inserted
+      // or edited between them breaks the pair even if one id happens to match.
       const stillNeighbours =
         nextId != null &&
-        next.attrs?.blockId === nextId &&
-        next.attrs?.prevId === block.attrs?.blockId;
-      if (stillNeighbours && typeof sep === 'string') return sep;
-    } else if (nextId === null && typeof sep === 'string') {
-      return sep; // the block was last at parse time and still is: keep its trailing whitespace
+        next!.attrs?.blockId === nextId &&
+        next!.attrs?.prevId === block.attrs?.blockId;
+      // A table keeps swallowing lines until a blank one (even a heading becomes a row), so it is
+      // only safe to reuse its separator when the stored separator has a blank line in it.
+      const safeNeighbour = block.type !== 'table' || /\n\s*\n/.test(stored);
+      if (stillNeighbours && safeNeighbour && blockPreservesSource(next!)) return stored;
     }
   }
-  return last ? '' : '\n\n';
+  if (last) {
+    // A trailing reference definition is not part of any block: keep it even when the last block
+    // changed, so links that resolve today never turn into literal Markdown on the next load.
+    return definitionLines(stored).length ? `\n\n${definitionLines(stored).join('\n')}` : '';
+  }
+  return withDefinitions(stored);
 }
 
 /**
  * Serialize a ProseMirror JSON document to Markdown. Each unchanged top-level block is emitted
  * verbatim from its captured `attrs.src`; edited blocks are re-serialized. Separators are reused
- * only between the same neighbours they were measured between, so an inserted or deleted block
- * can never merge two survivors (review: "first" + Enter + "second" must be two paragraphs).
+ * only between the same unchanged neighbours they were measured between, so an inserted, deleted
+ * or edited block can never merge two survivors (review: "first" + Enter + "second" must be two
+ * paragraphs).
  */
 export function docToMarkdown(doc: JSONContent): string {
   const blocks = doc.content ?? [];
@@ -1189,6 +1226,98 @@ export function docToMarkdown(doc: JSONContent): string {
     out += boundaryAfter(blocks, i, preserved);
   }
   return out;
+}
+
+/** Every reference-definition line carried by the document's preserved separators, in order. */
+function documentDefinitions(blocks: JSONContent[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const block of blocks) {
+    const attrs = (block.attrs ?? {}) as Record<string, unknown>;
+    for (const line of [...definitionLines(attrs.lead), ...definitionLines(attrs.sep)]) {
+      if (!seen.has(line)) {
+        seen.add(line);
+        out.push(line);
+      }
+    }
+  }
+  return out;
+}
+
+/** Serialize with NO source preservation, keeping reference definitions at the end. */
+function serializeFreshDoc(doc: JSONContent): string {
+  const blocks = doc.content ?? [];
+  const body = serializeBlocks(blocks);
+  const defs = documentDefinitions(blocks);
+  return defs.length ? (body ? `${body}\n\n${defs.join('\n')}` : defs.join('\n')) : body;
+}
+
+/** A whole-document JSON value without bookkeeping attributes, for exact equivalence. */
+export function canonicalDocJson(doc: JSONContent): string {
+  const normalised = mergeAdjacentText(doc);
+  return JSON.stringify(
+    canonicalValue({
+      type: normalised.type,
+      text: normalised.text,
+      attrs: normalised.attrs,
+      marks: normalised.marks,
+      content: normalised.content,
+    }),
+  );
+}
+
+/** Whether two documents hold the same content, ignoring source-meta and transient attributes. */
+export function docsEquivalent(a: JSONContent, b: JSONContent): boolean {
+  return canonicalDocJson(a) === canonicalDocJson(b);
+}
+
+export interface VerifiedDocMarkdown {
+  markdown: string;
+  /** The preserved serialisation did not re-parse to the same document; the fresh one was used. */
+  fallback: boolean;
+  /** Even the fresh serialisation differs: a serializer bug. Kept, but flagged for tests. */
+  mismatch: boolean;
+}
+
+/** Test-visible counters; `mismatch` means the fallback serializer itself lost content. */
+export const serializationStats = { attempts: 0, fallback: 0, mismatch: 0 };
+
+export function resetSerializationStats(): void {
+  serializationStats.attempts = 0;
+  serializationStats.fallback = 0;
+  serializationStats.mismatch = 0;
+}
+
+function reparsesTo(markdown: string, doc: JSONContent): boolean {
+  try {
+    return docsEquivalent(markdownToDoc(markdown), doc);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Review round 3 (H4b): always re-parse what is about to be saved and compare it to the editor
+ * document. If the source-preserving serialisation changed structure (a swallowed table row, two
+ * merged lists, a lost reference definition) re-serialise the whole document with NO preservation;
+ * if even that differs, keep it but log a dev warning and count it, so the serializer bug is
+ * visible to tests instead of silently corrupting a save. Runs off the keystroke path: the page's
+ * `preparePatch` hook calls it on the autosave debounce and before every keepalive PATCH.
+ */
+export function verifyDocMarkdown(
+  doc: JSONContent,
+  first: string = docToMarkdown(doc),
+): VerifiedDocMarkdown {
+  serializationStats.attempts += 1;
+  if (reparsesTo(first, doc)) return { markdown: first, fallback: false, mismatch: false };
+  serializationStats.fallback += 1;
+  const fresh = serializeFreshDoc(doc);
+  if (reparsesTo(fresh, doc)) return { markdown: fresh, fallback: true, mismatch: false };
+  serializationStats.mismatch += 1;
+  console.warn(
+    'notes: the Markdown serializer could not represent this document exactly; saving the fallback form',
+  );
+  return { markdown: fresh, fallback: true, mismatch: true };
 }
 
 /**

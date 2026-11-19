@@ -218,6 +218,7 @@ export function Toolbar({
     // document changed (stale selection), verifies the token survives a save, and wipes undo
     // history so plaintext can't be restored.
     const outcome = await censorSelection(editor, from, to, callbacks.onCensor);
+    callbacks.onCensorSettled?.(outcome);
     if (outcome === 'aborted') {
       setCensorError(
         t('notes.editor.censorAborted', {
