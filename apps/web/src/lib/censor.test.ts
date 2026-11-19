@@ -45,6 +45,7 @@ function nodeEncrypt(text: string, pw: string, opts: { aad?: Buffer; key?: Buffe
 }
 function nodeDecrypt(token: string, pw: string): string {
   const { salt, iv, ct } = parseToken(token)!;
+  // nosemgrep: javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length -- test-only reference decryptor; the tag passed below is always exactly 16 bytes
   const decipher = createDecipheriv('aes-256-gcm', nodeKey(pw, salt), iv);
   decipher.setAAD(V1.aad);
   decipher.setAuthTag(ct.subarray(ct.length - 16));

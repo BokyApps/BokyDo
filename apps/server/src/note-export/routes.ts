@@ -117,6 +117,7 @@ export function registerNoteExportRoutes(app: FastifyInstance, deps: NoteExportR
       }
       setHeaders(reply, output);
       output.done();
+      // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write -- a download: fixed non-HTML content type, attachment disposition, nosniff and a sandbox CSP
       return reply.send(body);
     }
 
