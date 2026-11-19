@@ -210,19 +210,45 @@ export class ExportSemaphore {
     private readonly markdownLimit = 2,
   ) {}
 
+  /** Planned peak memory of the exports in flight, reserved at admission. */
+  private reservedBytes = 0;
+
   /** The release function, or `null` when this caller has to wait (and is refused). */
   tryAcquire(userId: string, kind: ExportKind = 'file'): (() => void) | null {
+    const admitted = this.tryAdmit(userId, kind);
+    return typeof admitted === 'function' ? admitted : null;
+  }
+
+  /**
+   * Take a slot and reserve this export's planned peak in one synchronous step, so overlapping
+   * requests cannot all spend the same headroom: each new export must fit beside the peaks
+   * already reserved, not just beside the current RSS. The reservation is held until the release
+   * function runs (worker exit, or the end of a Markdown zip). Conservative on purpose: RSS
+   * already includes running workers, so an export may be refused that would have fitted.
+   */
+  tryAdmit(
+    userId: string,
+    kind: ExportKind = 'file',
+    memory?: { limitBytes: number; rssBytes: number; peakBytes: number; fraction: number },
+  ): (() => void) | 'busy' | 'overloaded' {
     const current = this.perUser.get(userId) ?? 0;
-    if (current >= this.perUserLimit) return null;
+    if (current >= this.perUserLimit) return 'busy';
     if (
       kind === 'file'
         ? this.activeFiles >= this.fileLimit
         : this.activeMarkdown >= this.markdownLimit
     )
-      return null;
+      return 'busy';
+    const reserve = memory?.peakBytes ?? 0;
+    if (
+      memory &&
+      memory.rssBytes + this.reservedBytes + reserve > memory.limitBytes * memory.fraction
+    )
+      return 'overloaded';
     this.perUser.set(userId, current + 1);
     if (kind === 'file') this.activeFiles++;
     else this.activeMarkdown++;
+    this.reservedBytes += reserve;
     let released = false;
     return () => {
       if (released) return;
@@ -232,7 +258,13 @@ export class ExportSemaphore {
       else this.perUser.set(userId, left);
       if (kind === 'file') this.activeFiles--;
       else this.activeMarkdown--;
+      this.reservedBytes -= reserve;
     };
+  }
+
+  /** Planned peak bytes currently reserved: for tests and diagnostics. */
+  get reserved(): number {
+    return this.reservedBytes;
   }
 
   /** Exports in flight: for tests and diagnostics. */
