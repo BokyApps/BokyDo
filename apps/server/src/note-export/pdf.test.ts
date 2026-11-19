@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseNoteBody } from './ast.js';
 import type { LoadedImage } from './images.js';
-import { ExportDeadline, ExportTimeoutError } from './limits.js';
+import { ExportDeadline, ExportTimeoutError, TooLargeError } from './limits.js';
 import { buildPdf, pdfSafe } from './pdf.js';
 import { PNG_1X1, PNG_RGB, collect, makeJpeg, makePng } from './test-support.js';
 
@@ -350,6 +350,17 @@ describe('note export PDF', () => {
     const { pdf } = await render(body, 'Long');
     const pages = pdf.toString('latin1').match(/\/Type \/Page/g) ?? [];
     expect(pages.length).toBeGreaterThan(1);
+  });
+
+  it('aborts the render as soon as pdfkit produces more than the output budget', async () => {
+    const doc = parseNoteBody(BODY);
+    const stream = buildPdf(
+      'Too big',
+      doc.blocks,
+      { images, fileNames },
+      { compress: false, maxOutputBytes: 256 },
+    );
+    await expect(collect(stream)).rejects.toBeInstanceOf(TooLargeError);
   });
 
   it('abandons a render that has run past its deadline', () => {

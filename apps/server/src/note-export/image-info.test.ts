@@ -167,6 +167,20 @@ describe('PNG structure', () => {
     expect(readPngStructure(makePng({ colorType: 0, bitDepth: 4 }))).not.toBeNull();
   });
 
+  it('rejects a PNG with more than 10,000 chunks without walking them all', () => {
+    const extra = Array.from({ length: 10_001 }, () => ({ type: 'tEXt', data: Buffer.alloc(0) }));
+    const bomb = makePng({ colorType: 2, extra });
+    const started = performance.now();
+    expect(readPngStructure(bomb)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
+    // 9,997 ancillary chunks plus IHDR/IDAT/IEND is exactly at the 10,000 cap, and still valid.
+    const atCap = makePng({
+      colorType: 2,
+      extra: Array.from({ length: 9_997 }, () => ({ type: 'tEXt', data: Buffer.alloc(0) })),
+    });
+    expect(readPngStructure(atCap)).not.toBeNull();
+  });
+
   it('accepts ancillary chunks but rebuilds a PDF PNG from IHDR/IDAT/IEND only', () => {
     const text = Buffer.from(`Comment\0${'x'.repeat(256 * 1024)}`, 'latin1');
     const file = makePng({ colorType: 2, extra: [{ type: 'tEXt', data: text }] });

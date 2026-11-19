@@ -8,11 +8,12 @@ REST clients and MCP get byte-identical files. The design lives in
 
 The request thread never parses attacker-controlled Markdown. Each export spawns one
 `node:worker_threads` Worker (`src/note-export/worker.ts`) with
-`resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 }`.
+`resourceLimits: { maxOldGenerationSizeMb: 192, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 }`.
 Everything that can be inflated by a note body runs there: the `markdown-it` parse, the AST and
-limit walk, the `docx` packer and `pdfkit`. The main thread keeps the database snapshot, the file
-probes, the image validation and the zip stream, and enforces every limit the worker cannot be
-trusted to enforce about its own output.
+limit walk, the `docx` packer and `pdfkit`. Full image validation (PNG chunk/CRC walk, JPEG
+marker walk) also runs there; the main thread only stats the files and reads their bytes. The
+main thread keeps the database snapshot, the file probes, the byte reads, and the zip stream,
+and enforces every limit the worker cannot be trusted to enforce about its own output.
 
 The worker is started and supervised by `src/note-export/runner.ts`. Protocol:
 
@@ -24,7 +25,10 @@ The worker is started and supervised by `src/note-export/runner.ts`. Protocol:
    PDF answer with 1 MiB chunks, each waiting for an `ack` from the main thread before the next
    is produced, then a final `done`. Image `ArrayBuffer`s are transferred in, chunk
    `ArrayBuffer`s are transferred out, and the main thread counts every chunk against the
-   100 MB output cap.
+   100 MB output cap. The worker enforces the same cap while it generates: pdfkit's output is
+   counted as `data` arrives and the document is destroyed the moment it passes 100 MB, and a
+   DOCX is refused from a conservative pre-pack estimate (image bytes + 4 × text + 1 MB) and
+   checked again against its real packed size.
 3. `error`: `too_large`, `timeout` or `internal`. Before the first chunk the route maps that to
    413, 503 or 500; after it, the response stream is destroyed.
 
@@ -32,9 +36,12 @@ The 30 s deadline starts when the semaphore slot is acquired, not when the worke
 expiry the main thread calls `worker.terminate()` and destroys the response. A client disconnect —
 including one during analyse, before any header — aborts an `AbortController` and terminates the
 worker at once. The semaphore slot is released from the worker's `'exit'` handler on every path,
-so a killed-but-not-yet-exited thread cannot hold it. A worker that exits unexpectedly becomes
-`413 too_large` when it ran out of memory (`ERR_WORKER_OUT_OF_MEMORY`) and `500 internal_error`
-otherwise; neither can become an uncaught exception or an unhandled rejection.
+so a killed-but-not-yet-exited thread cannot hold it, and admission is checked before the slot is
+taken: if `rss + 400 MiB` would pass 85 % of the cgroup v2 `memory.max` (or total RAM when the
+limit is `max`), the request is refused with `503 export_busy` and `Retry-After: 30`. A worker
+that exits unexpectedly becomes `413 too_large` when it ran out of memory
+(`ERR_WORKER_OUT_OF_MEMORY`) and `500 internal_error` otherwise; neither can become an uncaught
+exception or an unhandled rejection.
 
 Under vitest and `tsx watch` the worker entry is `worker-boot.ts`, which loads the real
 `worker.ts` through tsx (`tsImport`). A built server spawns the sibling `worker.js` that
@@ -64,15 +71,16 @@ bytes are then read from disk one file at a time; the transaction is about the r
 
 ## Status codes
 
-| Status | `error`                 | When                                                                                |
-| ------ | ----------------------- | ----------------------------------------------------------------------------------- |
-| 400    | `validation_failed`     | the id is not a UUID, or `format` is not `md`, `docx` or `pdf`                      |
-| 403    | `project_limited_token` | a project-limited bearer token called the route                                     |
-| 404    | `not_found`             | no such note, or not the caller's                                                   |
-| 413    | `too_large`             | a body/document limit, the 50 MB image budget, worker OOM, or the 100 MB output cap |
-| 429    | `export_busy`           | this user already has one export running, or three in the process                   |
-| 500    | `internal_error`        | the worker died for any other reason, before headers                                |
-| 503    | `export_timeout`        | rendering passed the 30 s deadline                                                  |
+| Status | `error`                 | When                                                                                           |
+| ------ | ----------------------- | ---------------------------------------------------------------------------------------------- |
+| 400    | `validation_failed`     | the id is not a UUID, or `format` is not `md`, `docx` or `pdf`                                 |
+| 403    | `project_limited_token` | a project-limited bearer token called the route                                                |
+| 404    | `not_found`             | no such note, or not the caller's                                                              |
+| 413    | `too_large`             | a body/document limit, the 25 MB image budget, worker OOM, or the 100 MB output cap            |
+| 429    | `export_busy`           | this user already has one export running, one DOCX/PDF is running, or two Markdown exports are |
+| 500    | `internal_error`        | the worker died for any other reason, before headers                                           |
+| 503    | `export_busy`           | admitting this export would leave less than 15 % of the memory limit free (`Retry-After: 30`)  |
+| 503    | `export_timeout`        | rendering (or the zip producer) passed the 30 s deadline                                       |
 
 ## What each format does with a construct
 
@@ -178,18 +186,33 @@ written, so the Markdown and the archive agree:
 `safeEntryName` (in `src/zip/zip-writer.ts`) makes every entry safe on Windows as well as Unix:
 drive designators (`C:`) and backslashes never become a directory, `:` `*` `?` `"` `<` `>` `|` and
 control characters are removed or replaced, a name ending in a dot or space loses them, the
-reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, plus the
-superscript forms `COM¹`–`COM³` and `LPT¹`–`LPT³`) are prefixed with `_`. The device-name check
-uses the stem before the **first** dot (`COM1.backup.txt` is still `COM1`), and `..` segments are
-dropped. Each component is bounded to 200 UTF-8 bytes without splitting a character. The file id
-in `files/<id>-<name>` keeps two files with the same name apart.
+reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) are prefixed with
+`_`. The device-name check uses the stem before the **first** dot (`COM1.backup.txt` is still
+`COM1`), with trailing spaces and dots removed and NFKC applied first, so `COM¹`, `COM²`, `ＣＯＮ`
+and `con .txt` are caught too; `COM10` is not a device in any form. `..` segments are dropped.
+Each component is bounded to 200 UTF-8 bytes without splitting a character. The file id in
+`files/<id>-<name>` keeps two files with the same name apart. The same check is applied to the
+`Content-Disposition` filename, so a note titled `CON` downloads as `_CON.pdf`, not as a Windows
+device.
 
 The ZIP is written with `src/zip/zip-writer.ts`, the same streaming writer the account export
 uses. Each entry is one `stream/promises` `pipeline` (input → CRC counter → deflate → compressed
-counter → the shared output stream, `end: false`). That is one observed promise per entry: when
-the reader goes away, `pipeline` destroys the input and the compressor and rejects exactly once,
-instead of leaving a second `done` promise unobserved — which used to be able to terminate Node
-with an unhandled rejection.
+counter) into a **fresh `PassThrough` per entry**, and that pass-through is piped into the shared
+output with `end: false`. The entry wrapper is unpiped and destroyed in `finally`. The shared
+output therefore never gains a listener per entry — it carries one permanent `close`/`error`
+handler that tears the active entries down — so a 10,000-entry archive has the same
+`listenerCount('close')` as a one-entry archive and can never trip
+`MaxListenersExceededWarning`. That is one observed promise per entry: when the reader goes away,
+`pipeline` destroys the input and the compressor and rejects exactly once, instead of leaving a
+second `done` promise unobserved — which used to be able to terminate Node with an unhandled
+rejection.
+
+The Markdown zip keeps the export slot after the render worker exits: it is released when the
+archive has been fully read (`'end'`) or torn down (`'close'`), never when the worker exits. The
+producer gets the request's disconnect signal and a timer at the export deadline; a stalled entry
+(no reader, no `'drain'`) is aborted by that timer, the zip stream is destroyed, and the route
+destroys the response. File entries are read 64 KiB at a time and check the signal and deadline
+before every read, so a disconnect stops reading rather than finishing the file first.
 
 ## Censored spans
 
@@ -206,17 +229,24 @@ validation, are embedded:
 - at most 10 MB per image,
 - at most 40 megapixels (read from the PNG IHDR or the JPEG SOF header before any decoder sees
   the bytes),
-- at most 50 MB of image bytes in one export (otherwise `413 too_large`); the budget is summed
+- at most 25 MB of image bytes in one export (otherwise `413 too_large`); the budget is summed
   from the declared sizes and again from the bytes actually read. Images are external buffers,
-  so they are not counted by the worker's 256 MB heap limit; they are transferred, not cloned.
+  so they are not counted by the worker's 192 MB heap limit; they are transferred, not cloned.
+
+The main thread does only what needs the filesystem: `stat` each candidate against the per-image
+and per-export budget, then one `fs.promises.readFile(path, { signal })` whose signal is aborted on
+a client disconnect, the export deadline, or a worker failure. A `stat`/read that says the file is
+gone skips it (`[image: name]`); an abort is thrown, never swallowed. The PNG chunk/CRC walk and
+the JPEG marker walk happen in the worker, after the bytes are transferred.
 
 **PNG** must be: a valid signature; a chunk walk where every chunk length fits in the bytes left
-and every chunk carries a CRC-32 that matches; `IHDR` first, with a bit depth the spec allows for
-that colour type (`0`: 1/2/4/8/16; `2`, `4`, `6`: 8/16; `3`: 1/2/4/8) and the usual
-compression/filter/interlace fields; at least one `IDAT` whose total is bounded by the raw scanline
-size plus zlib's small framing overhead; `IEND` last, with length zero and nothing after it. A bad
-CRC, a truncated chunk, a missing `IDAT`, a non-empty `IEND`, trailing bytes and absurd dimensions
-are all refused.
+and every chunk carries a CRC-32 that matches; at most 10,000 chunks; `IHDR` first, with a bit
+depth the spec allows for that colour type (`0`: 1/2/4/8/16; `2`, `4`, `6`: 8/16; `3`: 1/2/4/8)
+and the usual compression/filter/interlace fields; at least one `IDAT` whose total is bounded by
+the raw scanline size plus zlib's small framing overhead; `IEND` last, with length zero and nothing
+after it. A bad CRC, a truncated chunk, a missing `IDAT`, a non-empty `IEND`, trailing bytes and
+absurd dimensions are all refused. A file with 20,000 tiny chunks is refused after the 10,000th,
+without walking the rest.
 
 That is necessary because `pdfkit`'s `PNGImage` does not pass every PNG through: for alpha
 (colour types 4 and 6), indexed colour with `tRNS`, and interlaced files it calls png-js
@@ -246,9 +276,10 @@ disagree about the file.
 **JPEG** must have `SOI`, segment lengths that fit inside the file, and a `SOF` before the scan
 that carries sane dimensions. The `EOI` is located with a bounded marker walk through the
 entropy-coded data (skipping `FF 00` stuffing and `FF D0`–`FF D7` restart markers), and only the
-bytes through that first `EOI` are embedded. An Android Motion Photo's appended video is
-therefore ignored instead of being copied into the document; a JPEG with no `EOI` is still
-refused. `pdfkit` reads only the markers and passes the bytes through as `DCTDecode`.
+bytes through that first `EOI` are embedded. One walk both validates and finds the `EOI`, so a
+grammar JPEG is not scanned twice. An Android Motion Photo's appended video is therefore ignored
+instead of being copied into the document; a JPEG with no `EOI` is still refused. `pdfkit` reads
+only the markers and passes the bytes through as `DCTDecode`.
 
 An image that cannot be embedded is rendered as `[image: <name>]`. Images are scaled to the A4
 text column and never enlarged. PDF parses each file once (`doc.openImage`) and reuses the
@@ -262,10 +293,12 @@ duplicate drawing.
 - **Tables.** Column widths come from the content (each column's natural width, scaled into the
   text column with a minimum), cell text wraps in its column, rows break across pages and the
   header row is repeated at the top of every page the table continues on. A row taller than a
-  page is drawn over several segments rather than overflowing the margin. A table whose minimum
-  column widths cannot fit the page is rendered as one `header: value` line per non-empty cell
-  instead of a grid, so nothing overflows. A header row taller than a page is truncated to the
-  page with `…` on the last line of each cell, so it can still be repeated.
+  page is drawn over several segments rather than overflowing the margin. Minimum widths are
+  checked **before** any width correction: if `columns × 24 pt` cannot fit the text column, the
+  table is rendered as one `header: value` line per non-empty cell instead of a grid, so nothing
+  overflows. A header row taller than a page is truncated to the page with `…` on the last line of
+  each cell, leaving room for at least one body line, so it can still be repeated and a row is
+  never starved off a page.
 - **Links.** A link annotation covers a contiguous run of text with the same destination
   (`doc.link`), not each word, which keeps the annotation count proportional to the links and not
   to the words.
@@ -285,32 +318,58 @@ duplicate drawing.
 
 ## Limits and memory
 
-| Limit                      | Value                             | Enforced where                                              |
-| -------------------------- | --------------------------------- | ----------------------------------------------------------- |
-| Body lines                 | 20,000                            | one linear pass before `md.parse` (main and worker)         |
-| Body `                     | ` characters                      | 50,000                                                      | same pass — a sparse-table bomb fails in milliseconds |
-| Markdown tokens            | 200,000                           | right after `md.parse`, before the document model           |
-| Blocks (incl. rows, items) | 50,000                            | after parsing, before rendering                             |
-| Table cells                | 100,000                           | same walk                                                   |
-| Inline runs                | 500,000                           | same walk                                                   |
-| Image placements           | 500                               | same walk (a file placed 500 times is 500)                  |
-| Image bytes                | 50 MB total, 10 MB each           | before and while reading the files                          |
-| Link annotations (PDF)     | 20,000                            | while drawing, after coalescing                             |
-| Output bytes               | 100 MB                            | worker chunks counted on the main thread; zip stream capped |
-| Render time                | 30 s                              | from slot acquisition; the worker is terminated             |
-| Worker heap                | 256 MB (+32 MB young, 4 MB stack) | `resourceLimits`; OOM becomes 413                           |
-| Concurrent exports         | 1/user, 3/process                 | `429 export_busy`                                           |
+| Limit                      | Value                             | Enforced where                                                               |
+| -------------------------- | --------------------------------- | ---------------------------------------------------------------------------- |
+| Body lines                 | 20,000                            | one linear pass before `md.parse`; CRLF counts once, a lone CR is a break    |
+| Body `\|` characters       | 50,000                            | same pass — a sparse-table bomb fails in milliseconds                        |
+| Markdown tokens            | 200,000                           | right after `md.parse`, before the document model                            |
+| Blocks (incl. rows, items) | 50,000                            | after parsing, before rendering                                              |
+| Table cells                | 100,000                           | same walk                                                                    |
+| Inline runs                | 500,000                           | same walk                                                                    |
+| Image placements           | 500                               | same walk (a file placed 500 times is 500)                                   |
+| Image bytes                | 25 MB total, 10 MB each           | declared sizes and the real `stat`/read sizes                                |
+| PNG chunks                 | 10,000                            | inside the structural walk in the worker                                     |
+| Link annotations (PDF)     | 20,000                            | while drawing, after coalescing                                              |
+| Output bytes               | 100 MB                            | inside the worker while generating, and the main thread's chunk counter      |
+| Render time                | 30 s                              | from slot acquisition; worker and zip producer are destroyed at the deadline |
+| Worker heap                | 192 MB (+16 MB young, 4 MB stack) | `resourceLimits`; OOM becomes 413                                            |
+| Concurrent exports         | 1 DOCX/PDF **or** 2 Markdown      | `429 export_busy`; every kind is also 1 per user                             |
+| Admission                  | rss + 400 MB ≤ 85 % of limit      | before the slot; `503 export_busy` with `Retry-After: 30`                    |
 
 The token cap has to bite before the block cap can be dodged: markdown-it is linear, but a body of
 one-character list items produces seven tokens per two blocks, so a body that is under the block
 cap can still be hundreds of thousands of tokens. Counting `md.parse`'s output first is cheap and
 happens before the walker. The line and pipe caps run _before_ the parser and are the cheap path
-for a sparse table (tens of thousands of empty cells) or a 100,000-line body; the isolate's 256 MB
-heap is the backstop for anything the counters cannot predict.
+for a sparse table (tens of thousands of empty cells) or a body of 20,000 `\n`, `\r\n` or `\r`
+separated lines; the isolate's 192 MB heap is the backstop for anything the counters cannot
+predict.
 
 Markdown is a string; the zip and PDF are streamed. DOCX is the one format whose in-memory size is
-the whole archive, produced inside the worker and bounded by the 50 MB image budget and the 256 MB
-heap.
+the whole archive, produced inside the worker. Before packing, `estimateDocxBytes` refuses the
+document when `image bytes + 4 × text bytes + 1 MB` already passes the output budget; after
+packing, the real size is counted again as the archive leaves the packer.
+
+### Planned peak and residual risk
+
+One admitted DOCX/PDF export is planned at **400 MiB** of resident memory: the 192 MB worker heap
+(plus young generation and the isolate's own structures), one copy of the image bytes on the main
+thread while they are read and transferred (≤ 25 MB), the worker's validated image buffers and
+pdfkit/docx structures, a 25 MB DOCX archive or streamed PDF, and the 1 MiB chunk in flight.
+
+Admission refuses a new export when `rss + 400 MiB` would exceed 85 % of `/sys/fs/cgroup/memory.max`
+(falling back to `os.totalmem()` when the file says `max` or does not exist). That is deliberately
+conservative: the limit is per process, so the check is a best-effort guard, not a reservation,
+and concurrent non-export requests still allocate.
+
+**Residual risk:** a worker's `resourceLimits` bound the V8 heap exactly, but not native memory.
+zlib, pdfkit's image handling, `docx`'s zip writer and the thread's own stack can allocate outside
+the counted heap, and a 25 MB image copied through several native buffers does not show up in
+`maxOldGenerationSizeMb`. The admission threshold and the process-level RSS check are what cover
+that gap; they are heuristics, not a hard per-export cap. The measured peak for the heaviest
+allowed DOCX and PDF (25 MB of images, ~10,000 and ~16,000 table cells respectively) is asserted
+under 500 MiB by `src/note-export/memory.test.ts`, which samples `process.memoryUsage().rss` every
+50 ms. The docx cell count is lower because the library's per-cell object graph is what exhausts
+the 192 MB heap first (16,000 cells already OOM, which becomes 413).
 
 ## Not letting a renderer crash the process
 
@@ -337,11 +396,15 @@ The worker is the containment boundary, not a set of per-renderer patches:
 The route listens on `reply.raw` `'close'` twice: before the worker output exists, the handler
 aborts an `AbortController` that the worker supervisor observes (killing the thread even during
 parsing or image loading); after headers, the byte-cap transformer's close handler destroys the
-source stream, which terminates the worker. The zip producer also observes close/drain through its
-single pipeline, so no producer can hang forever on a buffer nobody reads. On every path the
-slot is released only from the worker's `'exit'` handler, and for DOCX/PDF the response's final
-chunk is held back until that exit, so a client that reads the whole body immediately after sees
-the slot free for its next export.
+source stream, which terminates the worker. The same controller also aborts the image reads
+(`fs.promises.readFile` with the signal) and, for a Markdown zip, the archive producer, which
+checks it before every 64 KiB file read. The zip producer also observes close/drain through its
+entry pipeline, so no producer can hang forever on a buffer nobody reads; a timer at the export
+deadline destroys a stalled producer even when it is waiting on a reader. The DOCX/PDF slot is
+released only from the worker's `'exit'` handler, and the response's final chunk is held back until
+that exit, so a client that reads the whole body immediately after sees the slot free. A Markdown
+zip keeps its slot until the stream has ended or been destroyed, not merely until the render
+worker exits, because the archive read is the slow part.
 
 ## PDF font limitation
 
@@ -363,28 +426,40 @@ both `Helvetica`-substitute and `Courier`-substitute use.
   checked before the document model, the block count.
 - **image-info** — PNG/JPEG header reading, the full PNG chunk walk (CRC, chunk bounds, IHDR
   rules, `IDAT`/`IEND`, trailing bytes, 16-bit/interlaced/`tRNS`/`PLTE`), JPEG markers and `EOI`.
-- **images** — which files are loaded for which format, the per-image and total budgets, a
-  corrupt-CRC file never reaching a decoder.
-- **markdown** — the writer, fence selection, the `html: true` reparse, remote images as links,
-  unavailable files.
+- **images** — which files are loaded, the per-image and total budgets from declared and real
+  sizes, a missing file or a directory skipped, and an abort between reads stopping the rest.
+- **image-info** — PNG/JPEG header reading, the full PNG chunk walk (CRC, chunk bounds, IHDR
+  rules, `IDAT`/`IEND`, trailing bytes, 16-bit/interlaced/`tRNS`/`PLTE`, the 10,000-chunk cap),
+  JPEG markers and `EOI`.
+- **markdown** — the writer, fence selection, the `html: true` reparse (including a `|` inside a
+  table-cell code span), remote images as links, unavailable files.
 - **docx** — a real archive whose `word/document.xml`, `numbering.xml` and media entries are
   inspected, ordered-list starts, one media entry for a file placed twice with a distinct
-  `wp:docPr` id per placement, inline images, the deadline.
+  `wp:docPr` id per placement, inline images, the pre-pack size estimate, the deadline.
 - **pdf** — uncompressed content streams: constructs, coalesced link annotations, the annotation
   cap, an alpha PNG rendered as text even when unvalidated, a 256 KiB `tEXt` PNG rebuilt and
   embedded, a motion-photo JPEG embedded only through its EOI, file links as names, table wrapping
   and page breaks with a repeated header, the wide-table `header: value` fallback, the truncated
-  tall header, the deadline.
+  tall header, the deadline, the output cap aborting the render.
 - **worker** — the thread boundary itself: live Markdown/PDF through the ack protocol; a sparse
   table and a 512 KiB list refused quickly; injected OOM → 413 and a second worker succeeding;
   an injected throw; the deadline terminating a slow render; a consumer disconnect terminating the
-  worker; the output cap; no unhandled rejection on any of those paths.
+  worker; the output cap; image validation in the worker (a bad CRC never reaches DOCX, a
+  20,000-chunk PNG is refused quickly); no unhandled rejection on any of those paths.
+- **memory** — the heaviest allowed DOCX and PDF (25 MB of images; 9,600 cells for DOCX, 16,000
+  for PDF) run for real, with RSS sampled every 50 ms and the peak delta asserted under 500 MiB.
 - **routes** — the HTTP surface against real Postgres: ownership, archived/trashed notes, scopes,
   project-limited tokens, hostile titles, redacted title/filenames in all three formats (including
   a percent-encoded title and a filename with a real token), the zip layout, missing and unreadable
-  files, short limits for `413`/`429`/`503`, an OOM 413, an internal 500, a fast sparse-table 413,
-  a 512 KiB list, and client disconnects before and during streaming.
+  files, short limits for `413`/`429`/`503`, the memory-admission `503 export_busy` with
+  `Retry-After`, an OOM 413, an internal 500, a fast sparse-table 413, a 512 KiB list, a Markdown
+  zip that holds its slot until it is read, a stalled zip aborted at the deadline, a disconnect
+  stopping file reads, the Windows device name in `Content-Disposition`, and client disconnects
+  before and during streaming.
 
-`apps/server/src/zip/zip-writer.test.ts` covers the entry-name rules (including first-dot device
-names and superscript digits), a writer whose reader disappears mid-entry, and the
-`unhandledRejection` spy that proves a destroyed output rejects once and leaves nothing behind.
+`apps/server/src/zip/zip-writer.test.ts` covers the entry-name rules (first-dot device names,
+NFKC-folded superscripts and full-width letters), 100 entries leaving the shared output's
+`listenerCount('close')` unchanged with no `MaxListenersExceededWarning`, a writer whose reader
+disappears mid-entry, a disconnect signal stopping a file read after one chunk, a stalled producer
+aborted by its deadline, and the `unhandledRejection` spy that proves a destroyed output rejects
+once and leaves nothing behind.

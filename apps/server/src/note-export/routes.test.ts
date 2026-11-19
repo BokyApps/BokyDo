@@ -11,8 +11,13 @@ import { noteFiles, notes } from '../db/schema.js';
 import { Client, createUser, testApp, type TestApp } from '../test/app.js';
 import { TEST_DATABASE_URL } from '../test/db.js';
 import { cmd, id as newId, SyncUser } from '../test/sync.js';
-import { runNoteExport } from './export.js';
-import { exportSemaphore, type ExportLimits } from './limits.js';
+import { ExportBusyError, runNoteExport } from './export.js';
+import {
+  ExportSemaphore,
+  ExportTimeoutError,
+  exportSemaphore,
+  type ExportLimits,
+} from './limits.js';
 import { capOutputBytes, registerNoteExportRoutes } from './routes.js';
 import type { NoteExportInternal } from './runner.js';
 import { PNG_1X1, PNG_RGB, collect, makePng, readZipEntries, zipText } from './test-support.js';
@@ -128,6 +133,7 @@ async function limitedApp(
   userId: string,
   limits: Partial<ExportLimits>,
   internal?: NoteExportInternal,
+  memory?: { memoryLimitBytes?: () => number; rssBytes?: () => number },
 ): Promise<FastifyInstance> {
   const app = Fastify();
   app.decorateRequest('session', null);
@@ -140,6 +146,8 @@ async function limitedApp(
     store,
     limits,
     ...(internal ? { internal } : {}),
+    ...(memory?.memoryLimitBytes ? { memoryLimitBytes: memory.memoryLimitBytes } : {}),
+    ...(memory?.rssBytes ? { rssBytes: memory.rssBytes } : {}),
   });
   await app.ready();
   return app;
@@ -554,17 +562,193 @@ describe.skipIf(!TEST_DATABASE_URL)('note export API', () => {
     expect((await exportNote(alice, id)).statusCode).toBe(200);
   });
 
-  it('answers 429 export_busy once three exports are running in the process', async () => {
+  it('answers 429 export_busy once one DOCX/PDF export is running in the process', async () => {
     const alice = await person('alice');
     const id = await createNote(alice, { body: 'Hello' });
-    const others = ['u1', 'u2', 'u3'].map((name) => exportSemaphore.tryAcquire(name));
+    // DOCX/PDF are the heavy pool: one globally, whatever the user.
+    const heavy = exportSemaphore.tryAcquire('u1', 'file');
+    expect(heavy).not.toBeNull();
+    try {
+      expect((await exportNote(alice, id, 'pdf')).statusCode).toBe(429);
+      expect((await exportNote(alice, id, 'docx')).statusCode).toBe(429);
+      // Markdown is a separate pool, so it still runs (one per user is respected separately).
+      expect((await exportNote(alice, id, 'md')).statusCode).toBe(200);
+    } finally {
+      heavy?.();
+    }
+  });
+
+  it('allows two Markdown exports in the process but not a third', async () => {
+    const alice = await person('alice');
+    const id = await createNote(alice, { body: 'Hello' });
+    const others = ['u1', 'u2'].map((name) => exportSemaphore.tryAcquire(name, 'markdown'));
     expect(others.every((release) => release !== null)).toBe(true);
     try {
-      const response = await exportNote(alice, id);
-      expect(response.statusCode).toBe(429);
+      // Two Markdown exports are already running, so Alice's Markdown is refused…
+      expect((await exportNote(alice, id, 'md')).statusCode).toBe(429);
+      // …while the heavy pool is untouched.
+      expect((await exportNote(alice, id, 'pdf')).statusCode).toBe(200);
     } finally {
       for (const release of others) release?.();
     }
+  });
+
+  it('answers 503 export_busy with Retry-After when the memory headroom is gone', async () => {
+    const alice = await person('alice');
+    const id = await createNote(alice, { body: 'Hello' });
+    const lowMemory = await limitedApp(alice.id, {}, undefined, {
+      // 400 MiB planned peak + 512 MiB RSS against an 800 MiB limit: 912 > 680.
+      memoryLimitBytes: () => 800 * 1024 * 1024,
+      rssBytes: () => 512 * 1024 * 1024,
+    });
+    try {
+      const response = await lowMemory.inject({
+        method: 'GET',
+        url: `/api/v1/notes/${id}/export?format=pdf`,
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: 'export_busy' });
+      expect(response.headers['retry-after']).toBe('30');
+    } finally {
+      await lowMemory.close();
+    }
+
+    const roomy = await limitedApp(alice.id, {}, undefined, {
+      memoryLimitBytes: () => 16 * 1024 * 1024 * 1024,
+      rssBytes: () => 256 * 1024 * 1024,
+    });
+    try {
+      const response = await roomy.inject({
+        method: 'GET',
+        url: `/api/v1/notes/${id}/export?format=pdf`,
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await roomy.close();
+    }
+  });
+
+  it('applies the Windows device-name check to the Content-Disposition filename too', async () => {
+    const alice = await person('alice');
+    for (const [title, expected] of [
+      ['CON', '_CON.md'],
+      ['com¹', '_com¹.md'],
+      ['ＣＯＮ', '_ＣＯＮ.md'],
+    ] as const) {
+      const id = await createNote(alice, { title, body: 'Hello' });
+      const response = await exportNote(alice, id, 'md');
+      expect(response.statusCode).toBe(200);
+      const header = response.headers['content-disposition'] ?? '';
+      const marker = "filename*=UTF-8''";
+      const encoded = header.slice(header.indexOf(marker) + marker.length);
+      expect(decodeURIComponent(encoded)).toBe(expected);
+    }
+  });
+
+  it('holds the Markdown zip slot until the archive has been read', async () => {
+    const alice = await person('alice');
+    const noteId = await createNote(alice, { title: 'Zip slot', body: '' });
+    const fileId = await addFile(alice, noteId, PNG_1X1, 'shot.png', 'image/png');
+    await t.db.db
+      .update(notes)
+      .set({ body: `[shot](/api/v1/note-files/${fileId})\n` })
+      .where(eq(notes.id, noteId));
+
+    const semaphore = new ExportSemaphore();
+    const deps = { db: t.db.db, store, semaphore };
+    const first = await runNoteExport(deps, { noteId, userId: alice.id, format: 'md' });
+    if (typeof first.body === 'string') throw new Error('expected a zip stream');
+    expect(semaphore.running).toBe(1);
+    // The render worker has exited, but the archive has not been read: the slot is still held.
+    const busy = await runNoteExport(deps, { noteId, userId: alice.id, format: 'md' }).then(
+      () => null,
+      (err: Error) => err,
+    );
+    expect(busy).toBeInstanceOf(ExportBusyError);
+
+    await collect(first.body);
+    // The zip's `end` released the slot, without the caller having to call `done()`.
+    expect(semaphore.running).toBe(0);
+    const next = await runNoteExport(deps, { noteId, userId: alice.id, format: 'md' });
+    next.done();
+    expect(semaphore.running).toBe(0);
+  });
+
+  it('destroys a stalled Markdown zip at the deadline and frees the slot', async () => {
+    const alice = await person('alice');
+    const noteId = await createNote(alice, { title: 'Slow zip', body: '' });
+    const fileId = await addFile(alice, noteId, PNG_1X1, 'shot.png', 'image/png');
+    await t.db.db
+      .update(notes)
+      .set({ body: `[shot](/api/v1/note-files/${fileId})\n` })
+      .where(eq(notes.id, noteId));
+
+    const semaphore = new ExportSemaphore();
+    const deps = { db: t.db.db, store, semaphore, limits: { deadlineMs: 2500 } };
+    const output = await runNoteExport(deps, { noteId, userId: alice.id, format: 'md' });
+    const body = output.body;
+    if (typeof body === 'string') throw new Error('expected a zip stream');
+    // Nobody reads the archive: the producer finishes writing into its buffer and waits. The
+    // deadline timer aborts it and destroys the stream rather than leaving the slot held.
+    const error = await new Promise<Error>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('zip was not aborted at the deadline')),
+        6000,
+      );
+      body.once('error', (err: Error) => {
+        clearTimeout(timer);
+        resolve(err);
+      });
+    });
+    expect(error).toBeInstanceOf(ExportTimeoutError);
+    for (let attempt = 0; attempt < 100 && semaphore.running > 0; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(semaphore.running).toBe(0);
+  });
+
+  it('stops reading a Markdown zip’s files when the request disconnects', async () => {
+    const alice = await person('alice');
+    const noteId = await createNote(alice, { title: 'Disconnect', body: '' });
+    const fileId = await addFile(
+      alice,
+      noteId,
+      Buffer.alloc(4 * 1024 * 1024, 0x61),
+      'big.bin',
+      'application/octet-stream',
+    );
+    await t.db.db
+      .update(notes)
+      .set({ body: `[big](/api/v1/note-files/${fileId})\n` })
+      .where(eq(notes.id, noteId));
+
+    const semaphore = new ExportSemaphore();
+    const abort = new AbortController();
+    let reads = 0;
+    const output = await runNoteExport(
+      {
+        db: t.db.db,
+        store,
+        semaphore,
+        internal: {
+          onZipRead: () => {
+            reads++;
+            if (reads === 1) abort.abort(new Error('client went away'));
+          },
+        },
+      },
+      { noteId, userId: alice.id, format: 'md', signal: abort.signal },
+    );
+    if (typeof output.body === 'string') throw new Error('expected a zip stream');
+    const error = await collect(output.body).then(
+      () => null,
+      (err: Error) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    // The first 64 KiB chunk was read; the abort stopped the remaining 4 MiB.
+    expect(reads).toBe(1);
+    for (let attempt = 0; attempt < 100 && semaphore.running > 0; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(semaphore.running).toBe(0);
   });
 
   it('answers 503 export_timeout when rendering runs past the deadline', async () => {

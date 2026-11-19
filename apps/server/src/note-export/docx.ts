@@ -20,10 +20,10 @@ import {
   type NumberingDefinition,
   type ParagraphChild,
 } from 'docx';
-import { PassThrough, type Readable } from 'node:stream';
+import { PassThrough, Transform, type Readable } from 'node:stream';
 import type { Block, ListBlock, Run } from './ast.js';
 import type { LoadedImage } from './images.js';
-import type { ExportDeadline } from './limits.js';
+import { DEFAULT_EXPORT_LIMITS, TooLargeError, type ExportDeadline } from './limits.js';
 
 /**
  * DOCX export. Word has no concept of "censored", so a span is the placeholder text `█████`,
@@ -434,13 +434,104 @@ function blocksToDocx(
   return children;
 }
 
+/**
+ * A conservative upper bound on the archive `buildDocx` is about to produce, before the packer
+ * allocates it: every embedded image byte, four times the document's text (XML escaping and Word
+ * run properties can inflate text several times over), and a megabyte for the package parts. If
+ * this already passes the output budget, the packer never runs — which is the only way to stop a
+ * 100 MB DOCX from being built before the size is known.
+ */
+export function estimateDocxBytes(
+  blocks: readonly Block[],
+  images: ReadonlyMap<string, LoadedImage>,
+): number {
+  let text = 0;
+  const addText = (value: string) => {
+    text += Buffer.byteLength(value, 'utf8');
+  };
+  const scanRuns = (runs: readonly Run[]) => {
+    for (const run of runs) {
+      if (run.kind === 'text') addText(run.text);
+      else if (run.kind === 'image') addText(run.alt);
+    }
+  };
+  const walk = (list: readonly Block[]) => {
+    for (const block of list) {
+      switch (block.type) {
+        case 'heading':
+        case 'paragraph':
+          scanRuns(block.runs);
+          break;
+        case 'code':
+          addText(block.text);
+          addText(block.language);
+          break;
+        case 'quote':
+          walk(block.blocks);
+          break;
+        case 'list':
+          for (const item of block.items) walk(item.blocks);
+          break;
+        case 'table':
+          for (const cell of block.header) scanRuns(cell);
+          for (const row of block.rows) for (const cell of row) scanRuns(cell);
+          break;
+        case 'image':
+          addText(block.alt);
+          break;
+        case 'embed':
+          addText(block.label);
+          addText(block.openUrl);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  walk(blocks);
+  let imageBytes = 0;
+  for (const image of images.values()) imageBytes += image.bytes.length;
+  return imageBytes + 4 * text + 1024 * 1024;
+}
+
+/**
+ * Count the packed archive as it leaves the packer and fail once it passes the budget. The
+ * estimate above already refused anything obviously too large; this catches a document that
+ * inflated past it, before a byte reaches the main thread.
+ */
+function guardOutputBytes(source: Readable, maxBytes: number): Readable {
+  const out = new PassThrough();
+  // A consumer that has not attached yet must not turn an early failure into an uncaught event.
+  out.on('error', () => undefined);
+  let produced = 0;
+  const guard = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      produced += chunk.length;
+      if (produced > maxBytes) {
+        source.destroy();
+        callback(new TooLargeError(`export exceeded ${maxBytes} bytes`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  source.on('error', (err: Error) => out.destroy(err));
+  guard.on('error', (err: Error) => out.destroy(err));
+  source.pipe(guard).pipe(out);
+  return out;
+}
+
 /** Build a DOCX document as a readable stream (the packer emits the archive in one buffer). */
 export function buildDocx(
   title: string,
   blocks: readonly Block[],
   ctx: DocxContext,
-  opts: { deadline?: ExportDeadline } = {},
+  opts: { deadline?: ExportDeadline; maxOutputBytes?: number } = {},
 ): Readable {
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_EXPORT_LIMITS.maxOutputBytes;
+  if (estimateDocxBytes(blocks, ctx.images) > maxOutputBytes)
+    throw new TooLargeError(`DOCX export would exceed ${maxOutputBytes} bytes`);
+
   const children: FileChild[] = [];
   const cleanTitle = title.replace(/\s+/g, ' ').trim();
   if (cleanTitle)
@@ -464,14 +555,10 @@ export function buildDocx(
       },
     ],
   });
-  // `docx` hands back an old-style event stream; a PassThrough is async-iterable and pipes.
-  const out = new PassThrough();
+  // `docx` hands back an old-style event stream; the guard yields an async-iterable Readable.
+  const packed = Packer.toStream(document) as unknown as Readable;
   // The packer builds the whole archive before emitting it, in a handful of writes that never
   // wait on `'drain'`; if the response was destroyed mid-write the resulting error is expected,
   // and must not become an unhandled event. The reply listens too and aborts the download.
-  out.on('error', () => undefined);
-  const packed = Packer.toStream(document) as unknown as Readable;
-  packed.on('error', (err: Error) => out.destroy(err));
-  packed.pipe(out);
-  return out;
+  return guardOutputBytes(packed, maxOutputBytes);
 }

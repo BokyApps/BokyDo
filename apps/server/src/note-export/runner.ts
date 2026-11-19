@@ -33,8 +33,8 @@ import type {
 
 /** The resource budget of one render. Images are external buffers and are not in this heap. */
 export const EXPORT_WORKER_RESOURCE_LIMITS = {
-  maxOldGenerationSizeMb: 256,
-  maxYoungGenerationSizeMb: 32,
+  maxOldGenerationSizeMb: 192,
+  maxYoungGenerationSizeMb: 16,
   stackSizeMb: 4,
 } as const;
 
@@ -44,6 +44,8 @@ export interface NoteExportInternal {
   testRenderer?: 'oom' | 'throw' | 'slow' | 'slow-stream';
   /** Called when the worker thread has exited, whatever ended it. */
   onWorkerExit?: () => void;
+  /** Called after each 64 KiB chunk a Markdown zip reads from disk. */
+  onZipRead?: () => void;
 }
 
 export interface ExportWorkerOptions {
@@ -101,6 +103,9 @@ export class ExportWorker {
   private finishAfterExit: WorkerRenderStream | null = null;
   private timer: NodeJS.Timeout | null = null;
   private released = false;
+  private readonly failureAbort = new AbortController();
+  /** Aborted when this worker fails for any reason; the image reads watch it. */
+  readonly failureSignal = this.failureAbort.signal;
   private readonly onAbort = () => this.fail(new Error('export aborted by the client'));
 
   constructor(private readonly options: ExportWorkerOptions) {
@@ -195,7 +200,7 @@ export class ExportWorker {
     this.pending = { kind: 'render', stream };
     try {
       // The image bytes are copies made on the main thread for this message; transfer them so
-      // the 50 MB image budget is never held twice while the worker renders.
+      // the 25 MB image budget is never held twice while the worker renders.
       const transfer = (message.images ?? []).map((image) => image.bytes);
       this.worker.postMessage({ type: 'render', ...message }, transfer);
     } catch (err) {
@@ -324,6 +329,7 @@ export class ExportWorker {
   private fail(err: Error): void {
     if (this.failure || this.completed) return;
     this.failure = err;
+    this.failureAbort.abort(err);
     const pending = this.pending;
     this.pending = null;
     if (pending?.kind === 'analyze' || pending?.kind === 'markdown') pending.reject(err);
@@ -338,6 +344,7 @@ export class ExportWorker {
 
   private startupFailure(err: Error): void {
     this.failure = err;
+    this.failureAbort.abort(err);
     this.exited = true;
     this.releaseSlot();
     this.resolveExit();

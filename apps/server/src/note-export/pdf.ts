@@ -1,9 +1,9 @@
-import type { Readable } from 'node:stream';
+import { PassThrough, Transform, type Readable } from 'node:stream';
 import PdfDocument from 'pdfkit';
 import type { Block, ListBlock, Run } from './ast.js';
-import { jpegEnd, rebuildPngForPdf, validateImage } from './image-info.js';
+import { prepareImage, rebuildPngForPdf } from './image-info.js';
 import type { LoadedImage } from './images.js';
-import { TooLargeError, type ExportDeadline } from './limits.js';
+import { DEFAULT_EXPORT_LIMITS, TooLargeError, type ExportDeadline } from './limits.js';
 
 /**
  * PDF export on the built-in PDF fonts (Helvetica/Courier), A4 with 2 cm margins. Those fonts
@@ -47,6 +47,8 @@ export interface PdfRenderOptions {
   deadline?: ExportDeadline;
   /** Annotations in one PDF, after contiguous link runs are coalesced. */
   maxLinkAnnotations?: number;
+  /** Abort the render as soon as pdfkit has produced more than this many bytes. */
+  maxOutputBytes?: number;
 }
 
 type PdfDoc = PDFKit.PDFDocument;
@@ -660,7 +662,9 @@ class PdfRenderer {
     widths: readonly number[],
     lineHeight: number,
   ): { cells: Atom[][][]; lines: number } {
-    const room = Math.max(1, Math.floor((this.bottom - this.top - TABLE_PAD * 2) / lineHeight));
+    // One line of the page is kept for the table body: a header that fills the page would be
+    // repeated on a page that can never show a row.
+    const room = Math.max(1, Math.floor((this.bottom - this.top - TABLE_PAD * 2) / lineHeight) - 1);
     const needed = Math.max(1, ...header.map((cell) => cell.length));
     if (needed <= room) return { cells: header.map((cell) => cell), lines: needed };
     const ellipsis = this.textAtom('…', helix(false, false), BODY_SIZE, null, false);
@@ -687,11 +691,13 @@ class PdfRenderer {
    */
   private table(block: Extract<Block, { type: 'table' }>): void {
     const columns = Math.max(1, block.header.length, ...block.rows.map((row) => row.length));
-    const widths = this.tableWidths(block, columns);
-    if (widths.reduce((sum, width) => sum + width, 0) > this.width + 0.5) {
+    // Minimum widths are checked before any scaling: if even one character per column will not
+    // fit the text column, no amount of width correction can make a grid, so use the list form.
+    if (columns * TABLE_MIN_COLUMN > this.width + 0.5) {
       this.tableAsList(block);
       return;
     }
+    const widths = this.tableWidths(block, columns);
     const lineHeight = Math.round(BODY_SIZE * LINE_FACTOR);
     const prepare = (cells: readonly Run[][], head: boolean) =>
       Array.from({ length: columns }, (_, index) =>
@@ -742,16 +748,14 @@ class PdfRenderer {
     const cached = this.prepared.get(image.id);
     if (cached) return cached;
     // Last line of defence: pdfkit MUST NOT see a PNG of the alpha/indexed-transparency/
-    // interlaced class that png-js inflates inside a zlib callback. The loader already filtered,
-    // but a caller need not have.
-    if (!validateImage(image.bytes, 'pdf')) return null;
+    // interlaced class that png-js inflates inside a zlib callback. The worker already filtered,
+    // but a caller need not have. One walk validates and cuts a JPEG at its EOI.
+    const prepared = prepareImage(image.bytes, 'pdf');
+    if (!prepared) return null;
     // A PNG is rebuilt from IHDR/IDAT/IEND only: ancillary chunks (tEXt, iCCP, eXIf, …) are
     // dropped and every CRC is recomputed, so a metadata chunk cannot make pdfkit's parser throw.
-    // A JPEG is cut at its first EOI, so an appended Motion Photo video is never embedded.
-    const bytes =
-      image.type === 'png'
-        ? rebuildPngForPdf(image.bytes)
-        : image.bytes.subarray(0, jpegEnd(image.bytes) ?? image.bytes.length);
+    // A JPEG is already cut at its first EOI, so an appended Motion Photo video never arrives.
+    const bytes = prepared.type === 'png' ? rebuildPngForPdf(prepared.bytes) : prepared.bytes;
     if (!bytes) return null;
     // `openImage` is pdfkit's own parser entry point; the validated class never inflates here,
     // and a throw is caught by `image()` so the reader gets the file's name instead.
@@ -803,6 +807,32 @@ class PdfRenderer {
   }
 }
 
+/**
+ * Count pdfkit's output as it is produced and destroy the document the moment it passes the
+ * budget. Waiting for the main thread's chunk counter would let pdfkit build a 100 MB+ PDF (and
+ * hold it) before anyone noticed; this aborts inside the worker, before a byte is posted.
+ */
+function guardPdfOutput(doc: Readable, maxBytes: number): Readable {
+  const out = new PassThrough();
+  out.on('error', () => undefined);
+  let produced = 0;
+  const guard = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      produced += chunk.length;
+      if (produced > maxBytes) {
+        doc.destroy();
+        callback(new TooLargeError(`export exceeded ${maxBytes} bytes`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  guard.on('error', (err: Error) => out.destroy(err));
+  doc.on('error', (err: Error) => out.destroy(err));
+  doc.pipe(guard).pipe(out);
+  return out;
+}
+
 /** Render a note as a PDF stream. Images must already be loaded and validated. */
 export function buildPdf(
   title: string,
@@ -810,6 +840,7 @@ export function buildPdf(
   ctx: PdfContext,
   opts: PdfRenderOptions = {},
 ): Readable {
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_EXPORT_LIMITS.maxOutputBytes;
   const doc = new createPdfDocument({
     size: 'A4',
     margins: { top: 56.7, bottom: 56.7, left: 56.7, right: 56.7 },
@@ -819,11 +850,12 @@ export function buildPdf(
   // A pdfkit error must never be an unhandled 'error' event on a stream nothing is reading yet;
   // the route listens too and destroys the response.
   doc.on('error', () => undefined);
+  const out = guardPdfOutput(doc as unknown as Readable, maxOutputBytes);
   try {
     new PdfRenderer(doc, ctx, opts).render(title, blocks);
   } catch (err) {
     doc.destroy();
     throw err;
   }
-  return doc as unknown as Readable;
+  return out;
 }

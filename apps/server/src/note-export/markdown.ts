@@ -20,6 +20,8 @@ export interface MarkdownOptions {
   fileUnavailable?: ReadonlySet<string>;
   /** Called between blocks, so a render can abandon a document that is taking too long. */
   check?: () => void;
+  /** Inside a GFM table cell, where `|` splits before inline parsing even in a code span. */
+  inTable?: boolean;
 }
 
 /** ASCII punctuation that means something to CommonMark, escaped so text stays text. */
@@ -142,7 +144,8 @@ function runMarkdown(run: Run, opts: MarkdownOptions): string {
   let text: string;
   if (run.censor) text = run.text;
   else {
-    text = markText(run.code ? codeSpan(run.text) : escapeText(run.text), run);
+    const code = run.code ? codeSpan(opts.inTable ? run.text.replace(/\|/g, '\\|') : run.text) : '';
+    text = markText(run.code ? code : escapeText(run.text), run);
   }
 
   if (run.fileId) {
@@ -243,7 +246,8 @@ function listMarkdown(block: Extract<Block, { type: 'list' }>, opts: MarkdownOpt
 }
 
 function tableMarkdown(block: Extract<Block, { type: 'table' }>, opts: MarkdownOptions): string {
-  const cell = (runs: readonly Run[]) => inlineMarkdown(runs, opts).replace(/\n/g, ' ');
+  const cell = (runs: readonly Run[]) =>
+    inlineMarkdown(runs, { ...opts, inTable: true }).replace(/\n/g, ' ');
   const width = Math.max(block.header.length, ...block.rows.map((row) => row.length));
   const line = (runs: readonly Run[][]) => {
     const cells: string[] = [];

@@ -29,7 +29,12 @@ export type EmbedFormat = 'pdf' | 'docx';
 /** Per image, before it is embedded in a DOCX or PDF. */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 /** Total embedded image bytes in one export. These are external buffers, not worker heap. */
-export const MAX_IMAGE_TOTAL_BYTES = 50 * 1024 * 1024;
+export const MAX_IMAGE_TOTAL_BYTES = 25 * 1024 * 1024;
+/**
+ * A PNG has a handful of chunks; a file with tens of thousands of empty ones is a way to make
+ * the validator walk (and allocate a CRC over) far more than the picture is worth.
+ */
+export const MAX_PNG_CHUNKS = 10_000;
 /** A decompression-bomb guard, checked from the header. */
 export const MAX_IMAGE_PIXELS = 40_000_000;
 /** Enough for a PNG IHDR or a JPEG SOF even behind a large EXIF block. */
@@ -155,7 +160,9 @@ export function readPngStructure(bytes: Buffer): PngStructure | null {
   let sawIend = false;
   let idatTotal = 0;
   let idatBound = 0;
+  let chunks = 0;
   while (offset + PNG_CHUNK_OVERHEAD <= bytes.length) {
+    if (++chunks > MAX_PNG_CHUNKS) return null;
     const length = bytes.readUInt32BE(offset);
     const type = bytes.toString('latin1', offset + 4, offset + 8);
     const dataStart = offset + 8;
@@ -321,6 +328,36 @@ export function validateImage(bytes: Buffer, format: EmbedFormat): ImageInfo | n
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === JPEG_SOI) {
     const jpeg = readJpegStructure(bytes);
     return jpeg ? { type: 'jpeg', width: jpeg.width, height: jpeg.height } : null;
+  }
+  return null;
+}
+
+/** An image ready for a renderer; a JPEG is already cut at its first EOI. */
+export interface PreparedImageBytes extends ImageInfo {
+  bytes: Buffer;
+}
+
+/**
+ * Validate one image and return the bytes a renderer may see. PNG is walked once here; a JPEG
+ * is walked once, and the returned buffer ends at the first `EOI`, so an appended Motion Photo
+ * video is dropped without a second marker walk. `null` means the file is shown by name.
+ */
+export function prepareImage(bytes: Buffer, format: EmbedFormat): PreparedImageBytes | null {
+  if (bytes.length >= PNG_SIGNATURE.length && startsWith(bytes, PNG_SIGNATURE)) {
+    const png = readPngStructure(bytes);
+    if (!png) return null;
+    if (format === 'pdf' && !png.pdfSafe) return null;
+    return { type: 'png', width: png.width, height: png.height, bytes };
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === JPEG_SOI) {
+    const jpeg = readJpegStructure(bytes);
+    if (!jpeg) return null;
+    return {
+      type: 'jpeg',
+      width: jpeg.width,
+      height: jpeg.height,
+      bytes: bytes.subarray(0, jpeg.end),
+    };
   }
   return null;
 }

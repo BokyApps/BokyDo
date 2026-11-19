@@ -203,6 +203,14 @@ describe('note export AST', () => {
     expect(countBlocks(blocks)).toBe(12);
   });
 
+  it('counts normalised line breaks: CRLF once, a lone CR as a break', () => {
+    // N line breaks are N + 1 lines (an empty body is zero).
+    expect(() => parseNoteBody('a\r\n'.repeat(19_999))).not.toThrow();
+    expect(() => parseNoteBody('a\r\n'.repeat(20_000))).toThrow(/more than 20000 lines/);
+    expect(() => parseNoteBody('a\r'.repeat(20_000))).toThrow(/more than 20000 lines/);
+    expect(() => parseNoteBody('a\n'.repeat(20_000))).toThrow(/more than 20000 lines/);
+  });
+
   it('parses a hostile body without throwing', () => {
     const body = `${'['.repeat(10_000)}\n\n${'*'.repeat(10_000)}\n\n${'`'.repeat(10_000)}\n`;
     expect(() => parseNoteBody(body)).not.toThrow();

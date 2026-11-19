@@ -205,6 +205,25 @@ describe('note export Markdown', () => {
     expect(adjacentInline.filter((token) => token.type === 'code_inline')).toHaveLength(2);
   });
 
+  it('escapes a pipe inside a table-cell code span so GFM cannot split the cell', () => {
+    const parser = new MarkdownIt({ html: true });
+    // The source itself escapes the pipe (`\|`), which is how GFM writes one inside a cell; the
+    // AST run is then the literal `x|y`, and the export must escape it again.
+    const out = render('| a | b |\n| - | - |\n| `x\\|y` | `<b>\\|c` |\n');
+    // GFM splits a table row at `|` before inline parsing, so an unescaped one inside a code
+    // span would end the cell and expose the rest of the line as markup to a lenient reader.
+    expect(out).toContain('| `x\\|y` | `<b>\\|c` |');
+    const tokens = parser.parse(out, {});
+    const inline = tokens.flatMap((token) => token.children ?? []);
+    const html = [...tokens, ...inline].filter(
+      (token) => token.type === 'html_block' || token.type === 'html_inline',
+    );
+    expect(html, out).toEqual([]);
+    const code = inline.filter((token) => token.type === 'code_inline');
+    // The escape is consumed by the table parser, so the visible code is the original text.
+    expect(code.map((token) => token.content)).toEqual(['x|y', '<b>|c']);
+  });
+
   it('writes a remote image as a link, never as an image', () => {
     const out = render('![shot](https://example.com/x.png)\n\n![nope](ftp://example.com/x.png)\n');
     expect(out).toContain('[shot](https://example.com/x.png)');

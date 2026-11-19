@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseNoteBody } from './ast.js';
-import { buildDocx } from './docx.js';
+import { estimateDocxBytes, buildDocx } from './docx.js';
 import type { LoadedImage } from './images.js';
-import { ExportDeadline, ExportTimeoutError } from './limits.js';
+import { ExportDeadline, ExportTimeoutError, TooLargeError } from './limits.js';
 import { collect, PNG_1X1, readZipEntries, zipText } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
@@ -173,6 +173,15 @@ describe('note export DOCX', () => {
     const drawingIds = [...xml.matchAll(/<wp:docPr id="(\d+)"/g)].map((match) => match[1]);
     expect(drawingIds).toHaveLength(3);
     expect(new Set(drawingIds).size).toBe(3);
+  });
+
+  it('refuses a document whose conservative estimate passes the output budget', () => {
+    const doc = parseNoteBody(BODY);
+    const estimate = estimateDocxBytes(doc.blocks, images);
+    expect(estimate).toBeGreaterThan(1024 * 1024);
+    expect(() =>
+      buildDocx('Too big', doc.blocks, { images, fileNames: filenames }, { maxOutputBytes: 1024 }),
+    ).toThrow(TooLargeError);
   });
 
   it('abandons a render that has run past its deadline', () => {
