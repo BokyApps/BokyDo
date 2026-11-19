@@ -22,6 +22,23 @@ export interface NoteCallbacks {
   onUncensor: ((token: string) => Promise<string | null>) | undefined;
   /** Called when a Cut is refused because the selection contains a censored node. */
   onProtectedCut: (() => void) | undefined;
+  /** The editor's own verdict after a censor attempt (used to end the body pause on abort). */
+  onCensorSettled: ((outcome: CensorSettledOutcome) => void) | undefined;
+  /** A Remove-censor result could not be applied (the atom moved, was deleted or duplicated). */
+  onRemoveCensorFailed: ((reason: RemoveCensorFailure) => void) | undefined;
+}
+
+export type CensorSettledOutcome = 'ok' | 'cancelled' | 'aborted' | 'unsupported';
+export type RemoveCensorFailure = 'missing' | 'duplicate' | 'mismatch';
+
+/**
+ * A saved-form snapshot produced by the lazy editor chunk. `verified()` re-parses the Markdown and
+ * falls back to a fresh serialisation when source preservation changed structure (H4); it is a
+ * closure over the editor document, so the page never imports markdown-it.
+ */
+export interface SerializedNoteBody {
+  markdown: string;
+  verified(): string;
 }
 
 export const EMPTY_CALLBACKS: NoteCallbacks = {
@@ -33,6 +50,8 @@ export const EMPTY_CALLBACKS: NoteCallbacks = {
   onReveal: undefined,
   onUncensor: undefined,
   onProtectedCut: undefined,
+  onCensorSettled: undefined,
+  onRemoveCensorFailed: undefined,
 };
 
 interface CallbacksRef {

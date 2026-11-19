@@ -11,6 +11,8 @@ import {
   type NoteState,
   type NoteSummary,
   type NoteTagsResponse,
+  type NoteTaskLinkSource,
+  type NoteTaskSummary,
 } from '@bokydo/shared';
 import { extractNoteRefs } from '@bokydo/shared/notes-refs';
 import {
@@ -18,6 +20,7 @@ import {
   asc,
   desc,
   eq,
+  getTableColumns,
   inArray,
   isNotNull,
   isNull,
@@ -163,6 +166,12 @@ function summaryOf(row: NoteRow): NoteSummary {
   };
 }
 
+/** Normalise the aggregated `note_task_links.source` values to `body`, `manual` order. */
+function linkSources(values: readonly string[] | null | undefined): NoteTaskLinkSource[] {
+  const set = new Set(values ?? []);
+  return (['body', 'manual'] as const).filter((source) => set.has(source));
+}
+
 /**
  * The caller's notes, pinned first and then newest first. Trashed notes are excluded unless
  * `state=trashed`. Search matches the generated vector OR a case-insensitive title substring;
@@ -267,11 +276,12 @@ export async function getNote(
     options.linkedTasks === false
       ? Promise.resolve([])
       : db
-          .selectDistinct({
+          .select({
             id: tasks.id,
             content: tasks.content,
             projectId: tasks.projectId,
             completed: tasks.isCompleted,
+            sources: sql<string[]>`array_agg(distinct ${noteTaskLinks.source})`,
           })
           .from(noteTaskLinks)
           .innerJoin(notes, and(eq(notes.id, noteTaskLinks.noteId), eq(notes.ownerUserId, userId)))
@@ -288,6 +298,7 @@ export async function getNote(
               isNull(projects.deletedAt),
             ),
           )
+          .groupBy(tasks.id, tasks.content, tasks.projectId, tasks.isCompleted)
           .orderBy(asc(tasks.content), asc(tasks.id)),
     db
       .select({
@@ -312,7 +323,7 @@ export async function getNote(
     body: row.body,
     trashedAt: row.trashedAt?.toISOString() ?? null,
     backlinks,
-    linkedTasks,
+    linkedTasks: linkedTasks.map((task) => ({ ...task, sources: linkSources(task.sources) })),
     files,
   };
 }
@@ -552,12 +563,12 @@ export async function unlinkNoteFromTask(
   return removed ? { ok: true, value: true } : { ok: false, error: 'not_found' };
 }
 
-/** The caller's own non-trashed notes linked to a task they can currently see. */
+/** The caller's own non-trashed notes linked to a task they can currently see, with provenance. */
 export async function notesForTask(
   db: Database,
   userId: string,
   taskId: string,
-): Promise<NoteResult<NoteSummary[]>> {
+): Promise<NoteResult<NoteTaskSummary[]>> {
   if (!uuid(taskId)) return { ok: false, error: 'not_found' };
   const [task] = await db
     .select({ id: tasks.id })
@@ -569,18 +580,23 @@ export async function notesForTask(
     )
     .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt), isNull(projects.deletedAt)));
   if (!task) return { ok: false, error: 'not_found' };
-  const linkedNoteIds = db
-    .select({ id: noteTaskLinks.noteId })
-    .from(noteTaskLinks)
-    .where(eq(noteTaskLinks.taskId, task.id));
   const rows = await db
-    .select()
+    .select({
+      ...getTableColumns(notes),
+      sources: sql<string[]>`array_agg(distinct ${noteTaskLinks.source})`,
+    })
     .from(notes)
-    .where(
-      and(inArray(notes.id, linkedNoteIds), eq(notes.ownerUserId, userId), isNull(notes.trashedAt)),
+    .innerJoin(
+      noteTaskLinks,
+      and(eq(noteTaskLinks.noteId, notes.id), eq(noteTaskLinks.taskId, task.id)),
     )
+    .where(and(eq(notes.ownerUserId, userId), isNull(notes.trashedAt)))
+    .groupBy(notes.id)
     .orderBy(desc(notes.pinned), desc(notes.updatedAt), desc(notes.id));
-  return { ok: true, value: rows.map(summaryOf) };
+  return {
+    ok: true,
+    value: rows.map((row) => ({ ...summaryOf(row), sources: linkSources(row.sources) })),
+  };
 }
 
 /**

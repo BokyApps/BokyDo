@@ -374,16 +374,17 @@ describe('E5: dragstart writes only the placeholder into the DataTransfer', () =
   it('text/html and text/plain never contain the token', async () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
+    const dragController = createDragCopyController();
     const editor: Editor = new Editor({
       element: el,
       extensions: buildExtensions(),
       content: markdownToDoc(`before ${TOKEN} after`),
       editorProps: {
-        transformCopied: (slice, view) =>
-          createDragCopyController().transformCopied(slice, view.state.schema),
+        transformCopied: (slice, view) => dragController.transformCopied(slice, view.state.schema),
         handleDOMEvents: {
           dragstart: () => {
-            retainRealDragSlice(editor);
+            dragController.markDragStart();
+            retainRealDragSlice(editor, dragController);
             return false;
           },
         },

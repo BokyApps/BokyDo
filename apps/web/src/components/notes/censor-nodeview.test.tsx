@@ -54,6 +54,8 @@ function render(onReveal: NoteCallbacks['onReveal'] = vi.fn()) {
     onReveal,
     onUncensor: undefined,
     onProtectedCut: undefined,
+    onCensorSettled: undefined,
+    onRemoveCensorFailed: undefined,
   };
   registerCallbacks(editor, { current: callbacks });
   const props = {

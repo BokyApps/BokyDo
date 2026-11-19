@@ -387,6 +387,7 @@
         "mismatch": "Passwords do not match.",
         "password": "Password",
         "remove": "Remove censor",
+        "removeFailed": "That censored text changed while unlocking. Nothing was changed — please try again.",
         "removeMessage": "This puts the text back in plain sight in the note, where anyone reading it can copy it. Continue?",
         "removeTitle": "Remove censor?",
         "setTitle": "Censor text",

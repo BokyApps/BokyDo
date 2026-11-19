@@ -1,15 +1,13 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui.js';
 import { LinkIcon } from '../../components/icons.js';
 import {
-  bodyLinksTask,
   createNote,
   linkNoteTask,
   noteErrorMessage,
-  noteQuery,
   notesKeys,
   searchNoteOptions,
   taskNotesQuery,
@@ -27,11 +25,9 @@ export function TaskNotesSection({ taskId, taskContent }: { taskId: string; task
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const list = useQuery(taskNotesQuery(taskId));
-  // Provenance (P5): the task → note row can come from the note body or from an explicit link.
-  // The summaries do not carry a source, so the bodies are read through the note query (already
-  // cached when the note was opened from here). Unlink is only offered once a body proves manual.
+  // Provenance (P5): the server answers where each link comes from, so the panel no longer fetches
+  // every note body (one detail request per note) just to guess it from the Markdown.
   const notes = list.data?.notes ?? [];
-  const details = useQueries({ queries: notes.map((note) => noteQuery(note.id)) });
   const refresh = useCallback(() => {
     void client.invalidateQueries({ queryKey: notesKeys.taskNotes(taskId) });
     void client.invalidateQueries({ queryKey: notesKeys.all });
@@ -105,10 +101,9 @@ export function TaskNotesSection({ taskId, taskContent }: { taskId: string; task
         </p>
       )}
       <ul className="space-y-0.5 text-sm">
-        {notes.map((note, index) => {
-          const body = details[index]?.data?.body;
-          const inBody = body !== undefined && bodyLinksTask(body, taskId);
-          const known = body !== undefined;
+        {notes.map((note) => {
+          const inBody = note.sources.includes('body');
+          const manual = note.sources.includes('manual');
           return (
             <li
               key={note.id}
@@ -121,20 +116,20 @@ export function TaskNotesSection({ taskId, taskContent }: { taskId: string; task
               >
                 {note.title || t('notes.untitled', { defaultValue: 'Untitled' })}
               </Link>
-              {known &&
-                (inBody ? (
-                  <span className="text-xs text-muted">
-                    {t('notes.linkedInBody', { defaultValue: 'Linked in the note text' })} —{' '}
-                    {t('notes.unlinkBodyHint', {
-                      defaultValue: 'remove the link from the note text to unlink.',
-                    })}
-                  </span>
-                ) : (
-                  <span className="text-xs text-muted">
-                    {t('notes.linkedManual', { defaultValue: 'Linked manually' })}
-                  </span>
-                ))}
-              {known && !inBody && (
+              {inBody && (
+                <span className="text-xs text-muted">
+                  {t('notes.linkedInBody', { defaultValue: 'Linked in the note text' })} —{' '}
+                  {t('notes.unlinkBodyHint', {
+                    defaultValue: 'remove the link from the note text to unlink.',
+                  })}
+                </span>
+              )}
+              {manual && (
+                <span className="text-xs text-muted">
+                  {t('notes.linkedManual', { defaultValue: 'Linked manually' })}
+                </span>
+              )}
+              {manual && (
                 <button
                   type="button"
                   aria-label={t('notes.unlinkNote', { defaultValue: 'Unlink note' })}

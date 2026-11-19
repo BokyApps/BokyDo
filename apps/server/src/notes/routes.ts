@@ -1,4 +1,4 @@
-import type { Note, NoteSummary } from '@bokydo/shared';
+import type { Note, NoteTaskSummary } from '@bokydo/shared';
 import { scopesAllow } from '@bokydo/shared';
 import { and, count, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -202,7 +202,7 @@ export async function registerNoteRoutes(
     if (!params.success) return reply.status(400).send({ error: 'validation_failed' });
     const result = await notesForTask(db, requireUser(req).id, params.data.taskId);
     if (!result.ok) return reply.status(404).send({ error: 'not_found' });
-    return { notes: result.value } satisfies { notes: NoteSummary[] };
+    return { notes: result.value } satisfies { notes: NoteTaskSummary[] };
   });
 
   // Raw uploads stream straight to the note-files directory, like attachments. This plugin has

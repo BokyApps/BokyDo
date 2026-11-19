@@ -4,8 +4,8 @@ import type {
   NoteListResponse,
   NotePatch,
   NoteState,
-  NoteSummary,
   NoteTagsResponse,
+  NoteTaskSummary,
   Task,
 } from '@bokydo/shared';
 import { queryOptions } from '@tanstack/react-query';
@@ -83,7 +83,7 @@ export const noteTagsQuery = queryOptions({
 export const taskNotesQuery = (taskId: string) =>
   queryOptions({
     queryKey: notesKeys.taskNotes(taskId),
-    queryFn: () => api<{ notes: NoteSummary[] }>('GET', taskNotesPath(taskId)),
+    queryFn: () => api<{ notes: NoteTaskSummary[] }>('GET', taskNotesPath(taskId)),
   });
 
 export function createNote(body: NoteCreateRequest): Promise<{ note: Note }> {

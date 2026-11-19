@@ -286,7 +286,11 @@ export function CensoredView({ node, editor, getPos }: NodeViewProps) {
       clearRemovalMark(editor, removeId);
       return;
     }
-    if (!applyUncensored(editor, removeId, plaintext)) clearRemovalMark(editor, removeId);
+    const outcome = applyUncensored(editor, removeId, plaintext);
+    if (outcome !== 'ok') {
+      clearRemovalMark(editor, removeId);
+      cb.onRemoveCensorFailed?.(outcome);
+    }
   }, [closeMenu, editor, getPos, token]);
 
   return (

@@ -120,8 +120,13 @@ export interface BodyPause {
 /**
  * P1: censor a selection while the body autosave is paused. `pauseBody` runs synchronously before
  * the prompt is opened (the flow calls `askPassword` before its first await), so a plaintext
- * revision cannot be PATCHed behind the dialog. On success the token revision is marked urgent;
- * cancel/failure resumes the normal debounce. Exported for the ordering regression test.
+ * revision cannot be PATCHed behind the dialog.
+ *
+ * H2: on success the pause is NOT released here. The editor still has to verify the token
+ * document and hand it to the page (a React state update); until that `update` arrives, a
+ * `pagehide` must not send the plaintext body. `flushNextUpdate` marks the coming revision urgent
+ * and keeps the body held; the controller releases both when the token draft arrives. An ordinary
+ * abort (cancel/throw) restores the debounce immediately.
  */
 export async function censorWithBodyPause(
   autosave: BodyPause,
@@ -129,13 +134,14 @@ export async function censorWithBodyPause(
   plaintext: string,
 ): Promise<string | null> {
   autosave.pauseBody();
+  let token: string | null = null;
   try {
-    const token = await flow.onCensor(plaintext);
-    if (token !== null) autosave.flushNextUpdate();
-    return token;
+    token = await flow.onCensor(plaintext);
   } finally {
-    autosave.resumeBody();
+    if (token === null) autosave.resumeBody();
+    else autosave.flushNextUpdate();
   }
+  return token;
 }
 
 export class CensorFlow {
@@ -153,6 +159,8 @@ export class CensorFlow {
     this.session.warned = true;
     let error: string | null = null;
     for (;;) {
+      // M2: check before EVERY prompt, including the retry after a rejected encryption.
+      if (censorLockGeneration() !== generation) return null;
       const password = await this.prompts.askPassword({ confirm: true, warning, error });
       // Locked while the prompt was open: close silently, reveal nothing, encrypt nothing.
       if (censorLockGeneration() !== generation) return null;
@@ -164,6 +172,8 @@ export class CensorFlow {
       } catch (err) {
         const message = messageFor(err);
         if (message === null) throw err;
+        // A lock while encrypting voids the operation; never reopen the prompt afterwards.
+        if (censorLockGeneration() !== generation) return null;
         error = message; // empty_text / too_large / empty_password -> re-prompt with a message
       }
     }
@@ -213,6 +223,9 @@ export class CensorFlow {
   ): Promise<string | null> {
     let error: string | null = null;
     for (;;) {
+      // M2: every iteration re-checks the lock (a bad-password retry used to reopen the prompt
+      // after the tab was hidden and the cache cleared).
+      if (lock !== censorLockGeneration() || censorKeys.generation !== generation) return null;
       const password = await this.prompts.askPassword({ confirm: false, warning: false, error });
       if (lock !== censorLockGeneration()) return null;
       if (password === null) return null;
@@ -224,6 +237,9 @@ export class CensorFlow {
       } catch (err) {
         if (err instanceof CensorError) {
           if (err.code === 'locked') return null; // close silently
+          // A lock/cache clear while deriving settles the whole flow as cancelled: the next
+          // iteration's prompt must not appear after "Lock" or a hidden tab.
+          if (lock !== censorLockGeneration() || censorKeys.generation !== generation) return null;
           if (err.code === 'bad_password') {
             error = BAD_PASSWORD;
             continue; // show the error in the dialog and re-prompt

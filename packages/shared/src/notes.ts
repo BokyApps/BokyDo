@@ -145,11 +145,16 @@ export interface NoteBacklink {
   title: string;
 }
 
+/** Why a note is linked to a task: derived from its Markdown body, or made explicitly. */
+export type NoteTaskLinkSource = 'body' | 'manual';
+
 export interface NoteLinkedTask {
   id: string;
   content: string;
   projectId: string;
   completed: boolean;
+  /** Both values when a body link was also linked manually; order is `body`, `manual`. */
+  sources: NoteTaskLinkSource[];
 }
 
 export interface NoteFileSummary {
@@ -172,6 +177,15 @@ export interface Note extends NoteSummary {
 export interface NoteListResponse {
   notes: NoteSummary[];
   nextCursor: string | null;
+}
+
+/** One note linked to a task, with the provenance of the link (GET /tasks/:id/notes). */
+export interface NoteTaskSummary extends NoteSummary {
+  sources: NoteTaskLinkSource[];
+}
+
+export interface NoteTaskNotesResponse {
+  notes: NoteTaskSummary[];
 }
 
 export interface NoteTagsResponse {

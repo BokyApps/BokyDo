@@ -612,14 +612,20 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     });
     const noteId = created.note.id as string;
     expect(created.note.linkedTasks).toMatchObject([
-      { id: sharedTask, content: 'Shared task', projectId: shared, completed: false },
+      {
+        id: sharedTask,
+        content: 'Shared task',
+        projectId: shared,
+        completed: false,
+        sources: ['body'],
+      },
     ]);
     expect((await t.db.db.select().from(noteTaskLinks)).map((row) => row.taskId)).toEqual([
       sharedTask,
     ]);
 
     expect((await alice.http.get(`/api/v1/tasks/${sharedTask}/notes`)).json().notes).toMatchObject([
-      { id: noteId },
+      { id: noteId, sources: ['body'] },
     ]);
     // Bob can see the task but never Alice's note.
     expect((await bob.http.get(`/api/v1/tasks/${sharedTask}/notes`)).json().notes).toEqual([]);
@@ -647,10 +653,12 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect((await alice.http.put(`/api/v1/notes/${noteId}/tasks/${task}`)).statusCode).toBe(204);
     expect((await alice.http.put(`/api/v1/notes/${noteId}/tasks/${task}`)).statusCode).toBe(204);
     expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.linkedTasks).toMatchObject(
-      [{ id: task }],
+      [{ id: task, sources: ['manual'] }],
     );
     const listed = await alice.http.get(`/api/v1/tasks/${task}/notes`);
-    expect(listed.json().notes).toMatchObject([{ id: noteId, title: 'Manual' }]);
+    expect(listed.json().notes).toMatchObject([
+      { id: noteId, title: 'Manual', sources: ['manual'] },
+    ]);
 
     // Someone else's note or an invisible task is a 404, never a link.
     expect((await bob.http.put(`/api/v1/notes/${noteId}/tasks/${task}`)).statusCode).toBe(404);
@@ -667,6 +675,39 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     await alice.http.put(`/api/v1/notes/${noteId}/tasks/${task}`);
     await alice.http.patch(`/api/v1/notes/${noteId}`, { trashed: true });
     expect((await alice.http.get(`/api/v1/tasks/${task}/notes`)).json().notes).toEqual([]);
+  });
+
+  it('reports both provenance sources when a body link is also linked manually', async () => {
+    const alice = await person('alice');
+    const project = newId();
+    const task = newId();
+    await alice.sync.ok(
+      cmd('project_add', { id: project, name: 'P' }),
+      cmd('task_add', { id: task, projectId: project, content: 'Both' }),
+    );
+    const note = await createNote(alice, {
+      title: 'Both',
+      body: `[both](bokydo:task/${task})`,
+    });
+    const noteId = note.note.id as string;
+    expect(note.note.linkedTasks).toMatchObject([{ id: task, sources: ['body'] }]);
+
+    expect((await alice.http.put(`/api/v1/notes/${noteId}/tasks/${task}`)).statusCode).toBe(204);
+    expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.linkedTasks).toMatchObject(
+      [{ id: task, sources: ['body', 'manual'] }],
+    );
+    expect((await alice.http.get(`/api/v1/tasks/${task}/notes`)).json().notes).toMatchObject([
+      { id: noteId, sources: ['body', 'manual'] },
+    ]);
+
+    // Unlinking removes only the manual row; the body link remains and is re-derived on save.
+    expect((await alice.http.delete(`/api/v1/notes/${noteId}/tasks/${task}`)).statusCode).toBe(204);
+    expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.linkedTasks).toMatchObject(
+      [{ id: task, sources: ['body'] }],
+    );
+    expect((await alice.http.get(`/api/v1/tasks/${task}/notes`)).json().notes).toMatchObject([
+      { id: noteId, sources: ['body'] },
+    ]);
   });
 
   it('uploads, sniffs and serves note files with attachment-grade headers', async () => {
@@ -1275,7 +1316,7 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
       body: `[task](bokydo:task/${task})`,
     });
     const noteId = note.note.id as string;
-    expect(note.note.linkedTasks).toMatchObject([{ id: task }]);
+    expect(note.note.linkedTasks).toMatchObject([{ id: task, sources: ['body'] }]);
     expect((await alice.http.get(`/api/v1/tasks/${task}/notes`)).json().notes).toMatchObject([
       { id: noteId },
     ]);

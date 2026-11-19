@@ -1,7 +1,8 @@
-import type { Editor, JSONContent } from '@tiptap/core';
+import { Extension, type Editor, type JSONContent } from '@tiptap/core';
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
-import { EditorState, type Transaction } from '@tiptap/pm/state';
+import { EditorState, Plugin, PluginKey, type Transaction } from '@tiptap/pm/state';
 import { contentToMarkdown, docToMarkdown, markdownToDoc, markdownToInline } from './markdown.js';
+import { hasSourceMeta, withoutSourceMeta } from './source-meta.js';
 
 /**
  * Censor commands for the editor (ADR 0025 "Censoring"). Review-round-2 rules:
@@ -111,7 +112,28 @@ export function censorRoundTripSurvives(editor: Editor, nextDoc: PMNode, token: 
 function buildCensoredTransaction(editor: Editor, from: number, to: number, token: string) {
   const type = editor.schema.nodes.censored;
   if (!type) throw new Error('the notes schema has no censored node');
-  return editor.state.tr.replaceWith(from, to, type.create({ token }));
+  const tr = editor.state.tr;
+  // H1(b): the censored text is still inside the verbatim `src` of every ancestor block. Those
+  // attributes are editor bookkeeping and are never rendered, but ProseMirror copies ancestor
+  // attrs into `data-pm-slice` on a copy, so they are cleared before the plaintext disappears
+  // from the document. Positions are all before `from`, so the later replacement does not move
+  // them.
+  clearSourceMetaOnAncestors(tr, from);
+  return tr.replaceWith(from, to, type.create({ token }));
+}
+
+/**
+ * Drop source-meta from the block(s) whose text contains `pos`: the top-level block and every
+ * nested container. A retained `src` may hold the pre-censor plaintext (or a token).
+ */
+function clearSourceMetaOnAncestors(tr: Transaction, pos: number): void {
+  if (pos < 0 || pos > tr.doc.content.size) return;
+  const $pos = tr.doc.resolve(pos);
+  for (let depth = $pos.depth; depth >= 1; depth--) {
+    const node = $pos.node(depth);
+    if (!hasSourceMeta(node)) continue;
+    tr.setNodeMarkup($pos.before(depth), undefined, withoutSourceMeta(node.attrs));
+  }
 }
 
 /**
@@ -187,11 +209,59 @@ export async function censorSelection(
 // Remove censor: bound to the exact atom the user confirmed
 // ---------------------------------------------------------------------------------------------
 
+export interface RemovalTarget {
+  /** Current position of the atom, mapped through every transaction since it was tagged. */
+  pos: number;
+  token: string;
+  removeId: string;
+}
+
+/**
+ * H3: the Remove prompt is async, so the document can change underneath it (typing before the
+ * atom, an internal drag that duplicates it, undo, a paste). A bare `removeId` scan cannot tell
+ * the original atom from a duplicate. This plugin state maps the original position through every
+ * transaction (`tr.mapping`) and verifies the node there still is the same censored atom with the
+ * same token; `removeId` is a cross-check, not the binding.
+ */
+export const removalTargetKey = new PluginKey<RemovalTarget | null>('noteCensoredRemovalTarget');
+
+export const CensoredRemovalTracker = Extension.create({
+  name: 'censoredRemovalTracker',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<RemovalTarget | null>({
+        key: removalTargetKey,
+        state: {
+          init: () => null,
+          apply(tr, value) {
+            const meta = tr.getMeta(removalTargetKey) as RemovalTarget | null | undefined;
+            if (meta !== undefined) return meta;
+            if (!value) return null;
+            // assoc=1: an insertion exactly at the atom's position leaves the atom after it.
+            const mapped = tr.mapping.mapResult(value.pos, 1);
+            if (mapped.deleted) return null;
+            const node = tr.doc.nodeAt(mapped.pos);
+            if (
+              !node ||
+              node.type.name !== 'censored' ||
+              node.attrs.removeId !== value.removeId ||
+              node.attrs.token !== value.token
+            )
+              return null;
+            return { ...value, pos: mapped.pos };
+          },
+        },
+      }),
+    ];
+  },
+});
+
 function removalMark(editor: Editor, pos: number): string | null {
   const node = editor.state.doc.nodeAt(pos);
   if (!node || node.type.name !== 'censored') return null;
   const removeId = `rm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const tr = editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, removeId });
+  tr.setMeta(removalTargetKey, { pos, token: node.attrs.token as string, removeId });
   tr.setMeta('addToHistory', false);
   editor.view.dispatch(tr);
   return removeId;
@@ -206,11 +276,16 @@ export function markCensoredForRemoval(editor: Editor, pos: number): string | nu
 /** Drop a removal tag (cancelled prompt / failed verification); the atom itself is untouched. */
 export function clearRemovalMark(editor: Editor, removeId: string): void {
   if (editor.isDestroyed) return;
-  const pos = findRemovalTarget(editor.state.doc, removeId);
-  if (!pos) return;
-  const node = editor.state.doc.nodeAt(pos.from);
+  const tracked = removalTargetKey.getState(editor.state);
+  const pos =
+    tracked && tracked.removeId === removeId
+      ? tracked.pos
+      : (findRemovalTarget(editor.state.doc, removeId)?.from ?? null);
+  if (pos === null) return;
+  const node = editor.state.doc.nodeAt(pos);
   if (!node) return;
-  const tr = editor.state.tr.setNodeMarkup(pos.from, undefined, { ...node.attrs, removeId: null });
+  const tr = editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, removeId: null });
+  tr.setMeta(removalTargetKey, null);
   tr.setMeta('addToHistory', false);
   editor.view.dispatch(tr);
 }
@@ -233,20 +308,55 @@ export function findRemovalTarget(
   return found;
 }
 
+export type UncensorOutcome = 'ok' | 'missing' | 'duplicate' | 'mismatch';
+
+/** Every position whose censored atom carries `removeId`. */
+export function removalTargets(doc: PMNode, removeId: string): number[] {
+  const positions: number[] = [];
+  if (!removeId) return positions;
+  doc.descendants((node, pos) => {
+    if (node.type.name === 'censored' && node.attrs.removeId === removeId) positions.push(pos);
+    return true;
+  });
+  return positions;
+}
+
 /**
- * Apply a Remove-censor result to the atom that was tagged for removal. Aborts (returns false and
- * changes nothing) if that atom was deleted or replaced — an identical token elsewhere is never
- * used instead. History is intentionally kept, so undo restores the token.
+ * Apply a Remove-censor result to the atom that was tagged for removal. Aborts (changes nothing)
+ * if that atom was deleted or replaced, if an identical token elsewhere is the only survivor, or
+ * if the transient id is no longer unique (a drag-copy used to duplicate it). History is
+ * intentionally kept, so undo restores the token.
  */
-export function applyUncensored(editor: Editor, removeId: string, plaintext: string): boolean {
-  if (editor.isDestroyed || !editor.isEditable) return false;
-  const target = findRemovalTarget(editor.state.doc, removeId);
-  if (!target) return false;
+export function applyUncensored(
+  editor: Editor,
+  removeId: string,
+  plaintext: string,
+): UncensorOutcome {
+  if (editor.isDestroyed || !editor.isEditable) return 'missing';
+  const targets = removalTargets(editor.state.doc, removeId);
+  // Exactly one node may carry the id: zero means the original is gone, more than one means a
+  // duplicate exists and the operation is ambiguous.
+  if (targets.length === 0) return 'missing';
+  if (targets.length > 1) return 'duplicate';
+  const pos = targets[0];
+  if (pos === undefined) return 'missing';
+  const tracked = removalTargetKey.getState(editor.state);
+  if (tracked !== undefined) {
+    // The plugin is installed: the mapped original position is authoritative, and the node there
+    // must still be the same atom/token. `removeId` only confirms it.
+    if (!tracked || tracked.removeId !== removeId || tracked.pos !== pos) return 'mismatch';
+    const node = editor.state.doc.nodeAt(pos);
+    if (!node || node.type.name !== 'censored' || node.attrs.token !== tracked.token)
+      return 'mismatch';
+  }
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node) return 'missing';
   const inline = markdownToInline(plaintext);
-  const nodes = inline.map((node) => editor.schema.nodeFromJSON(node));
+  const nodes = inline.map((item) => editor.schema.nodeFromJSON(item));
   const tr = editor.state.tr;
-  if (nodes.length === 0) tr.delete(target.from, target.to);
-  else tr.replaceWith(target.from, target.to, Fragment.fromArray(nodes));
+  if (nodes.length === 0) tr.delete(pos, pos + node.nodeSize);
+  else tr.replaceWith(pos, pos + node.nodeSize, Fragment.fromArray(nodes));
+  tr.setMeta(removalTargetKey, null);
   editor.view.dispatch(tr.scrollIntoView());
-  return true;
+  return 'ok';
 }
