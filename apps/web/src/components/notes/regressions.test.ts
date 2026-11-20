@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { Editor, type JSONContent } from '@tiptap/core';
 import { undo } from '@tiptap/pm/history';
+import type { NodeSelection } from '@tiptap/pm/state';
 import { describe, expect, it } from 'vitest';
 import { createDragCopyController } from './clipboard.js';
 import { formatEmbedLine, parseEmbedLine } from './embed.js';
@@ -433,6 +434,48 @@ describe('E5: dragstart writes only the placeholder into the DataTransfer', () =
     });
     expect(draggingHasAtom).toBe(true);
     editor.destroy();
+  });
+
+  it('restores ProseMirror’s NodeSelection along with the real slice', async () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const dragController = createDragCopyController();
+    const editor: Editor = new Editor({
+      element: el,
+      extensions: buildExtensions(),
+      content: markdownToDoc(`before ${TOKEN} after`),
+      editorProps: {
+        transformCopied: (slice, view) => dragController.transformCopied(slice, view.state.schema),
+      },
+    });
+    let atomPos = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'censored') {
+        atomPos = pos;
+        return false;
+      }
+      return true;
+    });
+    expect(atomPos).toBeGreaterThan(0);
+    editor.commands.setNodeSelection(atomPos);
+    const nodeSelection = editor.state.selection as NodeSelection;
+    const realSlice = nodeSelection.content();
+    const outbound = dragController.transformCopied(realSlice, editor.state.schema);
+    const view = editor.view as unknown as {
+      dragging: { slice: typeof realSlice; move: boolean; node?: NodeSelection } | null;
+    };
+    // What ProseMirror leaves after its own dragstart: the censored copy and the node selection.
+    view.dragging = { slice: outbound, move: true, node: nodeSelection };
+
+    dragController.markDragStart();
+    dragController.transformCopied(realSlice, editor.state.schema); // capture the original slice
+    retainRealDragSlice(editor, dragController);
+    await Promise.resolve();
+
+    expect(view.dragging?.slice).toBe(realSlice);
+    expect(view.dragging?.node).toBe(nodeSelection);
+    editor.destroy();
+    el.remove();
   });
 });
 

@@ -8,11 +8,13 @@ import {
   censorTokensIn,
   isNoteGoneError,
   isStaleRevisionError,
+  keepMineAllowed,
   newestNote,
   noteExportAvailability,
   noteExportPath,
   noteLoadPhase,
   pathFor,
+  prepareNoteSavePatch,
 } from './notes.js';
 
 const TASK = '123e4567-e89b-12d3-a456-426614174000';
@@ -118,6 +120,72 @@ describe('P1: export links wait for acknowledgement', () => {
       href: noteExportPath('id', 'md'),
       disabled: false,
     });
+  });
+
+  it('is unavailable while the censor freeze owns the save', () => {
+    expect(
+      noteExportAvailability('id', 'md', { dirty: false, saving: false, frozen: true }),
+    ).toEqual({ href: null, disabled: true });
+  });
+});
+
+describe('final review: safe conflict and save decisions', () => {
+  const note = (over: Partial<Note> = {}): Note => ({
+    id: 'n',
+    title: 'T',
+    body: 'B',
+    snippet: 'B',
+    tags: [],
+    state: 'active',
+    pinned: false,
+    createdAt: '2026-11-18T10:00:00.000Z',
+    updatedAt: '2026-11-18T10:00:01.000Z',
+    trashedAt: null,
+    backlinks: [],
+    linkedTasks: [],
+    files: [],
+    ...over,
+  });
+
+  it('Keep mine needs a fetched remote and a revision-bound censor confirmation', () => {
+    expect(keepMineAllowed(null, 'mine', null)).toBe(false);
+    const plain = note({ body: 'theirs' });
+    expect(keepMineAllowed(plain, 'mine', null)).toBe(true);
+    const censored = note({ body: 'a {{censored:v1:x:y:z}} b' });
+    expect(keepMineAllowed(censored, 'mine', null)).toBe(false);
+    expect(keepMineAllowed(censored, 'mine', censored.updatedAt)).toBe(true);
+    expect(keepMineAllowed(censored, 'mine', 'another-revision')).toBe(false);
+  });
+
+  it('a serializer mismatch drops only the body and keeps the rest of the patch', () => {
+    const snapshot = (mismatch: boolean) => ({
+      markdown: 'mine',
+      verified: () => ({ markdown: 'mine', fallback: true, mismatch }),
+    });
+    expect(prepareNoteSavePatch({ body: 'mine', title: 'T2' }, snapshot(true))).toEqual({
+      patch: { title: 'T2' },
+      bodyUnsafe: true,
+    });
+    expect(prepareNoteSavePatch({ body: 'mine' }, snapshot(true))).toEqual({
+      patch: null,
+      bodyUnsafe: true,
+    });
+    expect(prepareNoteSavePatch({ body: 'mine', title: 'T2' }, snapshot(false))).toEqual({
+      patch: { body: 'mine', title: 'T2' },
+      bodyUnsafe: false,
+    });
+  });
+
+  it('source-view edits save as typed (no matching editor snapshot)', () => {
+    expect(
+      prepareNoteSavePatch(
+        { body: 'typed by hand' },
+        {
+          markdown: 'editor markdown',
+          verified: () => ({ markdown: 'x', fallback: false, mismatch: true }),
+        },
+      ),
+    ).toEqual({ patch: { body: 'typed by hand' }, bodyUnsafe: false });
   });
 });
 

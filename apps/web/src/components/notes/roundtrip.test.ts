@@ -119,6 +119,62 @@ describe('HIGH: unchanged docs serialize byte-identically', () => {
   });
 });
 
+describe('serializer bugs found by the final review', () => {
+  it('a literal ! immediately before a link is escaped, not read back as an image', () => {
+    const literal = docToMarkdown({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: '![Read](https://example.com/)' }],
+        },
+      ],
+    });
+    expect(literal.startsWith('\\!\\[')).toBe(true);
+    expect(markdownToDoc(literal).content?.[0]?.content?.[0]?.text).toBe(
+      '![Read](https://example.com/)',
+    );
+
+    const doc: JSONContent = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '!' },
+            {
+              type: 'text',
+              text: 'Read',
+              marks: [{ type: 'link', attrs: { href: 'https://example.com/' } }],
+            },
+          ],
+        },
+      ],
+    };
+    const markdown = docToMarkdown(doc);
+    expect(markdown).toBe('\\![Read](https://example.com/)');
+    const reparsed = markdownToDoc(markdown);
+    const paragraph = reparsed.content?.[0];
+    expect(paragraph?.content?.[0]).toMatchObject({ type: 'text', text: '!' });
+    expect(paragraph?.content?.[1]).toMatchObject({
+      type: 'text',
+      text: 'Read',
+      marks: [{ type: 'link', attrs: { href: 'https://example.com/' } }],
+    });
+  });
+
+  it('a fresh serialisation preserves leading and trailing blank lines in a fenced code block', () => {
+    const cases = ['```\n\nfoo\n```', '```\nfoo\n\n```', '```\n\nfoo\n\n```', '```\nfoo\n\n\n```'];
+    for (const markdown of cases) {
+      const parsed = markdownToDoc(markdown);
+      // contentToMarkdown has no source preservation: this is the fallback serialisation.
+      const fresh = contentToMarkdown(parsed.content ?? null);
+      expect(fresh).toBe(markdown);
+      expect(stripSource(markdownToDoc(fresh))).toEqual(stripSource(parsed));
+    }
+  });
+});
+
 describe('HIGH: a small edit elsewhere leaves every other block byte-identical', () => {
   it('editing one paragraph does not rewrite the heading or the table around it', () => {
     const heading = '# Title';

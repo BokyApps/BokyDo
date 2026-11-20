@@ -25,16 +25,20 @@ import { DraftLeaveGuard, installDraftGuards } from '../../lib/note-draft-guards
 import {
   censorConflictWarning,
   deleteNote,
+  fetchNote,
   isNoteGoneError,
+  keepMineAllowed,
   linkNoteTask,
   newestNote,
   noteErrorMessage,
   noteExportAvailability,
   noteFilePath,
+  noteFocusSurface,
   noteLoadPhase,
   noteQuery,
   notesKeys,
   patchNote,
+  prepareNoteSavePatch,
   searchLocalTasks,
   searchNoteOptions,
   toNoteDraft,
@@ -46,7 +50,6 @@ import { NoteAutosave, type SaveStatus } from '../../lib/notes-autosave.js';
 import {
   CensorFlow,
   acknowledgePendingCensor,
-  censorWithBodyPause,
   checkPendingCensor,
   lockCensored,
   markPendingCensor,
@@ -54,6 +57,7 @@ import {
   type CensorPrompts,
 } from '../../lib/notes-censor.js';
 import type { RevealAnchor, SerializedNoteBody } from '../../components/notes/callbacks.js';
+import type { CensorOutcome } from '../../components/notes/censor-command.js';
 import type { RevealState } from '../../components/notes/RevealOverlay.js';
 import {
   RevealController,
@@ -136,10 +140,25 @@ function NoteDetailInner({ note }: { note: Note }) {
   // controller's view of the draft changes; reading the controller during render alone would be
   // one render behind.
   const [dirty, setDirty] = useState(false);
+  /**
+   * Censoring is its own save: this freezes every field from before the password prompt until the
+   * one token PATCH resolves. A cancel unfreezes with the pre-censor draft unchanged.
+   */
+  const [censorFrozen, setCensorFrozen] = useState(false);
+  const [censorSaveFailed, setCensorSaveFailed] = useState(false);
+  const [censorRetrying, setCensorRetrying] = useState(false);
+  /** The verifier refused the body: it stays in the draft, is never sent, and is shown as an error. */
+  const [unsafeBody, setUnsafeBody] = useState(false);
   const [lockKey, setLockKey] = useState(0);
   const [linkTaskOpen, setLinkTaskOpen] = useState(false);
   /** The latest WYSIWYG serialisation and its verifier, used right before a save. */
   const serializedRef = useRef<SerializedNoteBody | null>(null);
+  /**
+   * The censor phase. Only `prompt` may be cancelled by a lock / hidden tab / pagehide; once the
+   * token PATCH is pending or has failed the freeze must hold, so a tab close sends no keepalive
+   * with an unacknowledged body.
+   */
+  const censorPhase = useRef<'idle' | 'prompt' | 'saving' | 'conflict' | 'failed'>('idle');
   /** The `updatedAt` last seen through the query, so a live refetch is adopted exactly once. */
   const seenRevision = useRef(note.updatedAt);
   /** Identifies the newest conflict refresh; a late answer for an older one is dropped. */
@@ -192,20 +211,27 @@ function NoteDetailInner({ note }: { note: Note }) {
   }, [revealState, reveal]);
 
   // MED (2c): a marker left by this tab means a censor was produced but its save may never have
-  // landed. Check the first server body this page sees; the marker is cleared either way, so the
-  // warning is shown at most once.
+  // landed. Check a FRESH server body (never cached data) the first time this page sees the note;
+  // the marker is cleared either way, so the warning is shown at most once. A failed GET leaves
+  // the marker for the next open instead of guessing from a cached body.
   const censorChecked = useRef(false);
   useEffect(() => {
     if (censorChecked.current) return;
     censorChecked.current = true;
     let active = true;
-    void checkPendingCensor(note.id, note.body).then((outcome) => {
-      if (active && outcome === 'missing') setCensorMaybeUnsaved(true);
-    });
+    void (async () => {
+      try {
+        const fresh = await fetchNote(note.id);
+        const outcome = await checkPendingCensor(note.id, fresh.body);
+        if (active && outcome === 'missing') setCensorMaybeUnsaved(true);
+      } catch {
+        // The marker survives an unavailable server; compare again on the next open.
+      }
+    })();
     return () => {
       active = false;
     };
-  }, [note.id, note.body]);
+  }, [note.id]);
 
   // --- debounced, diff-only autosave ------------------------------------------------------------
   const [autosave] = useState(
@@ -249,16 +275,37 @@ function NoteDetailInner({ note }: { note: Note }) {
     if (gone) autosave.stop();
   }, [gone, autosave]);
 
-  // H4: verification runs on the autosave debounce/flush/keepalive — never on a keystroke. Only
-  // the exact Markdown the editor emitted is verified; a source-view edit has no editor document
-  // and is saved as typed. Registered in an effect so the hook reads the latest snapshot ref.
+  // Verification runs on every body save — debounce, flush AND the unmount flush — never on a
+  // keystroke. Only the exact Markdown the editor emitted is verified; a source-view edit has no
+  // matching editor snapshot and is saved as typed. A verifier mismatch drops the body and raises
+  // the explicit error instead of saving a guessed form. The hook is deliberately never
+  // unregistered: React removes effect cleanups before the unmount flush runs.
   useEffect(() => {
     autosave.setPreparePatch((patch) => {
-      const snapshot = serializedRef.current;
-      if (patch.body === undefined || !snapshot || snapshot.markdown !== patch.body) return patch;
-      return { ...patch, body: snapshot.verified() };
+      const prepared = prepareNoteSavePatch(patch, serializedRef.current);
+      if (patch.body !== undefined) setUnsafeBody(prepared.bodyUnsafe);
+      return prepared;
     });
-    return () => autosave.setPreparePatch(undefined);
+  }, [autosave]);
+
+  /**
+   * Freeze every field synchronously, before the password prompt opens. Nothing is debounced,
+   * flushed or keepalive'd until the censor is cancelled (unfreeze, pre-censor draft intact) or
+   * its one direct token PATCH succeeds.
+   */
+  const freezeForCensor = useCallback(() => {
+    censorPhase.current = 'prompt';
+    autosave.freeze();
+    setCensorFrozen(true);
+    setCensorSaveFailed(false);
+    reveal.close();
+  }, [autosave, reveal]);
+
+  const cancelCensor = useCallback(() => {
+    censorPhase.current = 'idle';
+    autosave.unfreeze();
+    setCensorFrozen(false);
+    setCensorSaveFailed(false);
   }, [autosave]);
 
   /**
@@ -298,6 +345,10 @@ function NoteDetailInner({ note }: { note: Note }) {
       setGone(false);
       setDirty(false);
       setStatus('saved');
+      setUnsafeBody(false);
+      censorPhase.current = 'idle';
+      setCensorFrozen(false);
+      setCensorSaveFailed(false);
       reveal.close();
       client.setQueryData(notesKeys.detail(note.id), remote);
     },
@@ -337,6 +388,9 @@ function NoteDetailInner({ note }: { note: Note }) {
     autosave.update(draft);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the controller's state
     setDirty(autosave.isDirty());
+    if (!autosave.isDirty()) {
+      setUnsafeBody(false);
+    }
   }, [draft, autosave, gone]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the controller's state
@@ -376,13 +430,26 @@ function NoteDetailInner({ note }: { note: Note }) {
     adoptRemote(deferred);
   }, [status, dirty, gone, conflict, conflictFetchFailed, autosave, adoptRemote]);
 
-  useEffect(() => () => void autosave.flush(), [autosave]);
+  // Note change / unmount: cancel an open censor prompt (the pre-censor draft is then normal
+  // autosave material) and make the final flush while the verifier is still attached. A pending or
+  // failed token save stays frozen; its draft is the token body and no keepalive may race it.
+  useEffect(
+    () => () => {
+      if (censorPhase.current === 'prompt') {
+        censorPhase.current = 'idle';
+        autosave.unfreeze();
+      }
+      void autosave.flush();
+      lockCensored('note-change');
+    },
+    [autosave],
+  );
 
-  // LOW: after resolving a conflict, typing continues in the editor rather than on the button
-  // that just disappeared.
+  // LOW: after resolving a conflict, typing continues on whichever surface is visible — the
+  // Markdown source textarea when that view is open, otherwise the WYSIWYG editor.
   useEffect(() => {
     if (focusTicket === 0) return;
-    document.querySelector<HTMLElement>('.bk-note-prosemirror')?.focus();
+    noteFocusSurface(document)?.focus();
   }, [focusTicket]);
 
   // Navigation: flush first, block only when saving failed (Retry / explicit discard below).
@@ -403,15 +470,16 @@ function NoteDetailInner({ note }: { note: Note }) {
     () =>
       onCensorLock((reason) => {
         reveal.close();
+        // A lock while the password prompt is open cancels the censor: the note unfreezes and
+        // normal autosave resumes with the pre-censor draft. Once the token PATCH is pending or
+        // failed, the freeze holds (a closed tab must not send an unacknowledged censor body).
+        if (censorPhase.current === 'prompt') cancelCensor();
         if (reason === 'manual' || reason === 'pagehide' || reason === 'signout') {
           setLockKey((k) => k + 1);
         }
       }),
-    [reveal],
+    [cancelCensor, reveal],
   );
-
-  // Note change: this instance is keyed by note id, so unmounting means "another note (or none)".
-  useEffect(() => () => lockCensored('note-change'), []);
 
   // --- structural mutations (state / trash / delete / links) -----------------------------------
   const refresh = useCallback(
@@ -490,19 +558,86 @@ function NoteDetailInner({ note }: { note: Note }) {
     },
     [navigate],
   );
-  // Review fix (P1): PAUSE the body autosave synchronously, before the password prompt opens and
-  // before any await, so the plaintext draft cannot be PATCHed behind the dialog. The token
-  // revision that follows a successful censor is saved immediately (no debounce window).
+  // Censoring is its own save. Freeze ALL fields synchronously, before the password prompt and
+  // before any await, so nothing can be debounced, flushed or keepalive'd behind the dialog. The
+  // editor applies the verified token document and hands it to onCensoredBody, which sends the one
+  // direct PATCH and only then unfreezes (on success).
   const onCensor = useCallback(
     async (plaintext: string) => {
-      const token = await censorWithBodyPause(autosave, flow, plaintext);
-      // MED (2c): record the digest before the editor can hand the token document to the
-      // autosave, so a tab closed between the two still leaves something to check next time.
-      if (token) await markPendingCensor(note.id, token);
-      return token;
+      if (censorPhase.current !== 'idle') return null;
+      freezeForCensor();
+      try {
+        return await flow.onCensor(plaintext);
+      } catch (err) {
+        cancelCensor();
+        throw err;
+      }
     },
-    [autosave, flow, note.id],
+    [cancelCensor, flow, freezeForCensor],
   );
+  /**
+   * The one token PATCH. The sessionStorage marker (note id + token digest) is written first, so a
+   * tab closed while the request is in flight has something to check on the next open. Success
+   * releases the freeze; a 409 shows the conflict banner; a network error keeps the freeze and
+   * offers Retry, which resends this exact body with this exact premise.
+   */
+  const onCensoredBody = useCallback(
+    async (body: string, token: string) => {
+      // A lock may have cancelled the prompt in the same turn that encryption finished. The token
+      // already exists and the editor has applied it, so re-freeze and finish its save instead of
+      // stranding a read-only editor with an unsaved token document.
+      if (censorPhase.current === 'idle') {
+        censorPhase.current = 'prompt';
+        autosave.freeze();
+        setCensorFrozen(true);
+      }
+      if (censorPhase.current !== 'prompt') return 'error' as const;
+      censorPhase.current = 'saving';
+      setCensorSaveFailed(false);
+      setDraft((d) => (d.body === body ? d : { ...d, body }));
+      await markPendingCensor(note.id, token);
+      const result = await autosave.saveCensoredBody(body);
+      if (result === 'saved') {
+        censorPhase.current = 'idle';
+        setCensorFrozen(false);
+        setCensorSaveFailed(false);
+        // Resume the fields that changed before the freeze (title, tags, pin) now the body is safe.
+        autosave.unfreeze();
+        return result;
+      }
+      if (result === 'conflict') {
+        censorPhase.current = 'conflict';
+        setCensorFrozen(true);
+        setCensorSaveFailed(false);
+        return result;
+      }
+      censorPhase.current = 'failed';
+      setCensorFrozen(true);
+      setCensorSaveFailed(true);
+      return result;
+    },
+    [autosave, note.id],
+  );
+  const retryCensorSave = useCallback(async () => {
+    if (censorPhase.current !== 'failed') return;
+    setCensorRetrying(true);
+    try {
+      const result = await autosave.retryCensoredSave();
+      if (result === 'saved') {
+        censorPhase.current = 'idle';
+        setCensorFrozen(false);
+        setCensorSaveFailed(false);
+        autosave.unfreeze();
+      } else if (result === 'conflict') {
+        censorPhase.current = 'conflict';
+        setCensorSaveFailed(false);
+      } else {
+        setCensorSaveFailed(true);
+      }
+    } finally {
+      setCensorRetrying(false);
+    }
+  }, [autosave]);
   // Fire-and-forget reveal: the page unlocks and shows the overlay; nothing is returned to the editor.
   const onReveal = useCallback(
     (token: string, anchor: RevealAnchor) => {
@@ -520,14 +655,17 @@ function NoteDetailInner({ note }: { note: Note }) {
       }),
     [toast, t],
   );
-  // H2: the editor reports an abort after a token was produced (stale document / a save form it
-  // cannot verify); the page releases the body pause itself. On success the coming token update
-  // does that, so the plaintext is never saved in the gap.
+  /**
+   * The editor's own verdict. Cancelled / aborted / unsafe / unsupported attempts during the
+   * prompt release the freeze with the pre-censor draft. `ok` means the direct save already
+   * succeeded; `conflict` and `save-failed` deliberately keep the freeze.
+   */
   const onCensorSettled = useCallback(
-    (outcome: 'ok' | 'cancelled' | 'aborted' | 'unsupported') => {
-      if (outcome !== 'ok') autosave.resumeBody();
+    (outcome: CensorOutcome) => {
+      if (outcome === 'ok' || outcome === 'conflict' || outcome === 'save-failed') return;
+      if (censorPhase.current === 'prompt') cancelCensor();
     },
-    [autosave],
+    [cancelCensor],
   );
   const onSerialized = useCallback((snapshot: SerializedNoteBody) => {
     serializedRef.current = snapshot;
@@ -547,15 +685,22 @@ function NoteDetailInner({ note }: { note: Note }) {
   const trashed = note.state === 'trashed';
   const saveLabel = gone
     ? t('notes.gone', { defaultValue: 'This note was deleted — copy your text' })
-    : status === 'conflict'
-      ? t('notes.conflict.status', {
-          defaultValue: 'Not saved — this note changed elsewhere',
-        })
-      : status === 'saving'
-        ? t('notes.saving', { defaultValue: 'Saving…' })
-        : status === 'error'
-          ? t('notes.saveError', { defaultValue: 'Save failed — retrying on next edit' })
-          : t('notes.saved', { defaultValue: 'Saved' });
+    : censorSaveFailed
+      ? t('notes.censor.saveFailed', { defaultValue: 'Censor not saved — Retry' })
+      : status === 'conflict'
+        ? t('notes.conflict.status', {
+            defaultValue: 'Not saved — this note changed elsewhere',
+          })
+        : status === 'unsafe' || unsafeBody
+          ? t('notes.unsafeSave', {
+              defaultValue:
+                "This note couldn't be saved safely — please copy your text and report it",
+            })
+          : status === 'saving'
+            ? t('notes.saving', { defaultValue: 'Saving…' })
+            : status === 'error'
+              ? t('notes.saveError', { defaultValue: 'Save failed — retrying on next edit' })
+              : t('notes.saved', { defaultValue: 'Saved' });
   const retrySave = async () => {
     setRetrying(true);
     try {
@@ -592,40 +737,33 @@ function NoteDetailInner({ note }: { note: Note }) {
 
   /**
    * "Keep mine": the remote revision becomes the premise, and the whole draft replaces the saved
-   * version. The banner only calls this after the censor-safety confirmation when needed.
+   * version. It requires a successfully fetched remote revision, and the censor-safety check runs
+   * HERE (not only in the banner): when the saved body looks censored, only a confirmation bound
+   * to that exact revision may pass.
    */
-  const keepMine = useCallback(async () => {
-    if (!conflict) return;
-    setConflictBusy(true);
-    try {
-      const kept = await autosave.keepMine(conflict.updatedAt);
-      setDirty(autosave.isDirty());
-      // A new 409 re-opens the banner through onConflict with a fresher remote note.
-      if (kept) {
-        setConflict(null);
-        setConflictFetchFailed(false);
-        setFocusTicket((ticket) => ticket + 1);
+  const keepMine = useCallback(
+    async (confirmedRevision: string | null = null) => {
+      if (!conflict) return;
+      if (!keepMineAllowed(conflict, draft.body, confirmedRevision)) return;
+      setConflictBusy(true);
+      try {
+        const kept = await autosave.keepMine(conflict.updatedAt);
+        setDirty(autosave.isDirty());
+        // A new 409 re-opens the banner through onConflict with a fresher remote note.
+        if (kept) {
+          setConflict(null);
+          setConflictFetchFailed(false);
+          censorPhase.current = 'idle';
+          setCensorFrozen(false);
+          setCensorSaveFailed(false);
+          setFocusTicket((ticket) => ticket + 1);
+        }
+      } finally {
+        setConflictBusy(false);
       }
-    } finally {
-      setConflictBusy(false);
-    }
-  }, [autosave, conflict]);
-
-  /** "Copy mine": put the draft Markdown on the clipboard, then adopt their version. */
-  const copyMine = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(draft.body);
-    } catch {
-      toast({
-        tone: 'error',
-        message: t('notes.conflict.copyFailed', {
-          defaultValue: "Couldn't copy your draft to the clipboard.",
-        }),
-      });
-      return;
-    }
-    await loadTheirs();
-  }, [draft.body, loadTheirs, t, toast]);
+    },
+    [autosave, conflict, draft.body],
+  );
 
   // Censor safety (MED): any differing saved body that looks censor-like means keeping mine could
   // bring back text censored elsewhere. The banner then requires an explicit confirmation.
@@ -640,7 +778,7 @@ function NoteDetailInner({ note }: { note: Note }) {
         <span className="ml-auto text-xs text-muted" aria-live="polite" role="status">
           {saveLabel}
         </span>
-        {status === 'error' && !gone && !conflict && (
+        {status === 'error' && !gone && !conflict && !censorFrozen && (
           <Button variant="secondary" onClick={() => void retrySave()} busy={retrying}>
             {t('notes.retrySave', { defaultValue: 'Retry save' })}
           </Button>
@@ -656,11 +794,29 @@ function NoteDetailInner({ note }: { note: Note }) {
         </Alert>
       )}
 
+      {unsafeBody && (
+        <Alert>
+          {t('notes.unsafeSave', {
+            defaultValue:
+              "This note couldn't be saved safely — please copy your text and report it",
+          })}
+        </Alert>
+      )}
+
       {censorMaybeUnsaved && (
         <Alert tone="warning">
           {t('notes.censor.maybeUnsaved', {
             defaultValue: 'Your last censor may not have been saved — check this note',
           })}
+        </Alert>
+      )}
+
+      {censorSaveFailed && (
+        <Alert tone="warning">
+          {t('notes.censor.saveFailed', { defaultValue: 'Censor not saved — Retry' })}{' '}
+          <Button variant="secondary" onClick={() => void retryCensorSave()} busy={censorRetrying}>
+            {t('notes.retrySave', { defaultValue: 'Retry save' })}
+          </Button>
         </Alert>
       )}
 
@@ -672,8 +828,7 @@ function NoteDetailInner({ note }: { note: Note }) {
           remoteRevision={conflict?.updatedAt ?? null}
           onLoadTheirs={() => void loadTheirs()}
           onRetryFetch={() => void resolveConflict()}
-          onKeepMine={() => void keepMine()}
-          onCopyMine={() => void copyMine()}
+          onKeepMine={(confirmedRevision) => void keepMine(confirmedRevision)}
         />
       )}
 
@@ -748,6 +903,7 @@ function NoteDetailInner({ note }: { note: Note }) {
                 const availability = noteExportAvailability(note.id, format, {
                   dirty,
                   saving: status === 'saving',
+                  frozen: censorFrozen,
                 });
                 return availability.href ? (
                   <a
@@ -769,7 +925,7 @@ function NoteDetailInner({ note }: { note: Note }) {
                   </span>
                 );
               })}
-              {dirty || status === 'saving' ? (
+              {dirty || status === 'saving' || censorFrozen ? (
                 <p className="px-3 pt-1 text-xs text-muted" role="status">
                   {t('notes.export.waitForSave', {
                     defaultValue: 'Waiting for the note to finish saving…',
@@ -788,13 +944,13 @@ function NoteDetailInner({ note }: { note: Note }) {
           aria-label={t('notes.titleLabel', { defaultValue: 'Note title' })}
           placeholder={t('notes.titlePlaceholder', { defaultValue: 'Title' })}
           maxLength={200}
-          disabled={gone}
+          disabled={gone || censorFrozen}
           value={draft.title}
           onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
         />
         <TagEditor
           tags={draft.tags}
-          disabled={gone}
+          disabled={gone || censorFrozen}
           onChange={(tags) => setDraft((d) => ({ ...d, tags }))}
         />
 
@@ -809,13 +965,14 @@ function NoteDetailInner({ note }: { note: Note }) {
             key={lockKey}
             markdown={draft.body}
             historyResetKey={historyResetKey}
-            editable={!gone}
+            editable={!gone && !censorFrozen}
             onChange={(markdown) => setDraft((d) => ({ ...d, body: markdown }))}
             onUploadFile={onUploadFile}
             onOpenInternal={onOpenInternal}
             searchNotes={searchNoteOptions}
             searchTasks={searchTasks}
             onCensor={onCensor}
+            onCensoredBody={onCensoredBody}
             onReveal={onReveal}
             onUncensor={onUncensor}
             onProtectedCut={onProtectedCut}

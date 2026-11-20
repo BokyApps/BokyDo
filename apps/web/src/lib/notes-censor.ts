@@ -111,40 +111,6 @@ function messageFor(err: unknown): string | null {
   return err instanceof CensorError ? (MESSAGES[err.code] ?? null) : null;
 }
 
-/** The autosave surface the censor flow needs; kept structural so the controller stays decoupled. */
-export interface BodyPause {
-  pauseBody(): void;
-  resumeBody(): void;
-  flushNextUpdate(): void;
-}
-
-/**
- * P1: censor a selection while the body autosave is paused. `pauseBody` runs synchronously before
- * the prompt is opened (the flow calls `askPassword` before its first await), so a plaintext
- * revision cannot be PATCHed behind the dialog.
- *
- * H2: on success the pause is NOT released here. The editor still has to verify the token
- * document and hand it to the page (a React state update); until that `update` arrives, a
- * `pagehide` must not send the plaintext body. `flushNextUpdate` marks the coming revision urgent
- * and keeps the body held; the controller releases both when the token draft arrives. An ordinary
- * abort (cancel/throw) restores the debounce immediately.
- */
-export async function censorWithBodyPause(
-  autosave: BodyPause,
-  flow: { onCensor(markdown: string): Promise<string | null> },
-  plaintext: string,
-): Promise<string | null> {
-  autosave.pauseBody();
-  let token: string | null = null;
-  try {
-    token = await flow.onCensor(plaintext);
-  } finally {
-    if (token === null) autosave.resumeBody();
-    else autosave.flushNextUpdate();
-  }
-  return token;
-}
-
 // ---------------------------------------------------------------------------------------------
 // "Did my last censor save?" marker (MED 2c). A censor produces its token in the browser and the
 // save that follows can lose a race with a closed tab. The marker holds a SHA-256 digest of the

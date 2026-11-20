@@ -109,7 +109,10 @@ export function isCensorToken(value: string): boolean {
 const ESCAPE_ALWAYS = /[\\`*_[\]<>~|&{}]/g;
 
 function escapeText(text: string, atLineStart: boolean): string {
-  let out = text.replace(ESCAPE_ALWAYS, '\\$&');
+  // A literal `!` directly before `[` is escaped even though `[` is escaped too: the pair must
+  // never read back as an image marker (`![alt](url)`). The escape runs after the general pass so
+  // the backslash it inserts is not itself escaped.
+  let out = text.replace(ESCAPE_ALWAYS, '\\$&').replace(/!(?=\\\[)/g, '\\!');
   if (atLineStart) {
     // Block markers at the start of a line. Digits themselves can't be backslash-escaped, so an
     // ordered-list marker is defused by escaping its `.`/`)` punctuation instead.
@@ -847,6 +850,17 @@ function serializeInline(nodes: JSONContent[] = [], inCell = false): string {
       stack.push(mark);
     }
   };
+  /** Whether `desired` would open a link mark from the current stack. */
+  const opensLink = (desired: StackMark[]): boolean => {
+    let prefix = 0;
+    while (
+      prefix < stack.length &&
+      prefix < desired.length &&
+      stack[prefix]!.key === desired[prefix]!.key
+    )
+      prefix++;
+    return desired.slice(prefix).some((mark) => mark.key.startsWith('link:'));
+  };
   for (const node of nodes) {
     if (node.type === 'hardBreak') {
       // A GFM table row cannot contain a newline, so a break in a cell is written as `<br>`
@@ -857,7 +871,11 @@ function serializeInline(nodes: JSONContent[] = [], inCell = false): string {
     }
     const piece = pieceFor(node, atLineStart);
     if (piece === null) continue;
-    applyMarks(desiredMarks(node));
+    const marks = desiredMarks(node);
+    // A literal `!` that ends the previous run would turn an immediately following `[label](url)`
+    // into an image. Escape it at the node boundary as well as inside one text node.
+    if (out.endsWith('!') && opensLink(marks)) out = `${out.slice(0, -1)}\\!`;
+    applyMarks(marks);
     out += piece;
     atLineStart = piece.endsWith('\n');
   }
@@ -976,10 +994,7 @@ function serializeBlock(node: JSONContent, marker: ListMarker = 'a'): string {
         typeof node.attrs?.language === 'string'
           ? (node.attrs.language.trim().split(/\s+/)[0] ?? '')
           : '';
-      const text = (node.content ?? [])
-        .map((n) => n.text ?? '')
-        .join('')
-        .replace(/\n$/, '');
+      const text = (node.content ?? []).map((n) => n.text ?? '').join('');
       const fence = codeFence(text);
       return `${fence}${language}\n${text}\n${fence}`;
     }

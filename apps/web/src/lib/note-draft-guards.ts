@@ -11,20 +11,16 @@ import { pathFor } from './notes.js';
  *  - `DraftLeaveGuard` is what TanStack Router's `useBlocker` calls: it flushes and reports
  *    whether the navigation must still be blocked (save failed -> keep the draft and offer Retry).
  *
+ * The keepalive request ALWAYS carries `expectedUpdatedAt`; there is no unguarded revision path.
+ * While a censor freeze is active it sends nothing at all.
+ *
  * Pure DOM/controller logic, so the whole flow is unit-testable with fake timers.
  */
 
 export interface DraftSaver {
   hasUnsavedWork(): boolean;
-  pendingPatch(): NotePatch | null;
-  /** The server revision the draft is based on; the keepalive PATCH must carry it. */
-  baseRevision(): string;
-  /**
-   * The pagehide request: the patch plus its premise, or `null` when everything is acknowledged.
-   * The premise is `null` for the single censor-safety exception (an unacknowledged censor
-   * revision while this tab's own older PATCH is still in flight).
-   */
-  keepaliveRequest(): { patch: NotePatch; expectedUpdatedAt: string | null } | null;
+  /** The pagehide request: the patch plus its premise, or `null` when nothing may be sent. */
+  keepaliveRequest(): { patch: NotePatch; expectedUpdatedAt: string } | null;
   flush(): Promise<boolean>;
   stop(): void;
 }
@@ -50,8 +46,7 @@ export function installDraftGuards(
     if (request === null) return;
     // Also covers "still saving": the draft is newer than the last acknowledged snapshot, so
     // re-sending it is correct and idempotent. The revision premise makes it a no-op (409) if
-    // another tab saved first, instead of overwriting that save. The one exception is a censor
-    // token revision held up by this tab's own in-flight PATCH; the controller decides that.
+    // another tab saved first, instead of overwriting that save.
     keepalivePatch(pathFor(noteId), request.patch, request.expectedUpdatedAt);
   };
   target.addEventListener('beforeunload', onBeforeUnload);

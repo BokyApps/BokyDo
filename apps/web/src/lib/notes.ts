@@ -75,6 +75,15 @@ export const noteQuery = (id: string) =>
     queryFn: async (): Promise<Note> => (await api<{ note: Note }>('GET', pathFor(id))).note,
   });
 
+/**
+ * A GET that bypasses every cache. The censor marker must be checked against the server's actual
+ * body: a cached copy may predate the censor save (or a save elsewhere) and would be the wrong
+ * answer exactly when it matters.
+ */
+export async function fetchNote(id: string): Promise<Note> {
+  return (await api<{ note: Note }>('GET', pathFor(id))).note;
+}
+
 export const noteTagsQuery = queryOptions({
   queryKey: notesKeys.tags(),
   queryFn: () => api<NoteTagsResponse>('GET', noteTagsPath),
@@ -230,13 +239,14 @@ export function isNoteGoneError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
 }
 
-/**
- * A 409 `stale_revision` from a note PATCH: another tab saved first, so this draft's premise no
- * longer holds. The autosave stops and the page fetches the latest note before deciding.
- */
+/** A 409 `stale_revision` from a note PATCH: another tab saved first, so this draft's premise no
+ * longer holds. The autosave stops and the page fetches the latest note before deciding. */
 export function isStaleRevisionError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409 && err.code === 'stale_revision';
 }
+
+/** The outcome of the one direct PATCH that follows a successful censor. */
+export type CensorSaveResult = 'saved' | 'conflict' | 'gone' | 'error';
 
 const CENSOR_SPAN_PATTERN = /\{\{censored:[^{}]*\}\}/gi;
 
@@ -276,17 +286,71 @@ export function noteLoadPhase(query: {
 }
 
 /**
- * Export links are only offered once every change is acknowledged: a dirty or saving controller
- * means the server's Markdown is older than what is on screen. No href while unavailable, so the
- * browser cannot start a download for stale content.
+ * Export links are only offered once every change is acknowledged: a dirty, saving or censor-frozen
+ * note means the server's Markdown is older than what is on screen (or a censor save is about to
+ * replace it). No href while unavailable, so the browser cannot start a download for stale content.
  */
 export function noteExportAvailability(
   noteId: string,
   format: 'md' | 'docx' | 'pdf',
-  state: { dirty: boolean; saving: boolean },
+  state: { dirty: boolean; saving: boolean; frozen?: boolean },
 ): { href: string | null; disabled: boolean } {
-  const ready = !state.dirty && !state.saving;
+  const ready = !state.dirty && !state.saving && !state.frozen;
   return { href: ready ? noteExportPath(noteId, format) : null, disabled: !ready };
+}
+
+/**
+ * The surface a user should keep typing in after a conflict. The Markdown source view (and safe
+ * mode) renders a textarea; otherwise the WYSIWYG surface is the editable region.
+ */
+export function noteFocusSurface(root: ParentNode): HTMLElement | null {
+  return (
+    root.querySelector<HTMLElement>('textarea.bk-note-textarea') ??
+    root.querySelector<HTMLElement>('.bk-note-prosemirror')
+  );
+}
+
+/**
+ * Whether "Keep mine" may run. It needs a successfully fetched remote revision, and when that
+ * remote body differs and looks censored, a confirmation bound to that exact revision. The page
+ * calls this from the action handler itself, not only from the banner's rendering.
+ */
+export function keepMineAllowed(
+  remote: Note | null,
+  draftBody: string,
+  confirmedRevision: string | null,
+): boolean {
+  if (!remote) return false;
+  if (!censorConflictWarning(remote.body, draftBody)) return true;
+  return confirmedRevision === remote.updatedAt;
+}
+
+/** What a serialised editor body says about the Markdown that is about to be saved. */
+export interface VerifiedNoteBody {
+  markdown: string;
+  verified(): { markdown: string; mismatch: boolean };
+}
+
+/**
+ * The last pass over a body patch before it is sent. Normally the verified Markdown replaces the
+ * body. If the verifier reports a mismatch, the body is dropped (never guessed at), the other
+ * fields keep their patch, and `bodyUnsafe` tells the page to show the explicit save error. A
+ * source-view edit has no matching editor snapshot and is saved exactly as typed.
+ */
+export function prepareNoteSavePatch(
+  patch: NotePatch,
+  snapshot: VerifiedNoteBody | null,
+): { patch: NotePatch | null; bodyUnsafe: boolean } {
+  if (patch.body === undefined || snapshot === null || snapshot.markdown !== patch.body) {
+    return { patch, bodyUnsafe: false };
+  }
+  const verified = snapshot.verified();
+  if (verified.mismatch) {
+    const { body: _body, ...rest } = patch;
+    void _body;
+    return { patch: Object.keys(rest).length ? rest : null, bodyUnsafe: true };
+  }
+  return { patch: { ...patch, body: verified.markdown }, bodyUnsafe: false };
 }
 
 /**

@@ -51,6 +51,7 @@ function render(onReveal: NoteCallbacks['onReveal'] = vi.fn()) {
     searchNotes: undefined,
     searchTasks: undefined,
     onCensor: undefined,
+    onCensoredBody: undefined,
     onReveal,
     onUncensor: undefined,
     onProtectedCut: undefined,
