@@ -423,6 +423,7 @@
         "censorAborted": "The note changed while censoring. Nothing was changed — please try again.",
         "censorClose": "Close",
         "censoredAriaLabel": "Censored text, options",
+        "censoredText": "Censored text",
         "censorEmpty": "Select some text to censor first.",
         "censorLinked": "Remove the link before censoring this text",
         "censorRemove": "Remove censor",

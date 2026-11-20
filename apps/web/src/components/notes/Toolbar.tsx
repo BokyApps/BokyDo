@@ -329,11 +329,12 @@ export function Toolbar({
           closeAll();
           setEmbedOpen(true);
         })}
-        {button(
-          t('notes.editor.censor', { defaultValue: 'Censor selection' }),
-          '██',
-          () => void censor(),
-        )}
+        {callbacks.onCensor &&
+          button(
+            t('notes.editor.censor', { defaultValue: 'Censor selection' }),
+            '██',
+            () => void censor(),
+          )}
         <span className="bk-tool-sep" aria-hidden="true" />
         <button
           type="button"

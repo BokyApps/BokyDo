@@ -27,6 +27,7 @@ import {
   deleteNote,
   fetchNote,
   isNoteGoneError,
+  CENSORING_ENABLED,
   keepMineAllowed,
   linkNoteTask,
   newestNote,
@@ -971,10 +972,9 @@ function NoteDetailInner({ note }: { note: Note }) {
             onOpenInternal={onOpenInternal}
             searchNotes={searchNoteOptions}
             searchTasks={searchTasks}
-            onCensor={onCensor}
-            onCensoredBody={onCensoredBody}
-            onReveal={onReveal}
-            onUncensor={onUncensor}
+            // Censoring ships as its own follow-up: without these callbacks the editor offers no
+            // Censor, Reveal or Remove action and existing tokens show as █████ only.
+            {...(CENSORING_ENABLED ? { onCensor, onCensoredBody, onReveal, onUncensor } : {})}
             onProtectedCut={onProtectedCut}
             onCensorSettled={onCensorSettled}
             onRemoveCensorFailed={onRemoveCensorFailed}
