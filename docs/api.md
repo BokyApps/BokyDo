@@ -33,6 +33,8 @@ allowed only if the token holds every scope it needs:
 | `comments:write` | Add, change and delete comments                                   |
 | `habits:read`    | Read your personal habits, progress, streaks and check-in history |
 | `habits:write`   | Create, update, delete and check in your personal habits          |
+| `notes:read`     | Read your personal notes, tags and files                          |
+| `notes:write`    | Add, change, trash and delete your personal notes and their files |
 
 `sync` is full account access and covers all current REST and MCP permissions. Other tokens need
 each permission an operation requires. AI features are retired, and new tokens cannot request an
@@ -45,8 +47,9 @@ A token missing a scope gets `403 {"error":"insufficient_scope"}`; a bad or unkn
 A personal access token can also be **limited to some projects** ("Only the projects I choose").
 Everything outside them answers `404`, as if it did not exist, on REST and MCP alike. A limited
 token can't create projects (`403`), change sharing, or touch labels, filters or settings; tick
-sub-projects and the Inbox explicitly if it should reach them. Personal habits are account-wide and cannot be accessed with a project-limited token. Full access (`sync`) can't be
-limited. See [ADR 0019](adr/0019-project-limited-tokens.md).
+sub-projects and the Inbox explicitly if it should reach them. Personal habits and notes are account-wide and cannot be accessed with a project-limited token.
+Full access (`sync`) can't be limited. See
+[ADR 0019](adr/0019-project-limited-tokens.md).
 
 ### MCP (Streamable HTTP)
 
@@ -158,6 +161,68 @@ Daily targets are 1; weekly targets are 1–7. Check-ins use the owner's local d
 or invalid dates, and repeating the same completed state never increments it twice. Summaries
 include current progress, streak and 14 days of history. A stable creation UUID makes retries
 safe; another user's habit always appears not found.
+
+## Notes
+
+Notes are personal Markdown documents, separate from tasks (ADR 0025). They take `notes:read` and
+`notes:write`; `sync` covers both. Project-limited tokens cannot access them, even with the notes
+scopes, and answer `403 {"error":"project_limited_token"}`. Another user's note, file or linked
+task always answers `404`, as if it did not exist. A token without `tasks:read` gets no task data
+from a note, and linking a note to a task needs `tasks:read` as well as `notes:write`, because the
+answer reveals whether the task exists.
+
+MCP exposes `list_notes`, `get_note`, `create_note`, `update_note`, `archive_note`, `trash_note`,
+`link_note_to_task` and `unlink_note_from_task`. A note's title, body, snippet, tags, backlink
+titles, file names and linked task text come back with every censored span as `█████`, never as its
+ciphertext token, in both the text content and `structuredContent`. MCP additionally refuses to
+change a note's body or move it to the trash while its current body contains anything censor-like
+(`{{`, optional whitespace, then `censored` in any case), because an AI client has no key and could
+never re-create it; title, tags, pin and archive/unarchive remain allowed. That protection is
+**MCP-specific**: a REST client with `notes:write` can still edit the body or trash such a note.
+`link_note_to_task` also needs `tasks:read`, and a write-only token gets only a changed note's id
+and timestamp back, not its body.
+
+| Method | Path                                | Scope         | Notes                                                                                                             |
+| ------ | ----------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/notes`                     | `notes:read`  | `q`, `tag`, `state=active\|archived\|trashed` (default `active`), `limit` (≤ 100), `cursor`.                      |
+| GET    | `/api/v1/notes/tags`                | `notes:read`  | Distinct tags and counts of your non-trashed notes.                                                               |
+| GET    | `/api/v1/notes/{id}`                | `notes:read`  | One note with its body, backlinks, visible linked tasks and files.                                                |
+| POST   | `/api/v1/notes`                     | `notes:write` | `{ "title": "…", "body": "…", "tags": [], "pinned": false }` (optional stable UUID `id`).                         |
+| PATCH  | `/api/v1/notes/{id}`                | `notes:write` | Any of `title`, `body`, `tags`, `pinned`, `state` (`active`/`archived`), `trashed`; optional `expectedUpdatedAt`. |
+| DELETE | `/api/v1/notes/{id}`                | `notes:write` | Deletes it and its files forever; answers `204`.                                                                  |
+| PUT    | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Links the task manually; idempotent, answers `204`.                                                               |
+| DELETE | `/api/v1/notes/{id}/tasks/{taskId}` | `notes:write` | Removes the manual link; answers `204`.                                                                           |
+| GET    | `/api/v1/tasks/{taskId}/notes`      | `notes:read`  | Your own notes linked to a task you can see.                                                                      |
+| POST   | `/api/v1/notes/{id}/files`          | `notes:write` | Raw `application/octet-stream` body, filename in `X-Filename`; answers the stored file.                           |
+| GET    | `/api/v1/note-files/{id}`           | `notes:read`  | Downloads a file; `?inline=1` renders PNG, JPEG, GIF and WebP inline, everything else is saved.                   |
+
+A body is at most 512 KiB of UTF-8. A title is at most 200 characters. Tags are trimmed,
+lower-cased and de-duplicated on save: each is 1–50 characters with no `#`, `,` or whitespace, and
+a note holds at most 20. Lists put pinned notes first and then newest first, with an opaque cursor.
+`q=` matches full words and title substrings; censored spans, URLs and Markdown punctuation are
+never indexed. Trashed notes disappear from lists unless `state=trashed` and are purged after 30
+days. Note files follow the attachment rules: the type is sniffed from the bytes, uploads honour
+`attachments.maxSizeMb` (0 disables them), each user has 1 GiB and 2,000 files, and uploads are
+rate-limited to 120 an hour. Note writes publish live update hints to the owner's open tabs.
+
+The POST and PATCH answers are either the full note or, for a token without `notes:read`, the
+receipt `{"note":{"id":"…","updatedAt":"…"}}`; the OpenAPI document describes both. Creating with
+an id that already belongs to the same content answers `200`, and one that belongs to another
+account or different content answers `409 {"error":"id_conflict"}`. A file download is
+`image/png`, `image/jpeg`, `image/gif` or `image/webp` when inline, and
+`application/octet-stream` otherwise. An upload answers `413 too_large` past the size limit or
+quota, `429 rate_limited` past 120 an hour, and `403 uploads_disabled` when the instance disables
+uploads.
+
+To protect a save from a stale tab, PATCH accepts `expectedUpdatedAt`: send the `updatedAt` you last
+saw, exactly as the API returned it (a canonical ISO-8601 instant such as
+`2026-11-18T12:00:00.000Z`; any other spelling is `400 validation_failed`). If the note has changed
+since that revision, nothing is written and the answer is `409 {"error":"stale_revision"}`. A token
+with `notes:read` also gets the note's current `updatedAt` in that body, so the client can reload
+and merge; a write-only token gets only the error. Without `expectedUpdatedAt` a PATCH stays
+unconditional, as before. `updatedAt` is the note's revision at millisecond precision; every
+accepted write moves it forward. MCP's `update_note` takes the same `expectedUpdatedAt` and fails
+the call with a stale-revision error instead of a `409`.
 
 ## Live updates and browser notifications
 

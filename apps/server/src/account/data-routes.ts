@@ -22,6 +22,8 @@ export interface AccountDataDeps {
   settings: SettingsService;
   mailer: Mailer;
   store: AttachmentStore;
+  /** `<dataDir>/note-files` (ADR 0025); exported and removed on account deletion. */
+  noteFileStore: AttachmentStore;
   tokens: ApiTokenStore;
 }
 
@@ -119,7 +121,14 @@ export function registerAccountDataRoutes(app: FastifyInstance, deps: AccountDat
       .select({ email: users.email, verified: users.emailVerifiedAt })
       .from(users)
       .where(eq(users.id, userId));
-    const result = await deleteAccount({ db, sync }, userId, { userId: actorId, ip: req.ip });
+    const result = await deleteAccount(
+      { db, sync, noteFileStore: deps.noteFileStore, log: req.log },
+      userId,
+      {
+        userId: actorId,
+        ip: req.ip,
+      },
+    );
     if (!result.deleted) return result;
     events.closeUser(userId);
     // A last word to a verified address: deletion by someone else must not go unnoticed.

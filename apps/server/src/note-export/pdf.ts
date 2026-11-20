@@ -1,0 +1,1084 @@
+import path from 'node:path';
+import { PassThrough, Transform, type Readable } from 'node:stream';
+import PdfDocument from 'pdfkit';
+import type { Block, ListBlock, Run } from './ast.js';
+import {
+  faceFile,
+  familyForScript,
+  isDefaultIgnorable,
+  isJoiner,
+  loadFontCatalog,
+  segmentByScript,
+  warnMissingFonts,
+  type FaceFiles,
+  type FontCatalog,
+  type FontFamily,
+} from './fonts.js';
+import { prepareImage, rebuildPngForPdf } from './image-info.js';
+import type { LoadedImage } from './images.js';
+import { DEFAULT_EXPORT_LIMITS, TooLargeError, type ExportDeadline } from './limits.js';
+
+/**
+ * PDF export, A4 with 2 cm margins. Text is set in the bundled Noto families (Noto Sans for
+ * Latin/Cyrillic/Greek, Noto Sans Mono for code, Noto Sans CJK for Han/kana/Hangul and Noto Sans
+ * Khmer for Khmer), embedded as subsets per document. A missing font file falls back to the
+ * built-in Helvetica/Courier for the scripts that family covers, which keeps a dev checkout
+ * without fetched fonts usable; the built-in fonts are WinAnsi only, so those runs still become
+ * `?` (see docs/note-export.md). Censored spans are drawn as a solid bar, task checkboxes as
+ * drawn boxes and the play marker of an embed as `»`, so no glyph is invented.
+ *
+ * Images: only the PNG/JPEG classes validated in `image-info.ts` reach this module. An image is
+ * parsed once per file and then reused (`PDFKit` takes a prepared image object), and a file that
+ * `pdfkit` still refuses falls back to its `[image: name]` text rather than losing the document.
+ */
+
+export interface PdfContext {
+  images: ReadonlyMap<string, LoadedImage>;
+  fileNames: ReadonlyMap<string, string>;
+  /** One opened image per note file, so a file placed twice is parsed and embedded once. */
+  prepared?: Map<string, PreparedImage>;
+}
+
+/**
+ * pdfkit's own opened-image object. `@types/pdfkit` describes `image()` as taking a path or
+ * bytes only, but at runtime `image()` uses `src` as the image when it has `width` and `height`
+ * (`if (src.width && src.height) image = src`), which is how one file is embedded only once.
+ */
+export interface PreparedImage {
+  width: number;
+  height: number;
+  label: string;
+  obj: unknown;
+  embed(doc: PdfDoc): void;
+}
+
+interface PdfDocRuntime extends PdfDoc {
+  openImage(src: Buffer): PreparedImage;
+}
+
+export interface PdfRenderOptions {
+  /** Tests read the content streams directly, so they turn compression off. */
+  compress?: boolean;
+  /** Abandon the render between blocks once the export has taken too long. */
+  deadline?: ExportDeadline;
+  /** Annotations in one PDF, after contiguous link runs are coalesced. */
+  maxLinkAnnotations?: number;
+  /** Abort the render as soon as pdfkit has produced more than this many bytes. */
+  maxOutputBytes?: number;
+  /**
+   * Set by `buildPdf`: throws once pdfkit has pushed more than the budget. pdfkit pushes output
+   * synchronously while it draws and ignores backpressure, so a stream counter would only see the
+   * bytes after the whole document was built; this is checked between blocks and table rows.
+   */
+  outputCheck?: () => void;
+  /** Where the fetched Noto files live; defaults to `BOKYDO_FONT_DIR` or the app's `fonts/`. */
+  fontDir?: string;
+}
+
+type PdfDoc = PDFKit.PDFDocument;
+type DocConstructor = new (options?: PDFKit.PDFDocumentOptions) => PdfDoc;
+const createPdfDocument = PdfDocument as unknown as DocConstructor;
+
+/**
+ * The only part of fontkit this renderer reads, reached through pdfkit's loaded font. It answers
+ * whether the selected face has a glyph for a code point, so emoji and other uncovered scripts
+ * become `?` instead of an invisible `.notdef` box.
+ */
+interface FontkitFace {
+  hasGlyphForCodePoint(codePoint: number): boolean;
+}
+
+interface LoadedFace {
+  alias: string;
+  /** `false` for the built-in Helvetica/Courier names. */
+  embedded: boolean;
+}
+
+const BODY_SIZE = 11;
+const CODE_SIZE = 9;
+const HEADING_SIZES = [22, 18, 15.5, 13.5, 12, 11] as const;
+const LINK_COLOR = '#1A56DB';
+const TEXT_COLOR = '#000000';
+const LINE_FACTOR = 1.4;
+const TABLE_PAD = 4;
+const TABLE_MIN_COLUMN = 24;
+const DEFAULT_MAX_LINK_ANNOTATIONS = 20_000;
+const KHMER_COENG = '\u17d2';
+
+/**
+ * Code points in WinAnsiEncoding (cp1252): ASCII, Latin-1 and the characters cp1252 puts in
+ * 0x80–0x9F. Everything else has no glyph in the built-in fonts.
+ */
+const WIN_ANSI_LATIN = new Set([
+  0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152,
+  0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a,
+  0x0153, 0x017e, 0x0178,
+]);
+
+function encodable(cp: number): boolean {
+  // Linear in the string length; no regex, no backtracking.
+  if (cp === 0x09) return true;
+  if (cp >= 0x20 && cp <= 0x7e) return true;
+  if (cp >= 0xa0 && cp <= 0xff) return true;
+  return WIN_ANSI_LATIN.has(cp);
+}
+
+/** What the built-in fonts can draw; `▶` becomes `»` and everything else unencodable `?`. */
+export function pdfSafe(text: string): string {
+  let out = '';
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0x25b6) out += '\u00bb';
+    else if (cp === 0x09 || cp === 0x0a) out += ' ';
+    else if (cp === 0x0d) continue;
+    else out += encodable(cp) ? ch : '?';
+  }
+  return out;
+}
+
+function helix(bold: boolean, italic: boolean): string {
+  if (bold && italic) return 'Helvetica-BoldOblique';
+  if (bold) return 'Helvetica-Bold';
+  if (italic) return 'Helvetica-Oblique';
+  return 'Helvetica';
+}
+
+function courier(bold: boolean, italic: boolean): string {
+  if (bold && italic) return 'Courier-BoldOblique';
+  if (bold) return 'Courier-Bold';
+  if (italic) return 'Courier-Oblique';
+  return 'Courier';
+}
+
+type TextAtom = {
+  kind: 'text';
+  text: string;
+  font: string;
+  size: number;
+  width: number;
+  href: string | null;
+  strike: boolean;
+};
+
+type Atom =
+  | TextAtom
+  | { kind: 'space'; width: number }
+  | { kind: 'break' }
+  | { kind: 'censor'; width: number; size: number }
+  | { kind: 'check'; checked: boolean; width: number };
+
+interface InlineOptions {
+  size: number;
+  bold: boolean;
+  italic: boolean;
+}
+
+function atomWidth(atom: Atom): number {
+  switch (atom.kind) {
+    case 'text':
+    case 'space':
+    case 'censor':
+    case 'check':
+      return atom.width;
+    default:
+      return 0;
+  }
+}
+
+function fontFiles(files: FaceFiles): string[] {
+  return [files.regular, files.bold, files.italic, files.boldItalic].filter(
+    (file): file is string => file !== undefined,
+  );
+}
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * Grapheme clusters, with a Khmer coeng glued to the consonant after it. UAX #29 ends a cluster
+ * after the coeng sign itself, which would let `splitWord` break a subscript out of its base and
+ * feed the two halves to the shaper separately; the merged form is one shaping unit.
+ */
+function clusters(text: string): string[] {
+  const parts: string[] = [];
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    const last = parts[parts.length - 1];
+    if (last !== undefined && last.endsWith(KHMER_COENG)) parts[parts.length - 1] = last + segment;
+    else parts.push(segment);
+  }
+  return parts;
+}
+
+class PdfRenderer {
+  private y: number;
+  private colourValue = TEXT_COLOR;
+  private readonly spaceWidths = new Map<string, number>();
+  private readonly prepared: Map<string, PreparedImage>;
+  private linkAnnotations = 0;
+  private readonly maxLinkAnnotations: number;
+  private readonly fonts: FontCatalog;
+  private readonly aliases = new Map<string, string>();
+  private readonly faces = new Map<string, FontkitFace | null>();
+  private readonly coverage = new Map<string, Map<number, boolean>>();
+
+  constructor(
+    private readonly doc: PdfDoc,
+    private readonly ctx: PdfContext,
+    private readonly opts: PdfRenderOptions = {},
+  ) {
+    this.y = doc.page.margins.top;
+    this.prepared = ctx.prepared ?? new Map();
+    this.maxLinkAnnotations = opts.maxLinkAnnotations ?? DEFAULT_MAX_LINK_ANNOTATIONS;
+    this.fonts = loadFontCatalog(opts.fontDir);
+    warnMissingFonts(this.fonts);
+    for (const files of Object.values(this.fonts.families)) {
+      if (!files) continue;
+      for (const file of new Set(fontFiles(files))) {
+        // registerFont only records the path; pdfkit reads and parses a face on its first use,
+        // so a note that never mentions CJK never pays for the 16 MB CJK file.
+        this.aliases.set(file, file.replace(/\.[^.]+$/u, ''));
+        this.doc.registerFont(this.aliases.get(file) ?? file, path.join(this.fonts.dir, file));
+      }
+    }
+  }
+
+  render(title: string, blocks: readonly Block[]): void {
+    const cleanTitle = title.replace(/\s+/g, ' ').trim();
+    if (cleanTitle)
+      this.writeInline(
+        [{ kind: 'text', text: cleanTitle }],
+        { size: 22, bold: true, italic: false },
+        0,
+        14,
+      );
+    this.blocks(blocks, { indent: 0, italic: false, listLevel: 0 });
+    this.doc.end();
+  }
+
+  private get left(): number {
+    return this.doc.page.margins.left;
+  }
+
+  private get right(): number {
+    return this.doc.page.width - this.doc.page.margins.right;
+  }
+
+  private get top(): number {
+    return this.doc.page.margins.top;
+  }
+
+  private get bottom(): number {
+    return this.doc.page.height - this.doc.page.margins.bottom;
+  }
+
+  private get width(): number {
+    return this.right - this.left;
+  }
+
+  private measure(text: string, font: string, size: number): number {
+    this.doc.font(font).fontSize(size);
+    return this.doc.widthOfString(text);
+  }
+
+  private space(font: string, size: number): number {
+    const key = `${font}:${size}`;
+    const cached = this.spaceWidths.get(key);
+    if (cached !== undefined) return cached;
+    const width = this.measure(' ', font, size);
+    this.spaceWidths.set(key, width);
+    return width;
+  }
+
+  private colour(value: string): void {
+    if (this.colourValue === value) return;
+    this.colourValue = value;
+    this.doc.fillColor(value);
+  }
+
+  private fillRect(x: number, y: number, width: number, height: number, colour: string): void {
+    this.doc.rect(x, y, width, height).fill(colour);
+    this.colourValue = colour;
+    this.colour(TEXT_COLOR);
+  }
+
+  private ensure(height: number): void {
+    if (this.y + height <= this.bottom) return;
+    this.addPage();
+  }
+
+  private addPage(): void {
+    this.doc.addPage();
+    this.y = this.top;
+  }
+
+  /**
+   * The pdfkit alias for a family and style, or the built-in face when the family is absent.
+   * `helix`/`courier` are the old WinAnsi fonts; they remain the fallback for a checkout or
+   * deployment that has not fetched the Noto files.
+   */
+  private face(family: FontFamily, bold: boolean, italic: boolean): LoadedFace {
+    const files = this.fonts.families[family];
+    if (files) {
+      const alias = this.aliases.get(faceFile(files, bold, italic));
+      if (alias) return { alias, embedded: true };
+    }
+    return {
+      alias: family === 'mono' ? courier(bold, italic) : helix(bold, italic),
+      embedded: false,
+    };
+  }
+
+  /** The parsed fontkit face behind a registered alias; pdfkit caches it for this document. */
+  private embeddedFace(alias: string): FontkitFace | null {
+    const cached = this.faces.get(alias);
+    if (cached !== undefined) return cached;
+    this.doc.font(alias);
+    const current = (this.doc as unknown as { _font?: { font?: FontkitFace } })._font;
+    const face = current?.font ?? null;
+    this.faces.set(alias, face);
+    return face;
+  }
+
+  private covers(alias: string, codePoint: number): boolean {
+    let cache = this.coverage.get(alias);
+    if (!cache) {
+      cache = new Map();
+      this.coverage.set(alias, cache);
+    }
+    const cached = cache.get(codePoint);
+    if (cached !== undefined) return cached;
+    const covers = this.embeddedFace(alias)?.hasGlyphForCodePoint(codePoint) ?? false;
+    cache.set(codePoint, covers);
+    return covers;
+  }
+
+  /**
+   * The characters a face can actually draw. Marks, joiners and variation selectors stay with a
+   * base that rendered; after a substituted character they are dropped rather than drawn as
+   * `.notdef`. A code point no bundled face covers becomes `?`, exactly as the built-in fonts
+   * wrote it. `▶` becomes `»` when the face has no arrow, which is what the old fonts did.
+   */
+  private sanitize(text: string, face: LoadedFace): string {
+    if (!face.embedded) return pdfSafe(text);
+    let out = '';
+    let rendered = false;
+    for (const character of text) {
+      const cp = character.codePointAt(0) ?? 0;
+      if (cp === 0x0d) continue;
+      if (cp === 0x09 || cp === 0x0a) {
+        out += ' ';
+        rendered = true;
+        continue;
+      }
+      if (isDefaultIgnorable(cp) || isJoiner(cp)) {
+        if (rendered) out += character;
+        continue;
+      }
+      if (cp === 0x25b6 && !this.covers(face.alias, cp)) {
+        out += '\u00bb';
+        rendered = true;
+        continue;
+      }
+      if (this.covers(face.alias, cp)) {
+        out += character;
+        rendered = true;
+      } else {
+        out += '?';
+        rendered = false;
+      }
+    }
+    return out;
+  }
+
+  /** Text runs to atoms: script/font runs, words, spaces, breaks, censor bars and checkboxes. */
+  private atomize(runs: readonly Run[], opts: InlineOptions): Atom[] {
+    const atoms: Atom[] = [];
+    const push = (atom: Atom) => {
+      const last = atoms[atoms.length - 1];
+      if (atom.kind === 'space' && (!last || last.kind === 'space' || last.kind === 'break'))
+        return;
+      atoms.push(atom);
+    };
+    for (const run of runs) {
+      if (run.kind === 'break') {
+        atoms.push({ kind: 'break' });
+        continue;
+      }
+      if (run.kind === 'image') {
+        const name = run.alt || (run.fileId ? this.ctx.fileNames.get(run.fileId) : null) || 'file';
+        for (const segment of segmentByScript(`[image: ${name}]`)) {
+          const face = this.face(familyForScript(segment.script, false), opts.bold, opts.italic);
+          const clean = this.sanitize(segment.text, face);
+          if (clean !== '') push(this.textAtom(clean, face.alias, opts.size, null, false));
+        }
+        continue;
+      }
+      if (run.censor) {
+        push({ kind: 'censor', width: opts.size * 2.5, size: opts.size });
+        continue;
+      }
+      const code = run.code === true;
+      const bold = opts.bold || run.bold === true;
+      const italic = opts.italic || run.italic === true;
+      const href = run.href ?? null;
+      // A note-file link has no destination outside the app, so it shows the file's name.
+      const text = run.fileId ? (this.ctx.fileNames.get(run.fileId) ?? run.text) : run.text;
+      for (const segment of segmentByScript(text)) {
+        const face = this.face(familyForScript(segment.script, code), bold, italic);
+        for (const part of this.sanitize(segment.text, face).split(/(\s+)/)) {
+          if (part === '') continue;
+          if (/^\s+$/.test(part)) push({ kind: 'space', width: this.space(face.alias, opts.size) });
+          else push(this.textAtom(part, face.alias, opts.size, href, run.strike === true));
+        }
+      }
+    }
+    return atoms;
+  }
+
+  private textAtom(
+    text: string,
+    font: string,
+    size: number,
+    href: string | null,
+    strike: boolean,
+  ): TextAtom {
+    return { kind: 'text', text, font, size, width: this.measure(text, font, size), href, strike };
+  }
+
+  /** Greedy word wrapping; a word wider than the line is split by character. */
+  private wrap(atoms: readonly Atom[], width: number): Atom[][] {
+    const lines: Atom[][] = [];
+    let line: Atom[] = [];
+    let used = 0;
+    const flush = () => {
+      while (line.length > 0 && line[line.length - 1]?.kind === 'space') line.pop();
+      lines.push(line);
+      line = [];
+      used = 0;
+    };
+    for (const atom of atoms) {
+      if (atom.kind === 'break') {
+        flush();
+        continue;
+      }
+      if (atom.kind === 'space') {
+        if (line.length === 0) continue;
+        line.push(atom);
+        used += atom.width;
+        continue;
+      }
+      if (used + atom.width > width && line.length > 0) flush();
+      if (atom.kind === 'text' && atom.width > width && atom.text.length > 1) {
+        for (const chunk of this.splitWord(atom, width)) {
+          if (used + chunk.width > width && line.length > 0) flush();
+          line.push(chunk);
+          used += chunk.width;
+        }
+        continue;
+      }
+      line.push(atom);
+      used += atom.width;
+    }
+    if (line.length > 0 || lines.length === 0) flush();
+    return lines;
+  }
+
+  /** Split one over-wide word on grapheme clusters, measuring each cluster once (linear). */
+  private splitWord(atom: TextAtom, width: number): TextAtom[] {
+    const chunks: TextAtom[] = [];
+    let text = '';
+    let used = 0;
+    for (const ch of clusters(atom.text)) {
+      const next = this.measure(ch, atom.font, atom.size);
+      if (text !== '' && used + next > width) {
+        chunks.push({ ...atom, text, width: used });
+        text = ch;
+        used = next;
+      } else {
+        text += ch;
+        used += next;
+      }
+    }
+    if (text !== '') chunks.push({ ...atom, text, width: used });
+    return chunks;
+  }
+
+  /**
+   * Draw one line of atoms at `x`, `y`. Link annotations are coalesced: a contiguous run of
+   * atoms with the same destination (spaces included) becomes one annotation, not one per word.
+   */
+  private draw(atoms: readonly Atom[], x: number, y: number, lineHeight: number): number {
+    let cursor = x;
+    let run: { href: string; x: number } | null = null;
+    const flushLink = (end: number) => {
+      if (!run) return;
+      if (this.linkAnnotations >= this.maxLinkAnnotations)
+        throw new TooLargeError(
+          `PDF would need more than ${this.maxLinkAnnotations} link annotations`,
+        );
+      this.linkAnnotations++;
+      this.doc.link(run.x, y, Math.max(1, end - run.x), lineHeight, run.href);
+      run = null;
+    };
+    for (const atom of atoms) {
+      if (atom.kind === 'space') {
+        cursor += atom.width;
+        continue;
+      }
+      if (atom.kind === 'break') continue;
+      const href = atom.kind === 'text' ? atom.href : null;
+      if (run && run.href !== href) flushLink(cursor);
+      if (!run && href) run = { href, x: cursor };
+      if (atom.kind === 'censor') {
+        this.fillRect(cursor, y + atom.size * 0.15, atom.width, atom.size * 0.72, TEXT_COLOR);
+        cursor += atom.width;
+        continue;
+      }
+      if (atom.kind === 'check') {
+        if (atom.checked) this.fillRect(cursor, y + 2, 8, 8, TEXT_COLOR);
+        else {
+          this.doc
+            .lineWidth(0.7)
+            .rect(cursor, y + 2, 8, 8)
+            .stroke('#333333');
+          this.colour(TEXT_COLOR);
+        }
+        cursor += atom.width;
+        continue;
+      }
+      this.colour(atom.href ? LINK_COLOR : TEXT_COLOR);
+      this.doc.font(atom.font).fontSize(atom.size);
+      this.doc.text(atom.text, cursor, y, {
+        lineBreak: false,
+        ...(atom.href ? { underline: true } : {}),
+        ...(atom.strike ? { strike: true } : {}),
+      });
+      cursor += atom.width;
+    }
+    flushLink(cursor);
+    this.colour(TEXT_COLOR);
+    return cursor;
+  }
+
+  /** Runs at `indent`, wrapped to the text column; used for headings, paragraphs and items. */
+  private writeInline(
+    runs: readonly Run[],
+    opts: InlineOptions,
+    indent: number,
+    after: number,
+    bullet?: { atoms: Atom[]; width: number },
+  ): void {
+    const markerWidth = bullet?.width ?? 0;
+    const lines = this.wrap(
+      this.atomize(runs, opts),
+      Math.max(40, this.width - indent - markerWidth),
+    );
+    const lineHeight = Math.round(opts.size * LINE_FACTOR);
+    lines.forEach((line, index) => {
+      this.ensure(lineHeight);
+      if (index === 0 && bullet) this.draw(bullet.atoms, this.left + indent, this.y, lineHeight);
+      this.draw(line, this.left + indent + markerWidth, this.y, lineHeight);
+      this.y += lineHeight;
+    });
+    this.y += after;
+  }
+
+  private blocks(
+    blocks: readonly Block[],
+    opts: { indent: number; italic: boolean; listLevel: number },
+  ): void {
+    for (const block of blocks) this.block(block, opts);
+  }
+
+  private block(block: Block, opts: { indent: number; italic: boolean; listLevel: number }): void {
+    this.opts.deadline?.check();
+    this.opts.outputCheck?.();
+    switch (block.type) {
+      case 'heading': {
+        if (this.y > this.top) this.y += 10;
+        const size = HEADING_SIZES[Math.min(6, Math.max(1, block.level)) - 1] ?? BODY_SIZE;
+        this.writeInline(block.runs, { size, bold: true, italic: opts.italic }, opts.indent, 8);
+        break;
+      }
+      case 'paragraph':
+        this.writeInline(
+          block.runs,
+          { size: BODY_SIZE, bold: false, italic: opts.italic },
+          opts.indent,
+          6,
+        );
+        break;
+      case 'quote':
+        this.blocks(block.blocks, { ...opts, indent: opts.indent + 18, italic: true });
+        break;
+      case 'code':
+        this.code(block.text, opts.indent);
+        break;
+      case 'list':
+        this.list(block, opts.indent, opts.listLevel, opts.italic);
+        break;
+      case 'table':
+        this.table(block);
+        break;
+      case 'hr': {
+        this.ensure(12);
+        this.y += 4;
+        this.doc
+          .lineWidth(0.7)
+          .moveTo(this.left + opts.indent, this.y)
+          .lineTo(this.right, this.y)
+          .stroke('#C0C0C0');
+        this.y += 8;
+        break;
+      }
+      case 'image':
+        this.image(block, opts.indent, opts.italic);
+        break;
+      case 'embed': {
+        const runs: Run[] = [
+          { kind: 'text', text: '» ' },
+          { kind: 'text', text: block.label, href: block.openUrl },
+          { kind: 'text', text: ' — ' },
+          { kind: 'text', text: block.openUrl, href: block.openUrl },
+        ];
+        this.writeInline(
+          runs,
+          { size: BODY_SIZE, bold: false, italic: opts.italic },
+          opts.indent,
+          6,
+        );
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  private code(text: string, indent: number): void {
+    const lineHeight = Math.round(CODE_SIZE * LINE_FACTOR);
+    const width = this.width - indent - 12;
+    // Code lines keep their spaces: each script segment is one atom (mono for Latin, the CJK or
+    // Khmer face for characters mono does not cover), and the line is broken only at clusters.
+    for (const raw of text.replace(/\n$/, '').split('\n')) {
+      const atoms: TextAtom[] = [];
+      for (const segment of segmentByScript(raw === '' ? ' ' : raw)) {
+        const face = this.face(familyForScript(segment.script, true), false, false);
+        const line = this.sanitize(segment.text, face);
+        if (line !== '') atoms.push(this.textAtom(line, face.alias, CODE_SIZE, null, false));
+      }
+      let line: TextAtom[] = [];
+      let used = 0;
+      const flush = () => {
+        this.ensure(lineHeight);
+        let x = this.left + indent + 12;
+        for (const atom of line) {
+          this.draw([atom], x, this.y, lineHeight);
+          x += atom.width;
+        }
+        this.y += lineHeight;
+        line = [];
+        used = 0;
+      };
+      for (const atom of atoms) {
+        for (const piece of atom.width > width ? this.splitWord(atom, width) : [atom]) {
+          if (used > 0 && used + piece.width > width) flush();
+          line.push(piece);
+          used += piece.width;
+        }
+      }
+      flush();
+    }
+    this.y += 6;
+  }
+
+  private list(block: ListBlock, indent: number, level: number, italic: boolean): void {
+    const markerFace = this.face('sans', false, false);
+    block.items.forEach((item, index) => {
+      let markerAtoms: Atom[];
+      let markerWidth: number;
+      if (block.ordered) {
+        markerAtoms = [
+          this.textAtom(`${block.start + index}. `, markerFace.alias, BODY_SIZE, null, false),
+        ];
+        markerWidth = markerAtoms.reduce((sum, atom) => sum + atomWidth(atom), 0);
+      } else if (item.checked !== null) {
+        markerAtoms = [{ kind: 'check', checked: item.checked, width: 14 }];
+        markerWidth = 14;
+      } else {
+        markerAtoms = [this.textAtom('\u2022 ', markerFace.alias, BODY_SIZE, null, false)];
+        markerWidth = markerAtoms.reduce((sum, atom) => sum + atomWidth(atom), 0);
+      }
+      const rest = [...item.blocks];
+      const first = rest.shift();
+      if (first?.type === 'paragraph') {
+        this.writeInline(first.runs, { size: BODY_SIZE, bold: false, italic }, indent, 4, {
+          atoms: markerAtoms,
+          width: markerWidth,
+        });
+      } else {
+        this.ensure(BODY_SIZE * LINE_FACTOR);
+        this.draw(markerAtoms, this.left + indent, this.y, Math.round(BODY_SIZE * LINE_FACTOR));
+        this.y += BODY_SIZE * LINE_FACTOR;
+        if (first) rest.unshift(first);
+      }
+      for (const inner of rest)
+        this.block(inner, { indent: indent + markerWidth, italic, listLevel: level + 1 });
+    });
+    this.y += 4;
+  }
+
+  /** Atoms for one table cell, wrapped to its column. */
+  private cellLines(runs: readonly Run[], width: number, head: boolean): Atom[][] {
+    return this.wrap(
+      this.atomize(runs, { size: BODY_SIZE, bold: head, italic: false }),
+      Math.max(12, width - TABLE_PAD * 2),
+    );
+  }
+
+  /**
+   * Column widths from the content: each column asks for its natural width, clamped between a
+   * minimum (a column of `1`s still needs room for `1`) and 60 % of the text column (one long
+   * cell must not squeeze every other column to nothing), then the table is scaled to fill the
+   * text column.
+   */
+  private tableWidths(block: Extract<Block, { type: 'table' }>, columns: number): number[] {
+    const maximum = Math.max(TABLE_MIN_COLUMN, this.width * 0.6);
+    const natural = Array.from({ length: columns }, () => TABLE_MIN_COLUMN);
+    const measureRow = (cells: readonly Run[][], head: boolean) => {
+      for (let index = 0; index < columns; index++) {
+        const atoms = this.atomize(cells[index] ?? [], {
+          size: BODY_SIZE,
+          bold: head,
+          italic: false,
+        });
+        const used = atoms.reduce((sum, atom) => sum + atomWidth(atom), 0);
+        const width = Math.min(maximum, used + TABLE_PAD * 2);
+        natural[index] = Math.max(natural[index] ?? TABLE_MIN_COLUMN, width);
+      }
+    };
+    measureRow(block.header, true);
+    for (const row of block.rows) measureRow(row, false);
+    // Every column gets its minimum, and the rest of the text width is shared in proportion to
+    // what each column wants beyond it. `table` has already checked that the minimums fit, so the
+    // widths always sum to the text width and none falls below the minimum (scaling the natural
+    // widths and clamping afterwards could push the table past the page edge).
+    const spare = Math.max(0, this.width - columns * TABLE_MIN_COLUMN);
+    const wants = natural.map((value) => Math.max(0, value - TABLE_MIN_COLUMN));
+    const wanted = wants.reduce((sum, value) => sum + value, 0);
+    const widths = wants.map(
+      (want) =>
+        TABLE_MIN_COLUMN + Math.floor(wanted > 0 ? (spare * want) / wanted : spare / columns),
+    );
+    const used = widths.reduce((sum, value) => sum + value, 0);
+    // Rounding leaves a pixel or two over; give it to the widest column so the table is square.
+    let widest = 0;
+    for (let index = 1; index < columns; index++)
+      if ((widths[index] ?? 0) > (widths[widest] ?? 0)) widest = index;
+    widths[widest] = Math.max(1, (widths[widest] ?? 0) + (this.width - used));
+    return widths;
+  }
+
+  /** One row segment (a full row, or the part of one that fits) with its box and grid lines. */
+  private tableSegment(
+    cells: readonly Atom[][][],
+    widths: readonly number[],
+    from: number,
+    count: number,
+    head: boolean,
+    lineHeight: number,
+  ): void {
+    const height = count * lineHeight + TABLE_PAD * 2;
+    if (head) this.fillRect(this.left, this.y, this.width, height, '#F2F2F2');
+    let x = this.left;
+    for (let index = 0; index < widths.length; index++) {
+      const lines = (cells[index] ?? []).slice(from, from + count);
+      lines.forEach((line, offset) =>
+        this.draw(line, x + TABLE_PAD, this.y + TABLE_PAD + offset * lineHeight, lineHeight),
+      );
+      x += widths[index] ?? 0;
+    }
+    this.doc.lineWidth(0.5).strokeColor('#B0B0B0');
+    this.doc.rect(this.left, this.y, this.width, height).stroke();
+    let gridX = this.left;
+    for (let index = 0; index < widths.length - 1; index++) {
+      gridX += widths[index] ?? 0;
+      this.doc
+        .moveTo(gridX, this.y)
+        .lineTo(gridX, this.y + height)
+        .stroke();
+    }
+    this.colourValue = TEXT_COLOR;
+    this.y += height;
+  }
+
+  /**
+   * A table whose columns cannot all reach their minimum width is not laid out as a grid: it
+   * becomes a list of `header: value` lines, one per non-empty cell, so nothing overflows the
+   * page. Documented in docs/note-export.md.
+   */
+  private tableAsList(block: Extract<Block, { type: 'table' }>): void {
+    const columns = Math.max(1, block.header.length, ...block.rows.map((row) => row.length));
+    const plain = (runs: readonly Run[]): string => {
+      let text = '';
+      for (const run of runs) {
+        if (run.kind === 'text') text += run.censor ? '█████' : run.text;
+        else if (run.kind === 'image') text += `[image: ${run.alt || 'file'}]`;
+        else text += ' ';
+      }
+      return text.trim();
+    };
+    for (const row of block.rows) {
+      for (let index = 0; index < columns; index++) {
+        const headRuns = block.header[index] ?? [];
+        const valueRuns = row[index] ?? [];
+        const head = plain(headRuns);
+        const value = plain(valueRuns);
+        if (head === '' && value === '') continue;
+        // Plain cells keep the old single-string atom (one text run, no spurious spaces between
+        // the header, colon and value). A censored cell keeps its runs so the placeholder is
+        // still drawn as a bar instead of five `?` from a font without U+2588.
+        const censored =
+          headRuns.some((run) => run.kind === 'text' && run.censor === true) ||
+          valueRuns.some((run) => run.kind === 'text' && run.censor === true);
+        const runs: Run[] = censored
+          ? head === ''
+            ? [...valueRuns]
+            : value === ''
+              ? [...headRuns]
+              : [...headRuns, { kind: 'text', text: ': ' }, ...valueRuns]
+          : [{ kind: 'text', text: head === '' ? value : `${head}: ${value}` }];
+        this.writeInline(runs, { size: BODY_SIZE, bold: false, italic: false }, 0, 2);
+      }
+      this.y += 4;
+    }
+    this.y += 8;
+  }
+
+  /**
+   * A header row that needs more lines than a page holds is truncated to the page, with an
+   * ellipsis on the last line of every cell. It must stay repeatable: skipping it on continuation
+   * pages loses the labels, and drawing it whole would run into the margin.
+   */
+  private fitHeader(
+    header: readonly Atom[][][],
+    widths: readonly number[],
+    lineHeight: number,
+  ): { cells: Atom[][][]; lines: number } {
+    // Room is kept for one full body row (a line plus its own padding): a header that fills the
+    // page would be repeated on a page that can never show a row.
+    const room = Math.max(
+      1,
+      Math.floor(
+        (this.bottom - this.top - TABLE_PAD * 2 - (lineHeight + TABLE_PAD * 2)) / lineHeight,
+      ),
+    );
+    const needed = Math.max(1, ...header.map((cell) => cell.length));
+    if (needed <= room) return { cells: header.map((cell) => cell), lines: needed };
+    const ellipsisFace = this.face('sans', false, false);
+    const ellipsis = this.textAtom('…', ellipsisFace.alias, BODY_SIZE, null, false);
+    const cells = header.map((cell, index) => {
+      const lines = cell.slice(0, room).map((line) => [...line]);
+      const last = lines[room - 1] ?? [];
+      while (last.length > 0 && last[last.length - 1]?.kind === 'space') last.pop();
+      let used = last.reduce((sum, atom) => sum + atomWidth(atom), 0);
+      const max = Math.max(12, (widths[index] ?? this.width) - TABLE_PAD * 2);
+      while (last.length > 0 && used + ellipsis.width > max) {
+        const removed = last.pop();
+        used -= removed ? atomWidth(removed) : 0;
+      }
+      last.push(ellipsis);
+      return lines;
+    });
+    return { cells, lines: room };
+  }
+
+  /**
+   * A table: wrapped cells in content-sized columns, rows broken across pages (the box is drawn
+   * per segment) and the header row repeated at the top of every page the table continues on.
+   * A table too wide for even its minimum columns is rendered as `header: value` lines instead.
+   */
+  private table(block: Extract<Block, { type: 'table' }>): void {
+    const columns = Math.max(1, block.header.length, ...block.rows.map((row) => row.length));
+    // Minimum widths are checked before any scaling: if even one character per column will not
+    // fit the text column, no amount of width correction can make a grid, so use the list form.
+    if (columns * TABLE_MIN_COLUMN > this.width + 0.5) {
+      this.tableAsList(block);
+      return;
+    }
+    const widths = this.tableWidths(block, columns);
+    const lineHeight = Math.round(BODY_SIZE * LINE_FACTOR);
+    const prepare = (cells: readonly Run[][], head: boolean) =>
+      Array.from({ length: columns }, (_, index) =>
+        this.cellLines(cells[index] ?? [], widths[index] ?? this.width, head),
+      );
+    const fitted = this.fitHeader(prepare(block.header, true), widths, lineHeight);
+    const header = fitted.cells;
+    const headerLines = fitted.lines;
+    const repeatHeader = () => {
+      this.tableSegment(header, widths, 0, headerLines, true, lineHeight);
+    };
+    this.ensure(headerLines * lineHeight + TABLE_PAD * 2);
+    this.tableSegment(header, widths, 0, headerLines, true, lineHeight);
+    for (const row of block.rows) {
+      const cells = prepare(row, false);
+      const total = Math.max(1, ...cells.map((cell) => cell.length));
+      let from = 0;
+      let fresh = false;
+      while (from < total) {
+        let room = Math.floor((this.bottom - this.y - TABLE_PAD * 2) / lineHeight);
+        if (room < 1) {
+          if (fresh)
+            room = 1; // a page too short for one line: draw it rather than loop
+          else {
+            this.addPage();
+            repeatHeader();
+            fresh = true;
+            continue;
+          }
+        }
+        const take = Math.min(total - from, room);
+        this.tableSegment(cells, widths, from, take, false, lineHeight);
+        from += take;
+        fresh = false;
+        if (from < total) {
+          this.addPage();
+          repeatHeader();
+          fresh = true;
+        }
+      }
+      this.opts.deadline?.check();
+      this.opts.outputCheck?.();
+    }
+    this.y += 8;
+  }
+
+  /** The file's prepared PDF image, opened once per file so repeated placements reuse it. */
+  private preparedImage(image: LoadedImage): PreparedImage | null {
+    const cached = this.prepared.get(image.id);
+    if (cached) return cached;
+    // Last line of defence: pdfkit MUST NOT see a PNG of the alpha/indexed-transparency/
+    // interlaced class that png-js inflates inside a zlib callback. The worker already filtered,
+    // but a caller need not have. One walk validates and cuts a JPEG at its EOI.
+    const prepared = prepareImage(image.bytes, 'pdf');
+    if (!prepared) return null;
+    // A PNG is rebuilt from IHDR/IDAT/IEND only: ancillary chunks (tEXt, iCCP, eXIf, …) are
+    // dropped and every CRC is recomputed, so a metadata chunk cannot make pdfkit's parser throw.
+    // A JPEG is already cut at its first EOI, so an appended Motion Photo video never arrives.
+    const bytes = prepared.type === 'png' ? rebuildPngForPdf(prepared.bytes) : prepared.bytes;
+    if (!bytes) return null;
+    // `openImage` is pdfkit's own parser entry point; the validated class never inflates here,
+    // and a throw is caught by `image()` so the reader gets the file's name instead.
+    const opened = (this.doc as PdfDocRuntime).openImage(bytes);
+    this.prepared.set(image.id, opened);
+    return opened;
+  }
+
+  private imageText(alt: string, fileId: string | null, indent: number, italic: boolean): void {
+    const name = alt || (fileId ? this.ctx.fileNames.get(fileId) : null) || 'file';
+    this.writeInline(
+      [{ kind: 'text', text: `[image: ${name}]` }],
+      { size: BODY_SIZE, bold: false, italic },
+      indent,
+      6,
+    );
+  }
+
+  private image(block: Extract<Block, { type: 'image' }>, indent: number, italic: boolean): void {
+    const image = block.fileId ? this.ctx.images.get(block.fileId) : undefined;
+    if (!image) {
+      this.imageText(block.alt, block.fileId, indent, italic);
+      return;
+    }
+    const maxWidth = Math.max(40, this.width - indent);
+    const maxHeight = this.bottom - this.top - 30;
+    const ratio = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+    const width = Math.max(1, image.width * ratio);
+    const height = Math.max(1, image.height * ratio);
+    this.ensure(height + 12);
+    try {
+      const prepared = this.preparedImage(image);
+      if (!prepared) {
+        this.imageText(block.alt, block.fileId, indent, italic);
+        return;
+      }
+      this.doc.image(
+        prepared as unknown as Buffer,
+        this.left + indent + (maxWidth - width) / 2,
+        this.y,
+        { width, height },
+      );
+      this.y += height + 12;
+    } catch {
+      // Anything the image parser refuses — a metadata chunk, a decoder quirk — is not worth
+      // losing the export over, so the reader gets the name instead.
+      this.imageText(block.alt, block.fileId, indent, italic);
+    }
+  }
+}
+
+/**
+ * Count pdfkit's output as it is produced and destroy the document the moment it passes the
+ * budget. Waiting for the main thread's chunk counter would let pdfkit build a 100 MB+ PDF (and
+ * hold it) before anyone noticed; this aborts inside the worker, before a byte is posted.
+ */
+function guardPdfOutput(doc: Readable, maxBytes: number): Readable {
+  const out = new PassThrough();
+  out.on('error', () => undefined);
+  let produced = 0;
+  const guard = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      produced += chunk.length;
+      if (produced > maxBytes) {
+        doc.destroy();
+        callback(new TooLargeError(`export exceeded ${maxBytes} bytes`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  guard.on('error', (err: Error) => out.destroy(err));
+  doc.on('error', (err: Error) => out.destroy(err));
+  doc.pipe(guard).pipe(out);
+  return out;
+}
+
+/** Render a note as a PDF stream. Images must already be loaded and validated. */
+export function buildPdf(
+  title: string,
+  blocks: readonly Block[],
+  ctx: PdfContext,
+  opts: PdfRenderOptions = {},
+): Readable {
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_EXPORT_LIMITS.maxOutputBytes;
+  const doc = new createPdfDocument({
+    size: 'A4',
+    margins: { top: 56.7, bottom: 56.7, left: 56.7, right: 56.7 },
+    compress: opts.compress ?? true,
+    info: { Title: title, Author: 'BokyDo', Creator: 'BokyDo' },
+  });
+  // A pdfkit error must never be an unhandled 'error' event on a stream nothing is reading yet;
+  // the route listens too and destroys the response.
+  doc.on('error', () => undefined);
+  // Count bytes where pdfkit produces them (its synchronous `push`), not where a reader consumes
+  // them: the renderer checks this between blocks and stops early instead of finishing the PDF.
+  let produced = 0;
+  const readable = doc as unknown as Readable;
+  const push = readable.push.bind(readable);
+  readable.push = (chunk: unknown, encoding?: BufferEncoding) => {
+    if (chunk && typeof (chunk as { length?: unknown }).length === 'number')
+      produced += (chunk as { length: number }).length;
+    return push(chunk, encoding);
+  };
+  const outputCheck = () => {
+    if (produced > maxOutputBytes)
+      throw new TooLargeError(`export exceeded ${maxOutputBytes} bytes`);
+  };
+  const out = guardPdfOutput(readable, maxOutputBytes);
+  try {
+    new PdfRenderer(doc, ctx, { ...opts, outputCheck }).render(title, blocks);
+    outputCheck();
+  } catch (err) {
+    doc.destroy();
+    throw err;
+  }
+  return out;
+}

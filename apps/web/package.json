@@ -30,7 +30,15 @@
     "@simplewebauthn/browser": "^14.0.0",
     "@tanstack/react-query": "^5.104.0",
     "@tanstack/react-router": "^1.170.39",
+    "@tiptap/core": "3.33.0",
+    "@tiptap/extension-table": "3.33.0",
+    "@tiptap/extension-task-item": "3.33.0",
+    "@tiptap/extension-task-list": "3.33.0",
+    "@tiptap/pm": "3.33.0",
+    "@tiptap/react": "3.33.0",
+    "@tiptap/starter-kit": "3.33.0",
     "i18next": "^26.4.2",
+    "markdown-it": "15.0.3",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-i18next": "^17.0.15"
@@ -41,6 +49,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "fake-indexeddb": "^6.0.0",
+    "happy-dom": "21.0.4",
     "i18next-cli": "^1.74.4",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.5"

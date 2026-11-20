@@ -1,6 +1,6 @@
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -54,6 +54,16 @@ export interface BackupServiceDeps {
   sql: Sql;
   dataDir: string;
   secretsDir: string;
+  /**
+   * Test seam: runs after the database snapshot (which fixed the set of files to archive) and
+   * before those files are read, so a test can remove bytes the snapshot still expects.
+   */
+  afterSnapshot?: () => Promise<void>;
+  /**
+   * A file whose row still exists but whose bytes are gone: lost before this backup, so a retry
+   * cannot help. The backup carries on without it (as restore would), and this reports it.
+   */
+  onMissingFile?: (kind: 'attachments' | 'note-files', id: string) => void;
 }
 
 /**
@@ -156,6 +166,13 @@ export class BackupService {
     try {
       const enc = await BackupEncryptor.create(out, passphrase, VERSION);
       const archive = new ArchiveWriter(enc);
+      /**
+       * The files to archive, taken from the same snapshot as the tables they belong to. Walking
+       * the directories instead would silently drop a file whose row the snapshot holds but whose
+       * bytes a purge removed in the meantime — and add bytes no row ever claimed.
+       */
+      let attachmentIds: string[] = [];
+      let noteFileIds: string[] = [];
       // One read-only snapshot: every table as of the same moment.
       await this.deps.sql.begin('isolation level repeatable read read only', async (tx) => {
         const migrations = await tx<{ hash: string }[]>`
@@ -167,6 +184,17 @@ export class BackupService {
         )
           .map((t) => t.name)
           .filter((t) => !EXCLUDED_TABLES.has(t));
+        // Older schemas may predate either table; then their directory has nothing to archive.
+        if (tables.includes('attachments'))
+          attachmentIds = (
+            await tx<{ id: string }[]>`
+              select id from attachments where deleted_at is null order by id`
+          ).map((row) => row.id);
+        if (tables.includes('note_files'))
+          noteFileIds = (
+            await tx<{ id: string }[]>`
+              select id from note_files where status = 'ready' order by id`
+          ).map((row) => row.id);
         const manifest: Manifest = {
           format: 'bokydo-backup-manifest',
           app: VERSION,
@@ -180,22 +208,27 @@ export class BackupService {
           await archive.entry(`db/${t}`, readable as AsyncIterable<Buffer>);
         }
       });
+      await this.deps.afterSnapshot?.();
       for (const f of SECRET_FILES) {
         await archive.entry(
           `secrets/${f}`,
           await readSecretFile(path.join(this.deps.secretsDir, f)),
         );
       }
-      const attachmentsDir = path.join(this.deps.dataDir, 'attachments');
-      let files: string[] = [];
-      try {
-        files = await readdir(attachmentsDir);
-      } catch {
-        // no attachments yet
-      }
-      for (const f of files.filter((n) => /^[0-9a-f-]{36}$/.test(n))) {
-        await archive.entry(`attachments/${f}`, createReadStream(path.join(attachmentsDir, f)));
-      }
+      // Note files live beside attachments but in their own directory; restore puts each back
+      // into its own staging directory.
+      await this.archiveFiles(
+        archive,
+        path.join(this.deps.dataDir, 'attachments'),
+        'attachments',
+        attachmentIds,
+      );
+      await this.archiveFiles(
+        archive,
+        path.join(this.deps.dataDir, 'note-files'),
+        'note-files',
+        noteFileIds,
+      );
       await archive.end();
       await enc.end();
       await rename(part, final);
@@ -207,6 +240,59 @@ export class BackupService {
     const info = (await this.list()).find((b) => b.name === name);
     if (!info) throw new Error('backup vanished');
     return info;
+  }
+
+  /**
+   * Archive exactly `ids` from `dir` as `<prefix>/<id>`; the list comes from the database
+   * snapshot. Each file is opened before its entry starts. A missing file whose row is gone now
+   * was purged after the snapshot, so the backup fails as `busy` and a retry sees a consistent
+   * state. A missing file whose row still exists was lost earlier: nothing a retry fixes, so it
+   * is reported and skipped rather than blocking every future backup (and every restore, which
+   * takes one first). Any other read error fails the backup.
+   */
+  private async archiveFiles(
+    archive: ArchiveWriter,
+    dir: string,
+    prefix: 'attachments' | 'note-files',
+    ids: readonly string[],
+  ): Promise<void> {
+    for (const id of ids) {
+      if (!/^[0-9a-f-]{36}$/.test(id)) throw new BackupError('invalid');
+      let handle;
+      try {
+        handle = await open(path.join(dir, id), 'r');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw new BackupError('busy');
+        if (!(await this.rowStillLive(prefix, id))) throw new BackupError('busy');
+        this.deps.onMissingFile?.(prefix, id);
+        continue;
+      }
+      const stream = handle.createReadStream();
+      // Only read errors become `busy`; a failure of the archive or encryption layer is not
+      // disguised as a transient one.
+      const guarded = (async function* (): AsyncGenerator<Buffer> {
+        try {
+          for await (const chunk of stream) yield chunk as Buffer;
+        } catch {
+          throw new BackupError('busy');
+        }
+      })();
+      try {
+        await archive.entry(`${prefix}/${id}`, guarded);
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    }
+  }
+
+  /** Whether the row that named a file in the snapshot still names it now. */
+  private async rowStillLive(prefix: 'attachments' | 'note-files', id: string): Promise<boolean> {
+    const sql = this.deps.sql;
+    const rows =
+      prefix === 'attachments'
+        ? await sql`select 1 from attachments where id = ${id} and deleted_at is null`
+        : await sql`select 1 from note_files where id = ${id} and status = 'ready'`;
+    return rows.length > 0;
   }
 
   /** Store an uploaded backup file (checked to look like one) so it can be restored by name. */
@@ -267,7 +353,9 @@ export class BackupService {
 
       // 3. Restore.
       const staging = path.join(this.deps.dataDir, `attachments.restore-${Date.now()}`);
+      const noteStaging = path.join(this.deps.dataDir, `note-files.restore-${Date.now()}`);
       await mkdir(staging, { recursive: true, mode: 0o700 });
+      await mkdir(noteStaging, { recursive: true, mode: 0o700 });
       const secrets = new Map<string, string>();
       try {
         await this.deps.sql.begin(async (tx) => {
@@ -330,6 +418,13 @@ export class BackupService {
                 entry.data,
                 createWriteStream(path.join(staging, f), { mode: 0o600, flags: 'wx' }),
               );
+            } else if (entry.name.startsWith('note-files/')) {
+              const f = entry.name.slice(11);
+              if (!/^[0-9a-f-]{36}$/.test(f)) throw new BackupError('invalid');
+              await pipeline(
+                entry.data,
+                createWriteStream(path.join(noteStaging, f), { mode: 0o600, flags: 'wx' }),
+              );
             } else {
               throw new BackupError('invalid');
             }
@@ -351,14 +446,18 @@ export class BackupService {
         });
       } catch (err) {
         await rm(staging, { recursive: true, force: true });
+        await rm(noteStaging, { recursive: true, force: true });
         throw err;
       }
 
       // 4. Files and keys (the database already matches them).
       const stamp = Date.now();
       const attachments = path.join(this.deps.dataDir, 'attachments');
+      const noteFiles = path.join(this.deps.dataDir, 'note-files');
       await rename(attachments, `${attachments}.pre-restore-${stamp}`).catch(() => undefined);
       await rename(staging, attachments);
+      await rename(noteFiles, `${noteFiles}.pre-restore-${stamp}`).catch(() => undefined);
+      await rename(noteStaging, noteFiles);
       for (const [f, value] of secrets) {
         const target = path.join(this.deps.secretsDir, f);
         await rename(target, `${target}.pre-restore-${stamp}`).catch(() => undefined);

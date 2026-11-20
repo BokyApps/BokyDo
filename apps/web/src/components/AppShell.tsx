@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { resyncPush } from '../lib/push.js';
 import { LiveDesktopNotifications } from '../lib/desktop-notifications.js';
 import { api, clearCsrfToken } from '../lib/api.js';
+import { lockCensored } from '../lib/censor-lock.js';
 import { wipeDevice } from '../lib/device.js';
 import { ConfirmProvider } from '../lib/confirm.js';
 import { sessionQuery } from '../lib/queries.js';
@@ -48,6 +49,22 @@ function Layout() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const pendingG = useRef(false);
+
+  // Review fix (P3): the censor lifecycle is app-level, registered ONCE here rather than only on
+  // the Notes page. Leaving the tab (pagehide) or hiding it clears derived keys, resolves open
+  // password prompts as cancelled and closes reveal overlays from any page.
+  useEffect(() => {
+    const onPageHide = () => lockCensored('pagehide');
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') lockCensored('hidden');
+    };
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   // Push: re-attach this browser's subscription to the current session, and open what a
   // clicked notification points at (same-origin paths only).
@@ -173,7 +190,13 @@ function UserMenu({ onShortcuts }: { onShortcuts: () => void }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const logout = useMutation({
-    mutationFn: () => api('POST', '/api/v1/auth/logout'),
+    mutationFn: async () => {
+      // Review fix (P3): lock BEFORE asking the server to end the session. A forgotten-password
+      // key is session-only; waiting for the response used to leave it live during the request
+      // (and forever if the request failed).
+      lockCensored('signout');
+      return api('POST', '/api/v1/auth/logout');
+    },
     onSettled: async () => {
       clearCsrfToken();
       queryClient.clear();

@@ -1,0 +1,253 @@
+# ADR 0025: Notes
+
+- Status: Proposed (2026-11-18)
+- Decision: owner requested a Keep-style notes section alongside tasks
+
+## Context
+
+Users want somewhere to keep notes next to their tasks: titled, tagged and searchable, with rich
+content (text, images, files, links, embedded YouTube and Google Drive video), the option to
+archive or delete, links between notes, links between notes and tasks, and export to Markdown,
+DOCX and PDF. The editor is WYSIWYG, with a small toggle that shows the Markdown underneath.
+Text can also be censored behind a password, and neither copying it nor opening the Markdown view
+may reveal it.
+
+## Decision
+
+### Ownership and lifecycle
+
+A note belongs to one user (`owner_user_id`), like a habit. Notes are not shared through projects.
+Each note is in one of three states: `active`, `archived` or `trashed` (`trashed_at`). Trashed
+notes are purged after 30 days, or straight away by "delete forever". Deleting a note also deletes
+its files and links. All routes run as `access: 'user'`. They take the new scopes `notes:read` and
+`notes:write`, and refuse project-limited tokens with `403 project_limited_token`, as habits do.
+
+### Storage format: Markdown
+
+`notes.body` is CommonMark + GFM (tables, task lists, strikethrough), with a 512 KiB limit. The
+title is plain text of 0–200 characters. Tags are a normalised `text[]`: trimmed, lower-cased,
+1–50 characters each, at most 20, with no `#`, `,` or whitespace. A few constructs carry meaning
+inside the Markdown:
+
+| Construct         | Markdown                                               | Notes                                                                        |
+| ----------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Image (note file) | `![alt](/api/v1/note-files/<uuid>)`                    | Rendered with `?inline=1`. Only files of the same note resolve.              |
+| File (note file)  | `[name](/api/v1/note-files/<uuid>)`                    | Always downloaded, never rendered.                                           |
+| Embed             | a paragraph that is only `::embed[label](<url>)`       | Allow-listed providers only (below); anything else is shown as a plain link. |
+| Link to a note    | `[label](bokydo:note/<uuid>)`                          | Kept in `note_links` for backlinks.                                          |
+| Link to a task    | `[label](bokydo:task/<uuid>)`                          | Kept in `note_task_links`, alongside links made explicitly from a task.      |
+| Censored text     | `{{censored:v1:<salt>:<iv>:<ciphertext>}}` (base64url) | Ciphertext only; see below.                                                  |
+
+The renderer has no raw-HTML path. HTML in the Markdown is shown as text. Ordinary links must be
+`http(s)` or `mailto` (the existing `safeHref`). `bokydo:` links resolve inside the app. Every
+other scheme is rendered as text.
+
+### Saving
+
+The WYSIWYG editor emits Markdown. Before a body save, that Markdown is parsed again and compared
+with the editor document; if source-preserving serialisation changed the structure, a fresh
+serialisation is tried. If both forms differ, the body is not sent at all: the draft stays on
+screen with an explicit "couldn't be saved safely" error, while title, tags and pin still save. A
+source-view edit has no editor document and is saved exactly as typed. The verifier stays attached
+for the unmount flush. Blocks that are unchanged are re-emitted from their captured source, and a
+literal `!` directly before a link is escaped so text can never re-read as an image.
+
+On every save the server derives `note_links` (note → note) and the body half of
+`note_task_links` from the Markdown. A link only counts when its target exists and the user can
+see it: their own note, or a task in a project they belong to. Links to anything else stay in the
+text but are not stored and do not resolve.
+
+### Links to tasks
+
+`note_task_links(note_id, task_id, source)` has `source` of `body` or `manual`. Linking from a
+task's detail panel creates a `manual` row, and unlinking removes it. Body rows are rebuilt on
+each save. When a task's notes are listed, the result is always limited to the caller's own notes.
+When a note's tasks are listed, the result is always limited to tasks in projects the caller can
+access _now_, so leaving a project hides those tasks at once. Deleting a task removes its rows.
+
+### Search
+
+A `search_text` column holds the title, the tags and the body after censor tokens, URLs and
+Markdown punctuation have been removed. A generated `tsvector` (`simple` configuration, GIN index)
+is built from it. `GET /api/v1/notes?q=` matches `websearch_to_tsquery` OR a case-insensitive
+title substring. `tag=` filters with array containment. Censored text is never indexed: the server
+never has its plaintext.
+
+### Files
+
+Note files use their own table (`note_files`) and their own directory (`<dataDir>/note-files`),
+which `AttachmentStore` takes as a parameter. That way the attachment purge, which deletes every
+file it has no row for, can never remove a note file. The rules follow the existing attachments
+(T-rows for W5), with owner-only access:
+
+- Raw `application/octet-stream` upload, streamed to disk under a UUID name and capped by
+  `attachments.maxSizeMb` (0 disables uploads). There is also a per-user quota of 1 GiB and 2,000
+  files. Uploads are rate-limited to 120 an hour per user.
+- The type is detected from the file's magic bytes, never from the client's claim. Only PNG,
+  JPEG, GIF and WebP are served inline. Everything else, SVG and HTML included, is served as
+  `application/octet-stream` with `Content-Disposition: attachment`. Every response carries
+  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'; sandbox`.
+- The filename is cleaned for display only (`cleanFilename`) and never touches the filesystem.
+- An upload starts as pending. It is claimed when a saved body references it. Files that are still
+  pending, or no longer referenced, are deleted after 24 hours.
+- A download checks ownership and that the note is not purged. A file of another user's note
+  returns 404, not 403.
+
+### Embeds
+
+Only these patterns are embeddable, rewritten to a canonical embed URL on the client and checked
+again on the server when the body is saved:
+
+- YouTube: `youtube.com/watch?v=ID`, `youtu.be/ID`, `youtube.com/shorts/ID`, where ID matches
+  `[A-Za-z0-9_-]{11}`. They embed as `https://www.youtube-nocookie.com/embed/ID`.
+- Google Drive: `drive.google.com/file/d/ID/...`, where ID matches `[A-Za-z0-9_-]{10,100}`. It
+  embeds as `https://drive.google.com/file/d/ID/preview`.
+
+Embeds are **click to load**. The note shows a placeholder card, and nothing is fetched from a
+third party until the user presses play. That keeps the instance's no-third-party-request default
+(T81) for anyone who only reads a note.
+
+The frame is created with `sandbox="allow-scripts allow-same-origin allow-presentation
+allow-popups"`, `referrerpolicy="strict-origin-when-cross-origin"` and `credentialless`. CSP
+gains `frame-src https://www.youtube-nocookie.com https://drive.google.com`, and nothing else
+changes. COEP stays `require-corp`. A `credentialless` iframe is the only way a third-party frame
+can load under it. Browsers without that support (and Drive files that need a signed-in Google
+account) get an "Open in new tab" link on the card instead.
+
+### Censoring (client-side encryption)
+
+**Status (2026-11-20):** delivered in two steps. The crypto (`lib/censor.ts`), the token format,
+every server-side and export redaction path, the MCP guard and the editor's censored-node
+handling ship with Notes. The editor's Censor, Reveal and Remove actions do not ship yet
+(`CENSORING_ENABLED = false`): review kept finding edge cases where censoring meets autosave,
+the tab-close save and two-tab conflicts, so that UI is its own follow-up deliverable. Until
+then, an existing token (from the API or an import) shows as `█████` and cannot be revealed in
+the app. The rules below describe the complete design that the follow-up must meet.
+
+The server never sees censored plaintext or the password.
+
+- The key is derived in the browser with PBKDF2-HMAC-SHA-256 (WebCrypto). It uses 600,000
+  iterations and a random 16-byte salt for each censored span.
+- Encryption is AES-256-GCM with a random 12-byte IV. The plaintext is the UTF-8 Markdown of the
+  span. The additional data is the ASCII string `bokydo-censor-v1`.
+- The token is `{{censored:v1:<salt>:<iv>:<ct>}}`, in unpadded base64url, up to 64 KiB of
+  ciphertext.
+- In the editor a censored span is one atomic inline node, drawn as a solid block of fixed width.
+  The cleartext is never part of the document. **Reveal** decrypts it into a transient overlay
+  that is not part of the editor state and is excluded from selection and copy
+  (`user-select: none`). The overlay closes after 60 seconds, on blur, or on navigation.
+  **Remove censor** decrypts and puts the cleartext back into the document.
+- Copying, the Markdown view, search, exports, the REST API and MCP all see the token or a
+  `█████` placeholder, never cleartext. The clipboard serialiser writes `█████` for the node.
+- Passwords exist only in memory. During a session the tab may keep derived keys, keyed by salt,
+  so other spans under the same password unlock together. "Lock" and sign-out clear them. A
+  forgotten password cannot be recovered, and the UI says so before the user censors anything.
+- A censor selection may not cross text carrying a link mark, or an image, file or internal chip;
+  the editor says "Remove the link before censoring this text" and opens no prompt. After building
+  the replacement it also checks every surviving mark and content attribute (link `href`/`title`,
+  chip label, image alt, embed URL/label) for the selected plaintext and aborts if it is still
+  there, since that text would remain recoverable from the Markdown.
+- Censoring is its own save. Before the password prompt the note is frozen: the editor is
+  read-only, export is unavailable, and autosave sends nothing for any field — no debounce, flush
+  or `pagehide` keepalive. The plaintext was part of the draft before the user chose to censor it,
+  so a cancel (explicit dialog cancel, a lock, a hidden tab or pagehide while the prompt is open,
+  a note change or unmount) unfreezes and resumes normal autosave with that same pre-censor draft.
+  On success the editor verifies the token document, then the page sends ONE PATCH carrying only
+  that body with the last acknowledged `updatedAt` as its premise, directly rather than through the
+  debounce queue. `200` sets the baseline and revision from the response and unfreezes. A `409`
+  keeps the freeze and shows the conflict banner. A network failure keeps the freeze and offers
+  "Censor not saved — Retry", which resends the same body with the same premise. Closing the tab
+  while that PATCH is pending sends no extra keepalive; the sessionStorage marker (note id and
+  SHA-256 digest of the token only) makes the next open compare a FRESH `GET`, not cached data, and
+  warn if the token is missing.
+- Unlocking is only ever triggered by an explicit Reveal or Remove action, never on render or
+  in bulk. Each attempt is a full PBKDF2, and a planted note can contain thousands of tokens.
+  Concurrent requests for one token are merged. Remembered passwords are tried at most three at
+  a time, then the user is asked for one.
+- Cached keys are keyed by a digest of the whole token, not its salt. An explicit unlock always
+  derives from the password the user typed. Lock, sign-out and `pagehide` clear the cache,
+  password inputs and any open overlay. A cache generation stops results that were still in
+  flight from coming back.
+- Remove censor asks for confirmation, because a token can be moved between notes (the AAD is a
+  constant). The overlay is tested with copy while it is open, since `user-select` alone
+  guarantees nothing about the clipboard.
+
+### Export
+
+`GET /api/v1/notes/:id/export?format=md|docx|pdf` renders on the server, so API clients get the
+same output.
+
+- `md` is a single `.md` file. A note with files is exported as a `.zip` that also holds a
+  `files/` folder, with links rewritten to it.
+- `docx` uses the `docx` library and `pdf` uses `pdfkit`. Embeds export as links. Censored spans
+  export as `█████`, and censor tokens are also redacted from titles and file names wherever
+  they appear (headers, document metadata, zip paths).
+- PDFs embed subsetted Noto Sans (Latin/Cyrillic/Greek), Noto Sans Mono, Noto Sans CJK and Noto
+  Sans Khmer under OFL-1.1. The binaries are fetched from pinned, hashed upstream releases rather
+  than committed; a missing family falls back to the built-in fonts for the scripts it covers, and
+  a character no bundled face covers (emoji) still exports as `?`.
+- Images are validated structurally before any decoder sees them. PNG chunks are checked by CRC.
+  For PDF a PNG is rebuilt from `IHDR`, `IDAT` and an empty `IEND` only, and only the 8-bit grey
+  or RGB, non-interlaced class is embedded, because pdfkit passes that class through without
+  inflating it. A JPEG is embedded through its first `EOI`, so a Motion Photo's appended video is
+  dropped. Any other image is shown as its name.
+- Rendering runs in a `worker_threads` worker for each export, never on the main thread. That
+  covers parsing, the AST, image validation and DOCX/PDF generation. Review showed that capping
+  work item by item on the main thread does not converge for attacker-controlled Markdown. The
+  worker has a 192 MB old-generation heap and a 30-second deadline from slot acquisition, and is
+  terminated on disconnect. A worker crash or out-of-memory fails that one request (413 or 500).
+- Limits: one DOCX/PDF export at a time per instance, up to two Markdown exports, one export per
+  user, 25 MB of images and 100 MB of output (counted while it is generated). A new export is
+  refused (503, `Retry-After`) when the process plus a planned 400 MiB peak would pass 85% of
+  the container's memory limit. Measured peaks for the heaviest allowed export are about
+  325 MiB (DOCX) and 305 MiB (PDF). Bodies over 20,000 lines or 50,000 `|` are refused before
+  parsing. Worker heap limits do not bound native memory exactly, so a residual risk remains,
+  documented in `docs/note-export.md`.
+
+### Concurrent edits
+
+`PATCH /api/v1/notes/:id` takes an optional `expectedUpdatedAt` (the `updatedAt` the client last
+saw). The server compares it under the row lock and answers 409 `stale_revision` when it is out
+of date. Every write advances `updated_at` by at least 1 ms. The web app always sends it:
+
+- The `pagehide` keepalive always carries `expectedUpdatedAt` too; there is no unguarded variant.
+  While a censor freeze is active it sends nothing.
+- A stale tab with no local edits adopts the newer version.
+- A stale tab with local edits shows a conflict banner: **Load their version** or **Keep mine**.
+  There is no "Copy mine": every action in the banner is a safe one. If the post-409 fetch failed,
+  the banner offers only **Retry fetch** — no version can be adopted or kept without the fetched
+  revision.
+- Keep mine requires a successfully fetched remote revision. When the saved body differs and
+  contains anything censor-like, it first confirms, and the confirmation is bound to that exact
+  revision. The page checks this again in the action handler itself, not only while rendering, so a
+  stale click cannot bypass it.
+
+Without this, a whole-body save from an old tab could restore plaintext that another tab had
+just censored.
+
+### MCP and censored notes
+
+An AI client cannot see censored text or recreate it. On a note whose body contains anything
+censor-like, MCP may change the title, tags, pin and archive state. It may not change the body
+or move the note to the trash. The check runs under the row lock, and it needs `notes:read`,
+because the refusal itself reveals that a note holds censored text. This protection is
+MCP-only; REST clients with `notes:write` are not restricted. All text MCP returns (titles,
+tags, snippets, file names) is redacted.
+
+### Backups
+
+Note files are backed up from `<dataDir>/note-files` alongside attachments. Each backup holds
+exactly the files named by its own database snapshot. A file purged after the snapshot (its row
+is gone too) fails the backup as `busy`, and a retry is consistent. A file whose row still
+exists but whose bytes were already lost is skipped and logged rather than failing every
+future backup, and with it every restore, which takes a backup first.
+
+## Consequences
+
+- Censored text is unrecoverable without its password, and it cannot be searched. Both are
+  intended.
+- In Firefox and Safari, and for private Drive files, embeds fall back to a link while COEP stays
+  in force. Dropping COEP would allow signed-in embeds, but it reverses F-008/T81, and this ADR
+  does not do that.
+- Notes are personal. Collaborators on a task see only their own notes linked to it.
+- Notes ship on the web and through REST/MCP first. Android follows as a separate deliverable.

@@ -26,6 +26,7 @@ import type { SyncService } from '../sync/sync-service.js';
 import { runFilter } from '../tasks/filter-sql.js';
 import { searchTasks } from '../tasks/routes.js';
 import { HABIT_TOOLS } from './habit-tools.js';
+import { NOTE_TOOLS } from './note-tools.js';
 
 /** Everything a tool may use. The user and their scopes come from the verified token. */
 export interface ToolContext {
@@ -39,6 +40,8 @@ export interface ToolContext {
   defaultTimeZone: string;
   /** Publish a user-wide sync hint after a committed personal-habit write. */
   publishHabitChange?: (userId: string) => Promise<void>;
+  /** Publish a user-wide sync hint after a committed note write. */
+  publishNoteChange?: (userId: string) => Promise<void>;
 }
 
 export interface ToolDefinition {
@@ -517,4 +520,4 @@ const TASK_TOOLS: ToolDefinition[] = [
   },
 ];
 
-export const TOOLS: ToolDefinition[] = [...TASK_TOOLS, ...HABIT_TOOLS];
+export const TOOLS: ToolDefinition[] = [...TASK_TOOLS, ...HABIT_TOOLS, ...NOTE_TOOLS];

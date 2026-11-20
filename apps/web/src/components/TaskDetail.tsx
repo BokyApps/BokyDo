@@ -15,6 +15,7 @@ import { Markdown } from './Markdown.js';
 import { DatePicker, LabelPicker, PriorityPicker, ProjectPicker } from './pickers.js';
 import { InlineAdd } from './TaskEditor.js';
 import { TaskCheckbox, TaskItem } from './TaskItem.js';
+import { TaskNotesSection } from '../pages/notes/TaskNotesSection.js';
 import { Button, Dialog, inputClass } from './ui.js';
 
 const DURATIONS = [0, 15, 30, 45, 60, 90, 120, 180, 240, 480];
@@ -181,6 +182,7 @@ function TaskDetail({ task }: { task: Task }) {
           {!readOnly && <InlineAdd defaults={{ parentId: task.id }} label={t('task.addSubtask')} />}
         </section>
         <TaskTalk task={task} />
+        <TaskNotesSection taskId={task.id} taskContent={task.content} />
       </div>
 
       <aside className="w-full shrink-0 space-y-4 rounded-xl bg-surface-alt/60 p-4 text-sm md:w-64">
