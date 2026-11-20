@@ -12,6 +12,7 @@
     "dev": "tsx watch --conditions=bokydo-source src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "fonts:fetch": "node scripts/fetch-fonts.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

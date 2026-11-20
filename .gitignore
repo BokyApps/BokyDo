@@ -13,6 +13,9 @@ coverage/
 .zap/*
 !.zap/rules.tsv
 
+# Fetched Noto font binaries (pinned in apps/server/fonts.lock.json); LICENSES stays tracked.
+apps/server/fonts/*[.]?t?
+
 # Local AI-assistant and editor state: never commit
 .claude/
 CLAUDE.local.md
