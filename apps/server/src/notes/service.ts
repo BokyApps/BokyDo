@@ -469,7 +469,20 @@ export async function updateNote(
   }
   if (!updated) return { ok: false, error: 'not_found' };
   const note = await getNote(db, userId, noteId, options);
-  return note ? { ok: true, value: note } : { ok: false, error: 'not_found' };
+  if (!note) return { ok: false, error: 'not_found' };
+  // The note's own fields come from the row this write returned under its lock, not from the
+  // re-read: a save that commits in between must not have its body or revision reported as this
+  // write's acknowledgement (a client would then pair its draft with the other save's revision).
+  // Links and files are derived data and may reflect that later save; that is harmless.
+  return {
+    ok: true,
+    value: {
+      ...note,
+      ...summaryOf(updated),
+      body: updated.body,
+      trashedAt: updated.trashedAt?.toISOString() ?? null,
+    },
+  };
 }
 
 /** Delete forever: the note, its links and rows, and the IDs of files whose bytes to remove. */

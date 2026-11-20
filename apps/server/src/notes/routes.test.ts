@@ -238,6 +238,26 @@ describe.skipIf(!TEST_DATABASE_URL)('notes API', () => {
     expect((await alice.http.get(`/api/v1/notes/${noteId}`)).json().note.title).toBe('Revision');
   });
 
+  it('acknowledges exactly what each save wrote, even when saves interleave', async () => {
+    // Regression: the response re-read the row after the write lock was released, so a save that
+    // committed in between could be reported as this one's body and revision.
+    const alice = await person('alice');
+    const created = await createNote(alice, { title: 'Interleave', body: 'base' });
+    const noteId = created.note.id as string;
+    const bodies = Array.from({ length: 8 }, (_, i) => `body ${i}`);
+    const responses = await Promise.all(
+      bodies.map((body) => alice.http.patch(`/api/v1/notes/${noteId}`, { body })),
+    );
+    const revisions = new Set<string>();
+    responses.forEach((res, i) => {
+      expect(res.statusCode).toBe(200);
+      expect(res.json().note.body).toBe(bodies[i]);
+      revisions.add(res.json().note.updatedAt as string);
+    });
+    // Every write moved the revision, and each reported its own.
+    expect(revisions.size).toBe(bodies.length);
+  });
+
   it('lets exactly one of two concurrent saves with the same revision win', async () => {
     const alice = await person('alice');
     const created = await createNote(alice, { title: 'Race', body: 'base' });
