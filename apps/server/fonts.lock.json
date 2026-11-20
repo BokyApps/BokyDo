@@ -1,0 +1,126 @@
+{
+  "licence": "OFL-1.1",
+  "licenceFile": "LICENSES/OFL.txt",
+  "fonts": [
+    {
+      "name": "Noto Sans Regular",
+      "file": "NotoSans-Regular.ttf",
+      "family": "Noto Sans",
+      "style": "Regular",
+      "version": "2.015",
+      "url": "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSans-v2.015/NotoSans-v2.015.zip",
+      "archiveSha256": "0c34df072a3fa7efbb7cbf34950e1f971a4447cffe365d3a359e2d4089b958f5",
+      "archiveEntry": "NotoSans/hinted/ttf/NotoSans-Regular.ttf",
+      "sha256": "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Bold",
+      "file": "NotoSans-Bold.ttf",
+      "family": "Noto Sans",
+      "style": "Bold",
+      "version": "2.015",
+      "url": "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSans-v2.015/NotoSans-v2.015.zip",
+      "archiveSha256": "0c34df072a3fa7efbb7cbf34950e1f971a4447cffe365d3a359e2d4089b958f5",
+      "archiveEntry": "NotoSans/hinted/ttf/NotoSans-Bold.ttf",
+      "sha256": "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Italic",
+      "file": "NotoSans-Italic.ttf",
+      "family": "Noto Sans",
+      "style": "Italic",
+      "version": "2.015",
+      "url": "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSans-v2.015/NotoSans-v2.015.zip",
+      "archiveSha256": "0c34df072a3fa7efbb7cbf34950e1f971a4447cffe365d3a359e2d4089b958f5",
+      "archiveEntry": "NotoSans/hinted/ttf/NotoSans-Italic.ttf",
+      "sha256": "467e3f89eeca4108bb8710a2b9e0cf2281ac56d5b0609211a83776d0505eecb5",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Bold Italic",
+      "file": "NotoSans-BoldItalic.ttf",
+      "family": "Noto Sans",
+      "style": "Bold Italic",
+      "version": "2.015",
+      "url": "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSans-v2.015/NotoSans-v2.015.zip",
+      "archiveSha256": "0c34df072a3fa7efbb7cbf34950e1f971a4447cffe365d3a359e2d4089b958f5",
+      "archiveEntry": "NotoSans/hinted/ttf/NotoSans-BoldItalic.ttf",
+      "sha256": "1b602a9d6353be42c91df097a4857b69fa2696f26703d7a33b54a15d87c2622c",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Mono Regular",
+      "file": "NotoSansMono-Regular.ttf",
+      "family": "Noto Sans Mono",
+      "style": "Regular",
+      "version": "2.014",
+      "url": "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSansMono-v2.014/NotoSansMono-v2.014.zip",
+      "archiveSha256": "090cf6c5e03f337a755630ca888b1fef463e64ae7b33ee134e9309c05f978732",
+      "archiveEntry": "NotoSansMono/hinted/ttf/NotoSansMono-Regular.ttf",
+      "sha256": "65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Mono Bold",
+      "file": "NotoSansMono-Bold.ttf",
+      "family": "Noto Sans Mono",
+      "style": "Bold",
+      "version": "2.014",
+      "url": "https://github.com/notofonts/latin-greek-cyrillic/releases/download/NotoSansMono-v2.014/NotoSansMono-v2.014.zip",
+      "archiveSha256": "090cf6c5e03f337a755630ca888b1fef463e64ae7b33ee134e9309c05f978732",
+      "archiveEntry": "NotoSansMono/hinted/ttf/NotoSansMono-Bold.ttf",
+      "sha256": "a21ea0ba6ea49fda7b34ca39a504b487f1130885d36e1a4f9f4255b3ba6994bc",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans CJK SC Regular",
+      "file": "NotoSansCJKsc-Regular.otf",
+      "family": "Noto Sans CJK SC",
+      "style": "Regular",
+      "version": "2.004",
+      "url": "https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/08_NotoSansCJKsc.zip",
+      "archiveSha256": "a927e56f53bd6c3b920bc139c0b94aa36c7d9ad0cf009b159437a1a003581140",
+      "archiveEntry": "NotoSansCJKsc-Regular.otf",
+      "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans CJK SC Bold",
+      "file": "NotoSansCJKsc-Bold.otf",
+      "family": "Noto Sans CJK SC",
+      "style": "Bold",
+      "version": "2.004",
+      "url": "https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/08_NotoSansCJKsc.zip",
+      "archiveSha256": "a927e56f53bd6c3b920bc139c0b94aa36c7d9ad0cf009b159437a1a003581140",
+      "archiveEntry": "NotoSansCJKsc-Bold.otf",
+      "sha256": "b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Khmer Regular",
+      "file": "NotoSansKhmer-Regular.ttf",
+      "family": "Noto Sans Khmer",
+      "style": "Regular",
+      "version": "2.004",
+      "url": "https://github.com/notofonts/khmer/releases/download/NotoSansKhmer-v2.004/NotoSansKhmer-v2.004.zip",
+      "archiveSha256": "19382ca97d62febea1c735ebee35a5aa4f03beca9b6ea6f6d86b7a7a0025a688",
+      "archiveEntry": "NotoSansKhmer/hinted/ttf/NotoSansKhmer-Regular.ttf",
+      "sha256": "e66675f2082788f0511a714bef5a1748928294b38c8e286a96ea73a864b5e605",
+      "licence": "OFL-1.1"
+    },
+    {
+      "name": "Noto Sans Khmer Bold",
+      "file": "NotoSansKhmer-Bold.ttf",
+      "family": "Noto Sans Khmer",
+      "style": "Bold",
+      "version": "2.004",
+      "url": "https://github.com/notofonts/khmer/releases/download/NotoSansKhmer-v2.004/NotoSansKhmer-v2.004.zip",
+      "archiveSha256": "19382ca97d62febea1c735ebee35a5aa4f03beca9b6ea6f6d86b7a7a0025a688",
+      "archiveEntry": "NotoSansKhmer/hinted/ttf/NotoSansKhmer-Bold.ttf",
+      "sha256": "17e5bb518c0ea3d998d42bf920d0771a79dc6f3c12c5d9f3c122c7e6c8ce3076",
+      "licence": "OFL-1.1"
+    }
+  ]
+}

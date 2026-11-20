@@ -3,7 +3,7 @@ import { parseNoteBody } from './ast.js';
 import type { LoadedImage } from './images.js';
 import { ExportDeadline, ExportTimeoutError, TooLargeError } from './limits.js';
 import { buildPdf, pdfSafe } from './pdf.js';
-import { PNG_1X1, PNG_RGB, collect, makeJpeg, makePng } from './test-support.js';
+import { PNG_1X1, PNG_RGB, collect, extractPdfText, makeJpeg, makePng } from './test-support.js';
 
 const PNG_ID = '44444444-4444-4444-8444-444444444444';
 const ALPHA_ID = '66666666-6666-4666-8666-666666666666';
@@ -89,78 +89,13 @@ const BODY = [
   '::embed[Watch this](https://youtu.be/dQw4w9WgXcQ)',
 ].join('\n');
 
-/** The cp1252 half of WinAnsiEncoding, which is what the built-in fonts write. */
-const CP1252: Record<number, string> = {
-  0x80: '€',
-  0x82: '‚',
-  0x83: 'ƒ',
-  0x84: '„',
-  0x85: '…',
-  0x86: '†',
-  0x87: '‡',
-  0x88: 'ˆ',
-  0x89: '‰',
-  0x8a: 'Š',
-  0x8b: '‹',
-  0x8c: 'Œ',
-  0x8e: 'Ž',
-  0x91: '‘',
-  0x92: '’',
-  0x93: '“',
-  0x94: '”',
-  0x95: '•',
-  0x96: '–',
-  0x97: '—',
-  0x98: '˜',
-  0x99: '™',
-  0x9a: 'š',
-  0x9b: '›',
-  0x9c: 'œ',
-  0x9e: 'ž',
-  0x9f: 'Ÿ',
-};
-
-function winAnsi(bytes: Buffer): string {
-  let out = '';
-  for (const byte of bytes) {
-    if (byte >= 0x80 && byte <= 0x9f) out += CP1252[byte] ?? '?';
-    else out += String.fromCharCode(byte);
-  }
-  return out;
-}
-
 /** Every text-showing array in the (uncompressed) content streams, joined by single spaces. */
-function pdfText(pdf: Buffer): string {
-  const raw = pdf.toString('latin1');
-  const parts: string[] = [];
-  let at = 0;
-  for (;;) {
-    // A text array always starts with a hex string; `/MediaBox [` and `/ProcSet [` do not.
-    const open = raw.indexOf('[<', at);
-    if (open === -1) break;
-    const close = raw.indexOf('] TJ', open);
-    if (close === -1) break;
-    const inner = raw.slice(open + 1, close);
-    let hex = '';
-    let start = inner.indexOf('<');
-    while (start !== -1) {
-      const end = inner.indexOf('>', start);
-      if (end === -1) break;
-      hex += inner.slice(start + 1, end);
-      start = inner.indexOf('<', end);
-    }
-    parts.push(winAnsi(Buffer.from(hex, 'hex')));
-    at = close + 4;
-  }
-  return parts.join(' ');
-}
-
 async function render(body = BODY, title = 'Quarterly plan') {
   const doc = parseNoteBody(body);
   const pdf = await collect(
     buildPdf(title, doc.blocks, { images, fileNames }, { compress: false }),
   );
-  return { pdf, text: pdfText(pdf) };
+  return { pdf, text: extractPdfText(pdf) };
 }
 
 describe('note export PDF', () => {
@@ -369,6 +304,20 @@ describe('note export PDF', () => {
     expect(pdfSafe('😀')).toBe('?');
     const { pdf } = await render('Привет **мир**\n');
     expect(pdf.toString('latin1')).not.toContain('Привет');
+  });
+
+  it('falls back to the built-in faces when the font directory is missing', async () => {
+    const doc = parseNoteBody('Привет и សួស្តី\n');
+    const pdf = await collect(
+      buildPdf(
+        'Fallback',
+        doc.blocks,
+        { images, fileNames },
+        { compress: false, fontDir: '/nonexistent/bokydo-fonts-fallback-test' },
+      ),
+    );
+    expect(pdf.toString('latin1')).toContain('/BaseFont /Helvetica');
+    expect(extractPdfText(pdf)).toContain('??????');
   });
 
   it('starts a new page instead of writing past the bottom margin', async () => {

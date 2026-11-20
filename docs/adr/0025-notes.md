@@ -182,6 +182,10 @@ same output.
 - `docx` uses the `docx` library and `pdf` uses `pdfkit`. Embeds export as links. Censored spans
   export as `█████`, and censor tokens are also redacted from titles and file names wherever
   they appear (headers, document metadata, zip paths).
+- PDFs embed subsetted Noto Sans (Latin/Cyrillic/Greek), Noto Sans Mono, Noto Sans CJK and Noto
+  Sans Khmer under OFL-1.1. The binaries are fetched from pinned, hashed upstream releases rather
+  than committed; a missing family falls back to the built-in fonts for the scripts it covers, and
+  a character no bundled face covers (emoji) still exports as `?`.
 - Images are validated structurally before any decoder sees them. PNG chunks are checked by CRC.
   For PDF a PNG is rebuilt from `IHDR`, `IDAT` and an empty `IEND` only, and only the 8-bit grey
   or RGB, non-interlaced class is embedded, because pdfkit passes that class through without

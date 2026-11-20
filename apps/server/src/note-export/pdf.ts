@@ -1,15 +1,31 @@
+import path from 'node:path';
 import { PassThrough, Transform, type Readable } from 'node:stream';
 import PdfDocument from 'pdfkit';
 import type { Block, ListBlock, Run } from './ast.js';
+import {
+  faceFile,
+  familyForScript,
+  isDefaultIgnorable,
+  isJoiner,
+  loadFontCatalog,
+  segmentByScript,
+  warnMissingFonts,
+  type FaceFiles,
+  type FontCatalog,
+  type FontFamily,
+} from './fonts.js';
 import { prepareImage, rebuildPngForPdf } from './image-info.js';
 import type { LoadedImage } from './images.js';
 import { DEFAULT_EXPORT_LIMITS, TooLargeError, type ExportDeadline } from './limits.js';
 
 /**
- * PDF export on the built-in PDF fonts (Helvetica/Courier), A4 with 2 cm margins. Those fonts
- * are WinAnsi only, so text outside that range is written as `?` (see docs/note-export.md);
- * censored spans are drawn as a solid bar, task checkboxes as drawn boxes and the play marker
- * of an embed as `»`, so no glyph is invented.
+ * PDF export, A4 with 2 cm margins. Text is set in the bundled Noto families (Noto Sans for
+ * Latin/Cyrillic/Greek, Noto Sans Mono for code, Noto Sans CJK for Han/kana/Hangul and Noto Sans
+ * Khmer for Khmer), embedded as subsets per document. A missing font file falls back to the
+ * built-in Helvetica/Courier for the scripts that family covers, which keeps a dev checkout
+ * without fetched fonts usable; the built-in fonts are WinAnsi only, so those runs still become
+ * `?` (see docs/note-export.md). Censored spans are drawn as a solid bar, task checkboxes as
+ * drawn boxes and the play marker of an embed as `»`, so no glyph is invented.
  *
  * Images: only the PNG/JPEG classes validated in `image-info.ts` reach this module. An image is
  * parsed once per file and then reused (`PDFKit` takes a prepared image object), and a file that
@@ -55,11 +71,28 @@ export interface PdfRenderOptions {
    * bytes after the whole document was built; this is checked between blocks and table rows.
    */
   outputCheck?: () => void;
+  /** Where the fetched Noto files live; defaults to `BOKYDO_FONT_DIR` or the app's `fonts/`. */
+  fontDir?: string;
 }
 
 type PdfDoc = PDFKit.PDFDocument;
 type DocConstructor = new (options?: PDFKit.PDFDocumentOptions) => PdfDoc;
 const createPdfDocument = PdfDocument as unknown as DocConstructor;
+
+/**
+ * The only part of fontkit this renderer reads, reached through pdfkit's loaded font. It answers
+ * whether the selected face has a glyph for a code point, so emoji and other uncovered scripts
+ * become `?` instead of an invisible `.notdef` box.
+ */
+interface FontkitFace {
+  hasGlyphForCodePoint(codePoint: number): boolean;
+}
+
+interface LoadedFace {
+  alias: string;
+  /** `false` for the built-in Helvetica/Courier names. */
+  embedded: boolean;
+}
 
 const BODY_SIZE = 11;
 const CODE_SIZE = 9;
@@ -70,6 +103,7 @@ const LINE_FACTOR = 1.4;
 const TABLE_PAD = 4;
 const TABLE_MIN_COLUMN = 24;
 const DEFAULT_MAX_LINK_ANNOTATIONS = 20_000;
+const KHMER_COENG = '\u17d2';
 
 /**
  * Code points in WinAnsiEncoding (cp1252): ASCII, Latin-1 and the characters cp1252 puts in
@@ -151,6 +185,29 @@ function atomWidth(atom: Atom): number {
   }
 }
 
+function fontFiles(files: FaceFiles): string[] {
+  return [files.regular, files.bold, files.italic, files.boldItalic].filter(
+    (file): file is string => file !== undefined,
+  );
+}
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * Grapheme clusters, with a Khmer coeng glued to the consonant after it. UAX #29 ends a cluster
+ * after the coeng sign itself, which would let `splitWord` break a subscript out of its base and
+ * feed the two halves to the shaper separately; the merged form is one shaping unit.
+ */
+function clusters(text: string): string[] {
+  const parts: string[] = [];
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    const last = parts[parts.length - 1];
+    if (last !== undefined && last.endsWith(KHMER_COENG)) parts[parts.length - 1] = last + segment;
+    else parts.push(segment);
+  }
+  return parts;
+}
+
 class PdfRenderer {
   private y: number;
   private colourValue = TEXT_COLOR;
@@ -158,6 +215,10 @@ class PdfRenderer {
   private readonly prepared: Map<string, PreparedImage>;
   private linkAnnotations = 0;
   private readonly maxLinkAnnotations: number;
+  private readonly fonts: FontCatalog;
+  private readonly aliases = new Map<string, string>();
+  private readonly faces = new Map<string, FontkitFace | null>();
+  private readonly coverage = new Map<string, Map<number, boolean>>();
 
   constructor(
     private readonly doc: PdfDoc,
@@ -167,6 +228,17 @@ class PdfRenderer {
     this.y = doc.page.margins.top;
     this.prepared = ctx.prepared ?? new Map();
     this.maxLinkAnnotations = opts.maxLinkAnnotations ?? DEFAULT_MAX_LINK_ANNOTATIONS;
+    this.fonts = loadFontCatalog(opts.fontDir);
+    warnMissingFonts(this.fonts);
+    for (const files of Object.values(this.fonts.families)) {
+      if (!files) continue;
+      for (const file of new Set(fontFiles(files))) {
+        // registerFont only records the path; pdfkit reads and parses a face on its first use,
+        // so a note that never mentions CJK never pays for the 16 MB CJK file.
+        this.aliases.set(file, file.replace(/\.[^.]+$/u, ''));
+        this.doc.registerFont(this.aliases.get(file) ?? file, path.join(this.fonts.dir, file));
+      }
+    }
   }
 
   render(title: string, blocks: readonly Block[]): void {
@@ -238,7 +310,86 @@ class PdfRenderer {
     this.y = this.top;
   }
 
-  /** Text runs to atoms: words, spaces, hard breaks, censor bars and task checkboxes. */
+  /**
+   * The pdfkit alias for a family and style, or the built-in face when the family is absent.
+   * `helix`/`courier` are the old WinAnsi fonts; they remain the fallback for a checkout or
+   * deployment that has not fetched the Noto files.
+   */
+  private face(family: FontFamily, bold: boolean, italic: boolean): LoadedFace {
+    const files = this.fonts.families[family];
+    if (files) {
+      const alias = this.aliases.get(faceFile(files, bold, italic));
+      if (alias) return { alias, embedded: true };
+    }
+    return {
+      alias: family === 'mono' ? courier(bold, italic) : helix(bold, italic),
+      embedded: false,
+    };
+  }
+
+  /** The parsed fontkit face behind a registered alias; pdfkit caches it for this document. */
+  private embeddedFace(alias: string): FontkitFace | null {
+    const cached = this.faces.get(alias);
+    if (cached !== undefined) return cached;
+    this.doc.font(alias);
+    const current = (this.doc as unknown as { _font?: { font?: FontkitFace } })._font;
+    const face = current?.font ?? null;
+    this.faces.set(alias, face);
+    return face;
+  }
+
+  private covers(alias: string, codePoint: number): boolean {
+    let cache = this.coverage.get(alias);
+    if (!cache) {
+      cache = new Map();
+      this.coverage.set(alias, cache);
+    }
+    const cached = cache.get(codePoint);
+    if (cached !== undefined) return cached;
+    const covers = this.embeddedFace(alias)?.hasGlyphForCodePoint(codePoint) ?? false;
+    cache.set(codePoint, covers);
+    return covers;
+  }
+
+  /**
+   * The characters a face can actually draw. Marks, joiners and variation selectors stay with a
+   * base that rendered; after a substituted character they are dropped rather than drawn as
+   * `.notdef`. A code point no bundled face covers becomes `?`, exactly as the built-in fonts
+   * wrote it. `▶` becomes `»` when the face has no arrow, which is what the old fonts did.
+   */
+  private sanitize(text: string, face: LoadedFace): string {
+    if (!face.embedded) return pdfSafe(text);
+    let out = '';
+    let rendered = false;
+    for (const character of text) {
+      const cp = character.codePointAt(0) ?? 0;
+      if (cp === 0x0d) continue;
+      if (cp === 0x09 || cp === 0x0a) {
+        out += ' ';
+        rendered = true;
+        continue;
+      }
+      if (isDefaultIgnorable(cp) || isJoiner(cp)) {
+        if (rendered) out += character;
+        continue;
+      }
+      if (cp === 0x25b6 && !this.covers(face.alias, cp)) {
+        out += '\u00bb';
+        rendered = true;
+        continue;
+      }
+      if (this.covers(face.alias, cp)) {
+        out += character;
+        rendered = true;
+      } else {
+        out += '?';
+        rendered = false;
+      }
+    }
+    return out;
+  }
+
+  /** Text runs to atoms: script/font runs, words, spaces, breaks, censor bars and checkboxes. */
   private atomize(runs: readonly Run[], opts: InlineOptions): Atom[] {
     const atoms: Atom[] = [];
     const push = (atom: Atom) => {
@@ -254,25 +405,30 @@ class PdfRenderer {
       }
       if (run.kind === 'image') {
         const name = run.alt || (run.fileId ? this.ctx.fileNames.get(run.fileId) : null) || 'file';
-        const font = helix(opts.bold, opts.italic);
-        push(this.textAtom(pdfSafe(`[image: ${name}]`), font, opts.size, null, false));
+        for (const segment of segmentByScript(`[image: ${name}]`)) {
+          const face = this.face(familyForScript(segment.script, false), opts.bold, opts.italic);
+          const clean = this.sanitize(segment.text, face);
+          if (clean !== '') push(this.textAtom(clean, face.alias, opts.size, null, false));
+        }
         continue;
       }
       if (run.censor) {
         push({ kind: 'censor', width: opts.size * 2.5, size: opts.size });
         continue;
       }
-      const font =
-        run.code === true
-          ? courier(opts.bold || run.bold === true, opts.italic || run.italic === true)
-          : helix(opts.bold || run.bold === true, opts.italic || run.italic === true);
+      const code = run.code === true;
+      const bold = opts.bold || run.bold === true;
+      const italic = opts.italic || run.italic === true;
       const href = run.href ?? null;
       // A note-file link has no destination outside the app, so it shows the file's name.
       const text = run.fileId ? (this.ctx.fileNames.get(run.fileId) ?? run.text) : run.text;
-      for (const part of pdfSafe(text).split(/(\s+)/)) {
-        if (part === '') continue;
-        if (/^\s+$/.test(part)) push({ kind: 'space', width: this.space(font, opts.size) });
-        else push(this.textAtom(part, font, opts.size, href, run.strike === true));
+      for (const segment of segmentByScript(text)) {
+        const face = this.face(familyForScript(segment.script, code), bold, italic);
+        for (const part of this.sanitize(segment.text, face).split(/(\s+)/)) {
+          if (part === '') continue;
+          if (/^\s+$/.test(part)) push({ kind: 'space', width: this.space(face.alias, opts.size) });
+          else push(this.textAtom(part, face.alias, opts.size, href, run.strike === true));
+        }
       }
     }
     return atoms;
@@ -326,12 +482,12 @@ class PdfRenderer {
     return lines;
   }
 
-  /** Split one over-wide word by character, measuring each character once (linear). */
+  /** Split one over-wide word on grapheme clusters, measuring each cluster once (linear). */
   private splitWord(atom: TextAtom, width: number): TextAtom[] {
     const chunks: TextAtom[] = [];
     let text = '';
     let used = 0;
-    for (const ch of atom.text) {
+    for (const ch of clusters(atom.text)) {
       const next = this.measure(ch, atom.font, atom.size);
       if (text !== '' && used + next > width) {
         chunks.push({ ...atom, text, width: used });
@@ -500,34 +656,55 @@ class PdfRenderer {
   private code(text: string, indent: number): void {
     const lineHeight = Math.round(CODE_SIZE * LINE_FACTOR);
     const width = this.width - indent - 12;
-    // One atom per line, so the indentation of code is not collapsed into a single space.
+    // Code lines keep their spaces: each script segment is one atom (mono for Latin, the CJK or
+    // Khmer face for characters mono does not cover), and the line is broken only at clusters.
     for (const raw of text.replace(/\n$/, '').split('\n')) {
-      const line = pdfSafe(raw);
-      const atom = this.textAtom(line === '' ? ' ' : line, 'Courier', CODE_SIZE, null, false);
-      const chunks = atom.width > width ? this.splitWord(atom, width) : [atom];
-      for (const chunk of chunks) {
-        this.ensure(lineHeight);
-        this.draw([chunk], this.left + indent + 12, this.y, lineHeight);
-        this.y += lineHeight;
+      const atoms: TextAtom[] = [];
+      for (const segment of segmentByScript(raw === '' ? ' ' : raw)) {
+        const face = this.face(familyForScript(segment.script, true), false, false);
+        const line = this.sanitize(segment.text, face);
+        if (line !== '') atoms.push(this.textAtom(line, face.alias, CODE_SIZE, null, false));
       }
+      let line: TextAtom[] = [];
+      let used = 0;
+      const flush = () => {
+        this.ensure(lineHeight);
+        let x = this.left + indent + 12;
+        for (const atom of line) {
+          this.draw([atom], x, this.y, lineHeight);
+          x += atom.width;
+        }
+        this.y += lineHeight;
+        line = [];
+        used = 0;
+      };
+      for (const atom of atoms) {
+        for (const piece of atom.width > width ? this.splitWord(atom, width) : [atom]) {
+          if (used > 0 && used + piece.width > width) flush();
+          line.push(piece);
+          used += piece.width;
+        }
+      }
+      flush();
     }
     this.y += 6;
   }
 
   private list(block: ListBlock, indent: number, level: number, italic: boolean): void {
+    const markerFace = this.face('sans', false, false);
     block.items.forEach((item, index) => {
       let markerAtoms: Atom[];
       let markerWidth: number;
       if (block.ordered) {
         markerAtoms = [
-          this.textAtom(`${block.start + index}. `, helix(false, false), BODY_SIZE, null, false),
+          this.textAtom(`${block.start + index}. `, markerFace.alias, BODY_SIZE, null, false),
         ];
         markerWidth = markerAtoms.reduce((sum, atom) => sum + atomWidth(atom), 0);
       } else if (item.checked !== null) {
         markerAtoms = [{ kind: 'check', checked: item.checked, width: 14 }];
         markerWidth = 14;
       } else {
-        markerAtoms = [this.textAtom('\u2022 ', helix(false, false), BODY_SIZE, null, false)];
+        markerAtoms = [this.textAtom('\u2022 ', markerFace.alias, BODY_SIZE, null, false)];
         markerWidth = markerAtoms.reduce((sum, atom) => sum + atomWidth(atom), 0);
       }
       const rest = [...item.blocks];
@@ -651,16 +828,25 @@ class PdfRenderer {
     };
     for (const row of block.rows) {
       for (let index = 0; index < columns; index++) {
-        const head = plain(block.header[index] ?? []);
-        const value = plain(row[index] ?? []);
+        const headRuns = block.header[index] ?? [];
+        const valueRuns = row[index] ?? [];
+        const head = plain(headRuns);
+        const value = plain(valueRuns);
         if (head === '' && value === '') continue;
-        const text = head === '' ? value : `${head}: ${value}`;
-        this.writeInline(
-          [{ kind: 'text', text }],
-          { size: BODY_SIZE, bold: false, italic: false },
-          0,
-          2,
-        );
+        // Plain cells keep the old single-string atom (one text run, no spurious spaces between
+        // the header, colon and value). A censored cell keeps its runs so the placeholder is
+        // still drawn as a bar instead of five `?` from a font without U+2588.
+        const censored =
+          headRuns.some((run) => run.kind === 'text' && run.censor === true) ||
+          valueRuns.some((run) => run.kind === 'text' && run.censor === true);
+        const runs: Run[] = censored
+          ? head === ''
+            ? [...valueRuns]
+            : value === ''
+              ? [...headRuns]
+              : [...headRuns, { kind: 'text', text: ': ' }, ...valueRuns]
+          : [{ kind: 'text', text: head === '' ? value : `${head}: ${value}` }];
+        this.writeInline(runs, { size: BODY_SIZE, bold: false, italic: false }, 0, 2);
       }
       this.y += 4;
     }
@@ -687,7 +873,8 @@ class PdfRenderer {
     );
     const needed = Math.max(1, ...header.map((cell) => cell.length));
     if (needed <= room) return { cells: header.map((cell) => cell), lines: needed };
-    const ellipsis = this.textAtom('…', helix(false, false), BODY_SIZE, null, false);
+    const ellipsisFace = this.face('sans', false, false);
+    const ellipsis = this.textAtom('…', ellipsisFace.alias, BODY_SIZE, null, false);
     const cells = header.map((cell, index) => {
       const lines = cell.slice(0, room).map((line) => [...line]);
       const last = lines[room - 1] ?? [];

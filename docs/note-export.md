@@ -88,9 +88,9 @@ bytes are then read from disk one file at a time; the transaction is about the r
 | ------------------------------ | --------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
 | Title                          | `# Title` first line (omitted when blank)                       | Heading 1                             | 22 pt bold heading                                      |
 | Headings 1–6                   | kept                                                            | Heading 1–6 styles                    | 22/18/15.5/13.5/12/11 pt bold                           |
-| Bold / italic / strike         | kept                                                            | `w:b` / `w:i` / `w:strike`            | Helvetica bold/oblique; strike                          |
-| Inline code                    | kept                                                            | Courier New                           | Courier                                                 |
-| Code block                     | fenced, language kept, fence chosen from the content            | one shaded Courier paragraph per line | 9 pt Courier, indentation preserved                     |
+| Bold / italic / strike         | kept                                                            | `w:b` / `w:i` / `w:strike`            | Noto Sans bold/oblique; strike                          |
+| Inline code                    | kept                                                            | Courier New                           | Noto Sans Mono                                          |
+| Code block                     | fenced, language kept, fence chosen from the content            | one shaded Courier paragraph per line | 9 pt Noto Sans Mono, indentation preserved              |
 | Quote                          | kept                                                            | left indent + italic                  | left indent + italic                                    |
 | Bullet / ordered list          | kept, nested                                                    | Word list styles, nested, start kept  | `•` / `1.`, nested                                      |
 | Task item                      | `- [ ]` / `- [x]`                                               | `☐` / `☑` prefix on a list item       | drawn checkbox                                          |
@@ -219,7 +219,7 @@ before every read, so a disconnect stops reading rather than finishing the file 
 `redactCensored` from `@bokydo/shared` replaces every valid `{{censored:v1:…}}` token with `█████`
 before the body is parsed. The token — and therefore any ciphertext — never reaches an output; a
 malformed token is inert text. In PDF the placeholder is drawn as a filled rectangle rather than
-text, because the built-in fonts have no `█` glyph.
+text, so it looks the same with the bundled fonts and with the built-in fallback.
 
 ## Images
 
@@ -406,17 +406,53 @@ that exit, so a client that reads the whole body immediately after sees the slot
 zip keeps its slot until the stream has ended or been destroyed, not merely until the render
 worker exits, because the archive read is the slow part.
 
-## PDF font limitation
+## PDF fonts
 
-PDFs use the built-in Helvetica and Courier families, which are WinAnsi (cp1252) only. There is no
-bundled TTF/OTF in the repository that `pdfkit` could embed (`@fontsource` ships WOFF/WOFF2, which
-`pdfkit` cannot read), so text outside cp1252 — Cyrillic, Greek, Khmer, CJK, emoji — is written as
-`?` and the exporter documents that rather than embedding a font. Latin-1 and the cp1252
-punctuation (curly quotes, dashes, `€`, `•`, …) are exact. `▶` (the embed marker) is written as
-`»`; task checkboxes and censored spans are drawn, not typed, so they survive.
+PDFs embed subsetted copies of four OFL-1.1 Noto families. The binaries are **not** in git; they
+are pinned in `apps/server/fonts.lock.json` and fetched from the official `notofonts` release
+assets by `apps/server/scripts/fetch-fonts.mjs`:
 
-If a Unicode font is ever added, it belongs in this directory and should be registered once for
-both `Helvetica`-substitute and `Courier`-substitute use.
+| Scripts                                                                    | Family                 | Faces                          | Size    |
+| -------------------------------------------------------------------------- | ---------------------- | ------------------------------ | ------- |
+| Latin, Cyrillic, Greek, common punctuation                                 | Noto Sans 2.015        | Regular/Bold/Italic/BoldItalic | 2.5 MB  |
+| Code                                                                       | Noto Sans Mono 2.014   | Regular/Bold                   | 1.2 MB  |
+| Han, Hiragana, Katakana, Hangul, CJK punctuation/symbols, full-width forms | Noto Sans CJK SC 2.004 | Regular/Bold                   | 33.4 MB |
+| Khmer U+1780–U+17FF and U+19E0–U+19FF                                      | Noto Sans Khmer 2.004  | Regular/Bold                   | 0.2 MB  |
+
+`pnpm --filter @bokydo/server fonts:fetch` downloads into `apps/server/fonts/` (gitignored by one
+rule in `.gitignore`; `LICENSES/OFL.txt` stays tracked). Each archive and each extracted file must
+match the SHA-256 in the lock before it is moved into place, and `apps/server/fonts.sha256` lists
+the same files for `sha256sum -c`. The Docker build runs the fetcher and then `sha256sum -c` in the
+build stage, and copies only the verified files into `/app/fonts` in the distroless runtime.
+
+The worker loads fonts from `BOKYDO_FONT_DIR`, defaulting to the `fonts/` directory next to the
+app: `apps/server/fonts` in development and tests, `/app/fonts` in the image (the image sets the
+variable explicitly). A family whose regular file is missing falls back to the built-in
+Helvetica/Courier for the scripts it covers and logs one warning, so a checkout without fetched
+fonts still exports; those runs keep the old WinAnsi `?` substitution for unencodable text.
+
+Runs are segmented by script before words are measured, and every atom is measured in the font it
+is drawn with, so wrapping and table column widths follow the embedded faces. A combining mark,
+ZWJ/ZWNJ, variation selector or emoji modifier stays with the run before it. Word splitting uses
+grapheme clusters and glues a Khmer coeng (U+17D2) to the consonant after it, so a cluster reaches
+the shaper whole. A character the chosen face does not cover becomes `?` — emoji, and scripts no
+bundled family covers — never an invisible `.notdef`; a note cannot silently lose text. `▶` still
+becomes `»` when the face has no arrow; censored spans are drawn as bars and task checkboxes as
+boxes. Noto Sans CJK and Noto Sans Khmer have no italic file, so italic text that needs them uses
+their Regular face. Code uses Noto Sans Mono for the scripts mono covers, and the CJK or Khmer
+face for characters it does not.
+
+Khmer needs OpenType shaping. Noto Sans Khmer carries GSUB/GPOS, and pdfkit passes `doc.text`
+through `fontkit`'s layout, which detects the script from the string. The font test renders
+`សួស្តី` and checks the shaped run: the coeng sign and its consonant become one subscript glyph
+(five glyphs for six code points, one glyph mapping back to two code points), the PDF contains
+glyph ids rather than `?`, the layout does not throw, and the document's own `ToUnicode` CMap
+round-trips the word. Subsetting is pdfkit's default: `/FontFile2` for the TrueType faces,
+`/FontFile3` for the CFF CJK face. Each face is loaded on first use, so a Latin-only note never
+reads the 16 MB CJK files.
+
+DOCX is unchanged (Word uses system fonts). The pinned, hash-verified font files are the only font
+files pdfkit ever parses — never a note, an upload or any other user-supplied font.
 
 ## Tests
 
@@ -428,6 +464,9 @@ both `Helvetica`-substitute and `Courier`-substitute use.
   rules, `IDAT`/`IEND`, trailing bytes, 16-bit/interlaced/`tRNS`/`PLTE`), JPEG markers and `EOI`.
 - **images** — which files are loaded, the per-image and total budgets from declared and real
   sizes, a missing file or a directory skipped, and an abort between reads stopping the rest.
+- **fonts** — script segmentation for Latin/Cyrillic/Greek, Han/kana/Hangul, Khmer, combining
+  marks, joiners and emoji; the family and style mapping; the font directory resolution; and the
+  lock file against `fonts.sha256` and the committed OFL text.
 - **image-info** — PNG/JPEG header reading, the full PNG chunk walk (CRC, chunk bounds, IHDR
   rules, `IDAT`/`IEND`, trailing bytes, 16-bit/interlaced/`tRNS`/`PLTE`, the 10,000-chunk cap),
   JPEG markers and `EOI`.
@@ -440,7 +479,12 @@ both `Helvetica`-substitute and `Courier`-substitute use.
   cap, an alpha PNG rendered as text even when unvalidated, a 256 KiB `tEXt` PNG rebuilt and
   embedded, a motion-photo JPEG embedded only through its EOI, file links as names, table wrapping
   and page breaks with a repeated header, the wide-table `header: value` fallback, the truncated
-  tall header, the deadline, the output cap aborting the render.
+  tall header, the deadline, the output cap aborting the render, and the built-in-font fallback
+  when the font directory is absent. Text is read back by decoding embedded subsets through their
+  `ToUnicode` CMaps, so the same assertions hold with and without the fetched fonts.
+- **pdf-fonts** — skipped unless `fonts:fetch` has run: Cyrillic/Greek/Han/kana/Hangul/Khmer render
+  without `?`, subsetted `/FontFile2`/`/FontFile3` faces with the expected `BaseFont` names, a
+  Khmer coeng subscript in the shaped glyph run, long Khmer/CJK wrapping, and emoji staying `?`.
 - **worker** — the thread boundary itself: live Markdown/PDF through the ack protocol; a sparse
   table and a 512 KiB list refused quickly; injected OOM → 413 and a second worker succeeding;
   an injected throw; the deadline terminating a slow render; a consumer disconnect terminating the

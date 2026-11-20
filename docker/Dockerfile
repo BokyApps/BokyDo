@@ -3,6 +3,16 @@ FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3e
 RUN npm install -g pnpm@12.9.1 && npm cache clean --force
 WORKDIR /src
 
+# Font binaries are not committed (they are ~36 MB). Fetch the exact releases pinned in
+# apps/server/fonts.lock.json, require both the archive and every extracted file to match, then
+# verify the same file list again with `sha256sum -c`. This layer only depends on the manifest,
+# the checksum list and the fetcher, so source changes do not re-download the archives.
+COPY apps/server/fonts.lock.json apps/server/fonts.sha256 /fonts-manifest/
+COPY apps/server/scripts/fetch-fonts.mjs /fonts-manifest/
+RUN node /fonts-manifest/fetch-fonts.mjs --lock /fonts-manifest/fonts.lock.json --dir /fonts \
+ && cd /fonts \
+ && sha256sum -c /fonts-manifest/fonts.sha256
+
 # Install with only manifests first so the dependency layer caches across source changes.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/server/package.json apps/server/
@@ -54,11 +64,14 @@ FROM runtime-base AS runtime
 COPY --from=runtime-security /runtime-security/ /
 WORKDIR /app
 ENV NODE_ENV=production
+ENV BOKYDO_FONT_DIR=/app/fonts
 COPY --from=build /out/package.json ./package.json
 COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /src/apps/server/dist ./dist
 COPY --from=build /src/apps/server/drizzle ./drizzle
 COPY --from=build /src/apps/web/dist ./public
+COPY --from=build /fonts /app/fonts
+COPY --from=build /src/apps/server/fonts/LICENSES /app/fonts/LICENSES
 COPY --from=build /cli/bokydo /usr/local/bin/bokydo
 # Volume mount points owned by the app user, so fresh volumes start out writable by the app
 # (Docker copies a mount point's owner and mode into a new named volume): no root init step.
