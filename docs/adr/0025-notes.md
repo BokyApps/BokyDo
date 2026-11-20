@@ -116,6 +116,14 @@ account) get an "Open in new tab" link on the card instead.
 
 ### Censoring (client-side encryption)
 
+**Status (2026-11-20):** delivered in two steps. The crypto (`lib/censor.ts`), the token format,
+every server-side and export redaction path, the MCP guard and the editor's censored-node
+handling ship with Notes. The editor's Censor, Reveal and Remove actions do not ship yet
+(`CENSORING_ENABLED = false`): review kept finding edge cases where censoring meets autosave,
+the tab-close save and two-tab conflicts, so that UI is its own follow-up deliverable. Until
+then, an existing token (from the API or an import) shows as `█████` and cannot be revealed in
+the app. The rules below describe the complete design that the follow-up must meet.
+
 The server never sees censored plaintext or the password.
 
 - The key is derived in the browser with PBKDF2-HMAC-SHA-256 (WebCrypto). It uses 600,000

@@ -261,6 +261,10 @@ export function CensoredView({ node, editor, getPos }: NodeViewProps) {
     menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
   }, [menuOpen]);
 
+  // Without Reveal/Remove callbacks (censoring not offered) the span is a plain label.
+  const callbacksNow = getCallbacks(editor);
+  const hasActions = Boolean(callbacksNow.onReveal ?? callbacksNow.onUncensor);
+
   const reveal = useCallback(() => {
     closeMenu(true);
     const cb = getCallbacks(editor);
@@ -304,21 +308,32 @@ export function CensoredView({ node, editor, getPos }: NodeViewProps) {
         closeMenu(true);
       }}
     >
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-label={t('notes.editor.censoredAriaLabel', {
-          defaultValue: 'Censored text, options',
-        })}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        className="bk-censored-block"
-        contentEditable={false}
-        onClick={() => setMenuOpen((open) => !open)}
-      >
-        {CENSORED_PLACEHOLDER}
-      </button>
-      {menuOpen && (
+      {!hasActions ? (
+        <span
+          className="bk-censored-block"
+          role="img"
+          aria-label={t('notes.editor.censoredText', { defaultValue: 'Censored text' })}
+          contentEditable={false}
+        >
+          {CENSORED_PLACEHOLDER}
+        </span>
+      ) : (
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-label={t('notes.editor.censoredAriaLabel', {
+            defaultValue: 'Censored text, options',
+          })}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          className="bk-censored-block"
+          contentEditable={false}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          {CENSORED_PLACEHOLDER}
+        </button>
+      )}
+      {hasActions && menuOpen && (
         <span ref={menuRef} className="bk-censor-menu" role="menu" contentEditable={false}>
           <button type="button" role="menuitem" onClick={reveal}>
             {t('notes.editor.censorReveal', { defaultValue: 'Reveal' })}

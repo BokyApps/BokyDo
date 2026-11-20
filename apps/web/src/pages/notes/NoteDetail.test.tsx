@@ -39,6 +39,12 @@ vi.mock('../../lib/sync.js', () => ({
 const marker = vi.hoisted(() => ({
   check: vi.fn<(noteId: string, body: string) => Promise<'none' | 'saved' | 'missing'>>(),
 }));
+// Censoring is off in the product until its follow-up lands; these tests keep exercising the
+// page's censor flow so it stays correct for that deliverable.
+vi.mock('../../lib/notes.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  CENSORING_ENABLED: true,
+}));
 vi.mock('../../lib/notes-censor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof NotesCensor>();
   return { ...actual, checkPendingCensor: (id: string, body: string) => marker.check(id, body) };

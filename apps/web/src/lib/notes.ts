@@ -418,3 +418,10 @@ export function noteErrorMessage(err: unknown): string {
   }
   return errorMessage(err);
 }
+
+/**
+ * Password censoring (ADR 0025) is split into its own follow-up deliverable: the crypto, the
+ * token format and every redaction path ship, but the editor offers no Censor, Reveal or Remove
+ * action yet. Existing tokens still display as █████. Flip this once that deliverable lands.
+ */
+export const CENSORING_ENABLED = false;
