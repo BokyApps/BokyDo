@@ -37,42 +37,78 @@ vi.mock('../../lib/sync.js', () => ({
 // page only has to react to the three outcomes. Mocking the async check keeps the page test
 // deterministic (real SHA-256 runs on the thread pool, not on fake timers).
 const marker = vi.hoisted(() => ({
-  check: vi.fn<() => Promise<'none' | 'saved' | 'missing'>>(),
+  check: vi.fn<(noteId: string, body: string) => Promise<'none' | 'saved' | 'missing'>>(),
 }));
 vi.mock('../../lib/notes-censor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof NotesCensor>();
-  return { ...actual, checkPendingCensor: () => marker.check() };
+  return { ...actual, checkPendingCensor: (id: string, body: string) => marker.check(id, body) };
 });
 
+const password = vi.hoisted(() => ({ ask: vi.fn<(opts: unknown) => Promise<string | null>>() }));
+const snapshot = vi.hoisted(() => ({
+  verify: vi.fn<(markdown: string) => { markdown: string; fallback: boolean; mismatch: boolean }>(),
+}));
 vi.mock('./PasswordDialog.js', () => ({
-  usePasswordPrompt: () => ({ askPassword: async () => null, dialog: null }),
+  usePasswordPrompt: () => ({ askPassword: password.ask, dialog: null }),
 }));
 
 // The real editor is TipTap in a lazy chunk; this stands in for the read/write contract the page
-// depends on: it renders the incoming Markdown and emits edits through onChange.
+// depends on: it renders the incoming Markdown and emits edits through onChange. The two buttons
+// expose the same callbacks the real editor calls, so the page's freeze/save/verify contracts can
+// be driven without mounting TipTap.
 vi.mock('../../components/notes/NoteEditor.js', () => ({
   default: ({
     markdown,
     onChange,
     editable,
+    onCensor,
+    onCensorSettled,
+    onSerialized,
   }: {
     markdown: string;
     onChange: (md: string) => void;
     editable?: boolean;
+    onCensor?: (markdown: string) => Promise<string | null>;
+    onCensorSettled?: (outcome: string) => void;
+    onSerialized?: (snapshot: {
+      markdown: string;
+      verified(): { markdown: string; fallback: boolean; mismatch: boolean };
+    }) => void;
   }) => (
-    <textarea
-      aria-label="Note body"
-      className="bk-note-prosemirror"
-      value={markdown}
-      disabled={editable === false}
-      onChange={(e) => onChange(e.target.value)}
-    />
+    <>
+      <textarea
+        aria-label="Note body"
+        className="bk-note-prosemirror"
+        value={markdown}
+        disabled={editable === false}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button
+        type="button"
+        data-testid="censor"
+        onClick={() => {
+          void onCensor?.('secret').then((token) => {
+            onCensorSettled?.(token ? 'ok' : 'cancelled');
+          });
+        }}
+      >
+        Censor
+      </button>
+      <button
+        type="button"
+        data-testid="unsafe-snapshot"
+        onClick={() => onSerialized?.({ markdown, verified: () => snapshot.verify(markdown) })}
+      >
+        unsafe snapshot
+      </button>
+    </>
   ),
 }));
 
 import type * as NotesCensor from '../../lib/notes-censor.js';
+import { lockCensored } from '../../lib/censor-lock.js';
 import { ConfirmProvider } from '../../lib/confirm.js';
-import { notesKeys } from '../../lib/notes.js';
+import { notesKeys, noteFocusSurface } from '../../lib/notes.js';
 import { censorTokenDigest } from '../../lib/notes-censor.js';
 import { ToastProvider } from '../../lib/toasts.js';
 import { NoteDetail } from './NoteDetail.js';
@@ -124,12 +160,12 @@ function savedFrom(patch: Record<string, unknown>, updatedAt: string): Note {
 let client: QueryClient;
 let container: HTMLDivElement;
 let root: Root;
+let unmounted: boolean;
 let patchCalls: Record<string, unknown>[];
 let patchHandler: (body: Record<string, unknown>) => Response | Promise<Response>;
 let getNote: () => Note;
 let getFails: boolean;
 let getGone: boolean;
-let writeText: ReturnType<typeof vi.fn>;
 
 function tree(): ReactNode {
   return (
@@ -212,17 +248,21 @@ beforeEach(() => {
   getNote = () => makeNote();
   getFails = false;
   getGone = false;
-  writeText = vi.fn(async () => undefined);
   router.blocker.status = 'idle';
   router.proceed.mockClear();
   router.reset.mockClear();
   marker.check.mockReset();
   marker.check.mockResolvedValue('none');
+  password.ask.mockReset();
+  password.ask.mockResolvedValue(null);
+  snapshot.verify.mockReset();
+  snapshot.verify.mockImplementation((markdown) => ({
+    markdown,
+    fallback: true,
+    mismatch: true,
+  }));
+  unmounted = false;
   sessionStorage.clear();
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: { writeText },
-  });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -247,7 +287,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
+  if (!unmounted) act(() => root.unmount());
   container.remove();
   client.clear();
   vi.useRealTimers();
@@ -379,25 +419,6 @@ describe('409 stale_revision', () => {
 
     expect(body().value).toBe('Their body');
     expect(title().value).toBe('Theirs');
-    expect(banner()).toBeNull();
-    expect(patchCalls).toHaveLength(1);
-  });
-
-  it('Copy mine copies the draft Markdown, then loads theirs', async () => {
-    patchHandler = () => staleBody(R2);
-
-    await render();
-    getNote = () => makeNote({ body: 'Their body', updatedAt: R2 });
-    await type(body(), 'Mine');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(800);
-    });
-    await settle();
-    await click('Copy mine');
-    await settle();
-
-    expect(writeText).toHaveBeenCalledWith('Mine');
-    expect(body().value).toBe('Their body');
     expect(banner()).toBeNull();
     expect(patchCalls).toHaveLength(1);
   });
@@ -567,7 +588,107 @@ describe('MED 2c: a censor marker warns on the next visit', () => {
   });
 });
 
+describe('MED: the censor marker is checked against a fresh server body', () => {
+  it('warns when a cached body still has the token but the fresh GET does not', async () => {
+    // The cache (and the initially rendered note) still carries the token; the server no longer
+    // does. Comparing cached data would wrongly say the censor was saved.
+    client.setQueryData(notesKeys.detail('note-1'), makeNote({ body: `before ${TOKEN} after` }));
+    getNote = () => makeNote({ body: 'plaintext came back' });
+    marker.check.mockImplementation(async (_id, body) =>
+      body.includes(TOKEN) ? 'saved' : 'missing',
+    );
+
+    await render();
+    await settle();
+    expect(marker.check).toHaveBeenCalled();
+    expect(marker.check.mock.calls[0]?.[1]).toBe('plaintext came back');
+    expect(container.textContent).toContain('Your last censor may not have been saved');
+  });
+});
+
+describe('verification blocks an unsafe body but keeps other fields saving', () => {
+  it('shows the explicit error, never sends the body, and saves the title', async () => {
+    await render();
+    await type(body(), 'Mine');
+    // Register the verifier snapshot for the exact Markdown the editor emitted.
+    await click('unsafe snapshot');
+    await type(title(), 'T2');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]).toEqual({ title: 'T2', expectedUpdatedAt: R1 });
+    expect(body().value).toBe('Mine');
+    expect(container.textContent).toContain(
+      "This note couldn't be saved safely — please copy your text and report it",
+    );
+  });
+
+  it('keeps the verifier attached for the unmount flush', async () => {
+    await render();
+    await type(body(), 'Mine');
+    await click('unsafe snapshot');
+    snapshot.verify.mockImplementation((markdown) => ({
+      markdown,
+      fallback: false,
+      mismatch: false,
+    }));
+
+    await act(async () => {
+      unmounted = true;
+      root.unmount();
+    });
+    await vi.advanceTimersByTimeAsync(5);
+
+    expect(snapshot.verify).toHaveBeenCalledWith('Mine');
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]).toEqual({ body: 'Mine', expectedUpdatedAt: R1 });
+  });
+});
+
+describe('censor freeze cancels with the pre-censor draft', () => {
+  it('a lock while the password prompt is open unfreezes every field', async () => {
+    let resolveAsk!: (value: string | null) => void;
+    password.ask.mockImplementation(
+      () => new Promise<string | null>((resolve) => (resolveAsk = resolve)),
+    );
+
+    await render();
+    await click('Censor');
+    expect(password.ask).toHaveBeenCalledOnce();
+    expect(title().disabled).toBe(true);
+    expect(body().disabled).toBe(true);
+
+    // Automatic cancel: a hidden tab / pagehide / lock all reach the same censor lock listener.
+    await act(async () => {
+      lockCensored('hidden');
+    });
+    await act(async () => {
+      resolveAsk(null);
+      await vi.advanceTimersByTimeAsync(5);
+    });
+
+    expect(title().disabled).toBe(false);
+    expect(body().disabled).toBe(false);
+    // The pre-censor draft is intact and normal autosave resumes.
+    expect(body().value).toBe('B');
+  });
+});
+
 describe('LOW: focus after a conflict resolution', () => {
+  it('prefers the visible Markdown source textarea when that view is open', () => {
+    const holder = document.createElement('div');
+    const prose = document.createElement('div');
+    prose.className = 'bk-note-prosemirror';
+    const source = document.createElement('textarea');
+    source.className = 'bk-note-textarea';
+    holder.append(prose, source);
+    expect(noteFocusSurface(holder)).toBe(source);
+    source.remove();
+    expect(noteFocusSurface(holder)).toBe(prose);
+  });
+
   it('returns focus to the editor after Load their version', async () => {
     patchHandler = () => staleBody(R2);
     await render();

@@ -44,23 +44,18 @@ export async function api<T>(
 /**
  * A PATCH that survives the page going away (`pagehide`). `keepalive` lets the browser finish the
  * request after the document is gone; the CSRF header is the same one `api` sends. The revision
- * premise is part of the body, exactly as for an ordinary save: a stale tab must not overwrite a
- * newer save (including restoring plaintext another tab censored). `expectedUpdatedAt: null`
- * omits it for the one censor-safety exception in `NoteAutosave.keepaliveRequest`: the only writer
- * it can then override is this tab's own older PATCH, which is still in flight. Errors are ignored
- * by design: there is no UI left to report them to.
+ * premise is ALWAYS part of the body, exactly as for an ordinary save: a stale tab must not
+ * overwrite a newer save (including restoring plaintext another tab censored). A censor freeze
+ * sends no keepalive at all; there is no unguarded variant. Errors are ignored by design: there is
+ * no UI left to report them to.
  */
-export function keepalivePatch(
-  path: string,
-  patch: NotePatch,
-  expectedUpdatedAt: string | null,
-): void {
+export function keepalivePatch(path: string, patch: NotePatch, expectedUpdatedAt: string): void {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (csrfToken) headers[CSRF_HEADER] = csrfToken;
   void fetch(path, {
     method: 'PATCH',
     headers,
-    body: JSON.stringify(expectedUpdatedAt === null ? patch : { ...patch, expectedUpdatedAt }),
+    body: JSON.stringify({ ...patch, expectedUpdatedAt }),
     credentials: 'same-origin',
     keepalive: true,
   }).catch(() => undefined);

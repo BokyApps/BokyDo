@@ -25,8 +25,8 @@ export interface NoteConflictBannerProps {
   remoteRevision?: string | null;
   onLoadTheirs: () => void;
   onRetryFetch: () => void;
-  onKeepMine: () => void;
-  onCopyMine: () => void;
+  /** `confirmedRevision` is the revision the user accepted in the censor confirmation, or null. */
+  onKeepMine: (confirmedRevision: string | null) => void;
 }
 
 export function NoteConflictBanner({
@@ -37,7 +37,6 @@ export function NoteConflictBanner({
   onLoadTheirs,
   onRetryFetch,
   onKeepMine,
-  onCopyMine,
 }: NoteConflictBannerProps) {
   const { t } = useTranslation();
   // The revision the confirmation belongs to. Deriving "confirming" from it means a fresher
@@ -83,14 +82,6 @@ export function NoteConflictBanner({
           <Button disabled={busy} onClick={onRetryFetch}>
             {t('notes.conflict.retryFetch', { defaultValue: 'Retry fetch' })}
           </Button>
-          {remoteRevision !== null && (
-            <Button variant="secondary" disabled={busy} onClick={onKeepMine}>
-              {t('notes.conflict.keepMine', { defaultValue: 'Keep mine' })}
-            </Button>
-          )}
-          <Button variant="ghost" disabled={busy} onClick={onCopyMine}>
-            {t('notes.conflict.copyMine', { defaultValue: 'Copy mine' })}
-          </Button>
         </div>
       </div>
     );
@@ -119,7 +110,7 @@ export function NoteConflictBanner({
           <Button variant="secondary" disabled={busy} onClick={onLoadTheirs}>
             {t('notes.conflict.loadTheirs', { defaultValue: 'Load their version' })}
           </Button>
-          <Button variant="danger" disabled={busy} onClick={onKeepMine}>
+          <Button variant="danger" disabled={busy} onClick={() => onKeepMine(remoteRevision)}>
             {t('notes.conflict.keepAnyway', { defaultValue: 'Keep mine anyway' })}
           </Button>
           <Button variant="ghost" disabled={busy} onClick={() => setConfirmationRevision(null)}>
@@ -152,18 +143,15 @@ export function NoteConflictBanner({
         <span ref={keepMine} className="contents">
           <Button
             variant="secondary"
-            disabled={busy}
+            disabled={busy || remoteRevision === null}
             onClick={() => {
               if (censorWarning) setConfirmationRevision(remoteRevision ?? '');
-              else onKeepMine();
+              else onKeepMine(null);
             }}
           >
             {t('notes.conflict.keepMine', { defaultValue: 'Keep mine' })}
           </Button>
         </span>
-        <Button variant="ghost" disabled={busy} onClick={onCopyMine}>
-          {t('notes.conflict.copyMine', { defaultValue: 'Copy mine' })}
-        </Button>
       </div>
     </div>
   );

@@ -42,6 +42,16 @@ The renderer has no raw-HTML path. HTML in the Markdown is shown as text. Ordina
 `http(s)` or `mailto` (the existing `safeHref`). `bokydo:` links resolve inside the app. Every
 other scheme is rendered as text.
 
+### Saving
+
+The WYSIWYG editor emits Markdown. Before a body save, that Markdown is parsed again and compared
+with the editor document; if source-preserving serialisation changed the structure, a fresh
+serialisation is tried. If both forms differ, the body is not sent at all: the draft stays on
+screen with an explicit "couldn't be saved safely" error, while title, tags and pin still save. A
+source-view edit has no editor document and is saved exactly as typed. The verifier stays attached
+for the unmount flush. Blocks that are unchanged are re-emitted from their captured source, and a
+literal `!` directly before a link is escaped so text can never re-read as an image.
+
 On every save the server derives `note_links` (note → note) and the body half of
 `note_task_links` from the Markdown. A link only counts when its target exists and the user can
 see it: their own note, or a task in a project they belong to. Links to anything else stay in the
@@ -124,6 +134,24 @@ The server never sees censored plaintext or the password.
 - Passwords exist only in memory. During a session the tab may keep derived keys, keyed by salt,
   so other spans under the same password unlock together. "Lock" and sign-out clear them. A
   forgotten password cannot be recovered, and the UI says so before the user censors anything.
+- A censor selection may not cross text carrying a link mark, or an image, file or internal chip;
+  the editor says "Remove the link before censoring this text" and opens no prompt. After building
+  the replacement it also checks every surviving mark and content attribute (link `href`/`title`,
+  chip label, image alt, embed URL/label) for the selected plaintext and aborts if it is still
+  there, since that text would remain recoverable from the Markdown.
+- Censoring is its own save. Before the password prompt the note is frozen: the editor is
+  read-only, export is unavailable, and autosave sends nothing for any field — no debounce, flush
+  or `pagehide` keepalive. The plaintext was part of the draft before the user chose to censor it,
+  so a cancel (explicit dialog cancel, a lock, a hidden tab or pagehide while the prompt is open,
+  a note change or unmount) unfreezes and resumes normal autosave with that same pre-censor draft.
+  On success the editor verifies the token document, then the page sends ONE PATCH carrying only
+  that body with the last acknowledged `updatedAt` as its premise, directly rather than through the
+  debounce queue. `200` sets the baseline and revision from the response and unfreezes. A `409`
+  keeps the freeze and shows the conflict banner. A network failure keeps the freeze and offers
+  "Censor not saved — Retry", which resends the same body with the same premise. Closing the tab
+  while that PATCH is pending sends no extra keepalive; the sessionStorage marker (note id and
+  SHA-256 digest of the token only) makes the next open compare a FRESH `GET`, not cached data, and
+  warn if the token is missing.
 - Unlocking is only ever triggered by an explicit Reveal or Remove action, never on render or
   in bulk. Each attempt is a full PBKDF2, and a planted note can contain thousands of tokens.
   Concurrent requests for one token are merged. Remembered passwords are tried at most three at
@@ -170,9 +198,17 @@ same output.
 saw). The server compares it under the row lock and answers 409 `stale_revision` when it is out
 of date. Every write advances `updated_at` by at least 1 ms. The web app always sends it:
 
+- The `pagehide` keepalive always carries `expectedUpdatedAt` too; there is no unguarded variant.
+  While a censor freeze is active it sends nothing.
 - A stale tab with no local edits adopts the newer version.
-- A stale tab with local edits shows a conflict banner: Load theirs, Keep mine or Copy mine.
-- Keep mine asks again when it would bring back text that was censored elsewhere.
+- A stale tab with local edits shows a conflict banner: **Load their version** or **Keep mine**.
+  There is no "Copy mine": every action in the banner is a safe one. If the post-409 fetch failed,
+  the banner offers only **Retry fetch** — no version can be adopted or kept without the fetched
+  revision.
+- Keep mine requires a successfully fetched remote revision. When the saved body differs and
+  contains anything censor-like, it first confirms, and the confirmation is bound to that exact
+  revision. The page checks this again in the action handler itself, not only while rendering, so a
+  stale click cannot bypass it.
 
 Without this, a whole-body save from an old tab could restore plaintext that another tab had
 just censored.

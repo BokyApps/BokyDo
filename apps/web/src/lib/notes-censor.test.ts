@@ -26,7 +26,6 @@ import { CensorError, censor, uncensor, censorKeys } from './censor.js';
 import {
   CensorFlow,
   PasswordPromptQueue,
-  censorWithBodyPause,
   lockCensored,
   onCensorLock,
   type CensorPrompts,
@@ -211,48 +210,6 @@ describe('P3: capture the lock generation before the first await', () => {
     const flow = new CensorFlow(prompts({ askPassword }), { warned: false });
     expect(await flow.onReveal('TOKEN')).toBeNull();
     expect(mockUncensor).not.toHaveBeenCalled();
-  });
-});
-
-describe('P1/H2: the body autosave is paused before the censor prompt opens', () => {
-  it('pauses synchronously, marks the token revision urgent and keeps the body held', async () => {
-    const events: string[] = [];
-    const autosave = {
-      pauseBody: vi.fn(() => events.push('pause')),
-      resumeBody: vi.fn(() => events.push('resume')),
-      flushNextUpdate: vi.fn(() => events.push('flush-next')),
-    };
-    const flow = {
-      onCensor: vi.fn(async () => {
-        events.push('prompt');
-        return 'TOKEN';
-      }),
-    };
-    expect(await censorWithBodyPause(autosave, flow, 'secret')).toBe('TOKEN');
-    // Pause happens before the prompt; on success the pause is deliberately NOT released here:
-    // the editor still has to hand the verified token draft to autosave (H2).
-    expect(events).toEqual(['pause', 'prompt', 'flush-next']);
-    expect(autosave.resumeBody).not.toHaveBeenCalled();
-  });
-
-  it('resumes without a flush when the prompt is cancelled', async () => {
-    const autosave = { pauseBody: vi.fn(), resumeBody: vi.fn(), flushNextUpdate: vi.fn() };
-    const flow = { onCensor: vi.fn(async () => null) };
-    expect(await censorWithBodyPause(autosave, flow, 'secret')).toBeNull();
-    expect(autosave.resumeBody).toHaveBeenCalledOnce();
-    expect(autosave.flushNextUpdate).not.toHaveBeenCalled();
-  });
-
-  it('resumes when censoring throws', async () => {
-    const autosave = { pauseBody: vi.fn(), resumeBody: vi.fn(), flushNextUpdate: vi.fn() };
-    const flow = {
-      onCensor: vi.fn(async () => {
-        throw new Error('boom');
-      }),
-    };
-    await expect(censorWithBodyPause(autosave, flow, 'secret')).rejects.toThrow('boom');
-    expect(autosave.resumeBody).toHaveBeenCalledOnce();
-    expect(autosave.flushNextUpdate).not.toHaveBeenCalled();
   });
 });
 

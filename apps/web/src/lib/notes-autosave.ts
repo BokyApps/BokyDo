@@ -1,5 +1,13 @@
 import type { NotePatch } from '@bokydo/shared';
-import { censorTokensIn, diffNotePatch, isStaleRevisionError, type NoteDraft } from './notes.js';
+import {
+  diffNotePatch,
+  isNoteGoneError,
+  isStaleRevisionError,
+  type NoteDraft,
+  type CensorSaveResult,
+} from './notes.js';
+
+export type { CensorSaveResult };
 
 /**
  * Debounced, diff-only autosave for a note. `update` is called as the draft changes; a PATCH with
@@ -7,13 +15,17 @@ import { censorTokensIn, diffNotePatch, isStaleRevisionError, type NoteDraft } f
  * once (navigation/unmount). Saves are serialised, and the server snapshot is tracked as the
  * baseline so a field that is typed and then undone produces no request.
  *
- * Review round 2:
- *  - `pauseBody`/`resumeBody` stop the body debounce while the censor password prompt is open, so
- *    a plaintext revision can never be PATCHed behind the prompt. `flushNextUpdate` makes the
- *    revision that follows (the token document) save immediately.
- *  - `flush` truly drains: it waits for an in-flight save, then sends the latest pending patch and
- *    only resolves once everything is acknowledged (false when a save failed or the note is gone).
- *  - `pendingPatch` is the patch a `pagehide` keepalive request must carry.
+ * Censoring is its own save (final review). Before the password prompt the page calls `freeze`:
+ * no field is debounced, flushed or sent by a keepalive while frozen. Cancelling the censor calls
+ * `unfreeze`, which resumes normal autosave with the pre-censor draft exactly as it was (the
+ * plaintext was part of the draft before the user chose to censor it). A successful censor calls
+ * `saveCensoredBody`: ONE PATCH carrying only the verified token body, directly and with the last
+ * acknowledged revision as its premise, never through the debounce queue. A network failure keeps
+ * the freeze and stores the request so `retryCensoredSave` resends the same body and premise.
+ *
+ * The verification hook (`preparePatch`) stays available to every body save, including the
+ * unmount flush. A hook may report `bodyUnsafe`: the body is then omitted (other fields still
+ * save), the draft keeps it, and `onStatus('unsafe')` tells the page to show the explicit error.
  *
  * Optimistic concurrency (ADR 0025):
  *  - `baseRevision` is the `updatedAt` of the last server state the draft is based on: the initial
@@ -25,7 +37,19 @@ import { censorTokensIn, diffNotePatch, isStaleRevisionError, type NoteDraft } f
  * Pure enough to run under fake timers in node: it has no DOM or React dependency.
  */
 
-export type SaveStatus = 'saving' | 'saved' | 'error' | 'conflict';
+export type SaveStatus = 'saving' | 'saved' | 'error' | 'unsafe' | 'conflict';
+
+/** What the page's verifier decided for a patch that is about to be sent. */
+export interface PreparedNotePatch {
+  patch: NotePatch | null;
+  /**
+   * The body could not be represented safely. The body is never sent; the draft keeps it and the
+   * page shows the "couldn't be saved safely" error while other fields keep saving.
+   */
+  bodyUnsafe?: boolean;
+}
+
+export type PreparePatch = (patch: NotePatch) => NotePatch | PreparedNotePatch | null;
 
 export interface AutosaveDeps {
   /** PATCH the patch guarded by `expectedUpdatedAt`; resolves with the new `note.updatedAt`. */
@@ -39,7 +63,7 @@ export interface AutosaveDeps {
    * page uses it to verify that the Markdown still re-parses to the editor document, off the
    * keystroke path. Must be synchronous and must not throw.
    */
-  preparePatch?(patch: NotePatch): NotePatch;
+  preparePatch?: PreparePatch;
   delayMs?: number;
 }
 
@@ -59,29 +83,21 @@ export class NoteAutosave {
   private draft: NoteDraft;
   private saving = false;
   private pending = false;
-  private paused = false;
   /**
-   * H2: while a censor prompt is open the draft body is the plaintext the user is about to
-   * replace. Even if the pause is released before the token document reaches React (it is handed
-   * over through a state update), the body must stay out of every lifecycle save until the
-   * verified token draft arrives.
+   * Censor freeze: no debounce, flush, keepalive or direct save may start while this is true. The
+   * page sets it synchronously before opening the password prompt.
    */
-  private holdBody = false;
-  /**
-   * MED (pagehide + censor, 2b): censor tokens added by the revision the censor flow handed over
-   * and which the server has not acknowledged yet. While one is still pending and this tab's own
-   * older PATCH is in flight, a keepalive may drop the revision premise (see `keepaliveRequest`).
-   */
-  private censorRevisionTokens: string[] = [];
+  private frozen = false;
+  /** The verified token save that failed; a retry must reuse its body AND premise. */
+  private pendingCensorSave: { body: string; expectedUpdatedAt: string } | null = null;
   private stopped = false;
   private conflicted = false;
-  private flushRequested = false;
   private idleWaiters: (() => void)[] = [];
   private readonly delay: number;
   private baseRevisionValue: string;
   private conflictListener: (() => void) | undefined;
   /** Registered after mount so the page's verifier can read its latest editor state. */
-  private prepareHook: ((patch: NotePatch) => NotePatch) | undefined;
+  private prepareHook: PreparePatch | undefined;
 
   constructor(
     private readonly deps: AutosaveDeps,
@@ -96,31 +112,9 @@ export class NoteAutosave {
 
   /** Record the current draft and (re)start the debounce when there is something to save. */
   update(draft: NoteDraft): void {
-    const previousBody = this.draft.body;
     this.draft = clone(draft);
-    // A token that the next failed/undone edit removes must stop counting as a pending censor
-    // revision, or a later keepalive could drop its premise for the wrong reason.
-    this.pruneCensorRevision(this.draft.body);
-    if (this.stopped || this.conflicted) return;
-    if (this.flushRequested) {
-      // The verified token document has been handed over: the plaintext no longer exists in the
-      // draft, so release the hold and save it now instead of after the debounce.
-      this.paused = false;
-      this.holdBody = false;
-      const before = new Set(censorTokensIn(previousBody));
-      this.censorRevisionTokens = censorTokensIn(draft.body).filter((token) => !before.has(token));
-      this.clearTimer();
-      void this.run();
-      return;
-    }
-    if (this.paused) return;
+    if (this.stopped || this.conflicted || this.frozen) return;
     this.schedule();
-  }
-
-  /** Forget pending censor tokens that are no longer part of the draft. */
-  private pruneCensorRevision(body: string): void {
-    if (this.censorRevisionTokens.length === 0) return;
-    this.censorRevisionTokens = this.censorRevisionTokens.filter((token) => body.includes(token));
   }
 
   private clearTimer(): void {
@@ -132,14 +126,14 @@ export class NoteAutosave {
 
   private schedule(): void {
     this.clearTimer();
-    if (this.stopped || this.paused || this.conflicted) return;
+    if (this.stopped || this.frozen || this.conflicted) return;
     if (diffNotePatch(this.baseline, this.draft) === null) return;
     this.timer = setTimeout(() => void this.run(), this.delay);
   }
 
   private async run(): Promise<void> {
     this.clearTimer();
-    if (this.stopped || this.paused || this.conflicted) return;
+    if (this.stopped || this.frozen || this.conflicted) return;
     if (this.saving) {
       this.pending = true;
       return;
@@ -148,36 +142,38 @@ export class NoteAutosave {
   }
 
   private async commit(silent: boolean, full = false): Promise<boolean> {
-    const patch = this.prepare(
+    const prepared = this.prepare(
       full ? fullPatch(this.draft) : diffNotePatch(this.baseline, this.draft),
     );
+    const patch = prepared.patch;
     if (patch === null) {
-      this.flushRequested = false;
-      return true;
+      // A body-only patch that the verifier refused is not a successful save: keep the draft and
+      // let the caller (flush / navigation) know there is still unsent work.
+      if (prepared.bodyUnsafe) this.deps.onStatus('unsafe');
+      return !prepared.bodyUnsafe;
     }
     const target = clone(this.draft);
     this.saving = true;
-    this.flushRequested = false;
     if (!silent) this.deps.onStatus('saving');
     let ok = false;
     try {
       const revision = await this.deps.save(patch, this.baseRevisionValue);
       this.baseRevisionValue = revision;
-      this.baseline = target;
-      // The acknowledged body carries the censor token now; only tokens still missing from it are
-      // unacknowledged (an older PATCH may answer after the censor revision was queued).
-      this.censorRevisionTokens = this.censorRevisionTokens.filter(
-        (token) => !target.body.includes(token),
-      );
-      if (!silent) this.deps.onStatus('saved');
-      ok = true;
+      if (prepared.bodyUnsafe) {
+        // Only the fields actually sent are acknowledged; the body stays dirty on purpose.
+        this.applyPartialBaseline(patch, target);
+        this.deps.onStatus('unsafe');
+      } else {
+        this.baseline = target;
+        if (!silent) this.deps.onStatus('saved');
+        ok = true;
+      }
     } catch (err) {
       if (isStaleRevisionError(err)) {
         // Stop sending: the draft is based on a revision the server no longer has. Retrying the
         // same premise would fail forever, and sending it unguarded could undo a censor elsewhere.
         this.conflicted = true;
         this.pending = false;
-        this.flushRequested = false;
         this.deps.onStatus('conflict');
         this.deps.onConflict?.(err);
         this.conflictListener?.();
@@ -195,16 +191,21 @@ export class NoteAutosave {
     return ok;
   }
 
-  /** Continue after a save: an explicit flush wins over the debounce. */
+  /** Acknowledge only the fields in `patch`, using their values from `target`. */
+  private applyPartialBaseline(patch: NotePatch, target: NoteDraft): void {
+    if ('title' in patch) this.baseline.title = target.title;
+    if ('body' in patch) this.baseline.body = target.body;
+    if ('tags' in patch) this.baseline.tags = [...target.tags];
+    if ('pinned' in patch) this.baseline.pinned = target.pinned;
+  }
+
+  /** Continue after a save: a run requested while this one was in flight waits for the debounce. */
   private afterCommit(): void {
-    if (this.stopped || this.paused || this.conflicted) return;
+    if (this.stopped || this.frozen || this.conflicted) return;
     if (this.pending) {
       this.pending = false;
-      if (this.flushRequested) void this.run();
-      else this.schedule();
-      return;
+      this.schedule();
     }
-    if (this.flushRequested) void this.run();
   }
 
   private waitForIdle(): Promise<void> {
@@ -226,17 +227,23 @@ export class NoteAutosave {
   }
 
   /**
-   * Register the page's last-pass patch hook (H4). A setter rather than only a constructor dep:
-   * the page builds the controller in `useState`, and the hook must read the editor's latest
-   * snapshot from a ref that only exists after mount.
+   * Register the page's last-pass patch hook. A setter rather than only a constructor dep: the
+   * page builds the controller in `useState`, and the hook must read the editor's latest snapshot
+   * from a ref that only exists after mount. The page deliberately never unregisters it, so the
+   * unmount flush still verifies the body.
    */
-  setPreparePatch(hook: ((patch: NotePatch) => NotePatch) | undefined): void {
+  setPreparePatch(hook: PreparePatch | undefined): void {
     this.prepareHook = hook;
   }
 
   /** Whether a 409 is waiting for the user's choice. */
   isConflicted(): boolean {
     return this.conflicted;
+  }
+
+  /** Whether the censor freeze is active. */
+  isFrozen(): boolean {
+    return this.frozen;
   }
 
   /** Whether the draft differs from the last acknowledged server snapshot. */
@@ -254,57 +261,48 @@ export class NoteAutosave {
     return this.saving || this.isDirty();
   }
 
-  /** Apply the page's last-pass hook, and drop the body while a censor prompt owns it. */
-  private prepare(patch: NotePatch | null): NotePatch | null {
-    if (patch === null) return null;
-    let next: NotePatch | null = patch;
-    if (this.holdBody && 'body' in next) {
-      const { body: _body, ...rest } = next;
-      void _body;
-      next = Object.keys(rest).length ? rest : null;
-    }
-    if (next === null) return null;
+  /** Apply the page's last-pass hook and normalise its verdict. */
+  private prepare(patch: NotePatch | null): PreparedNotePatch {
+    if (patch === null) return { patch: null, bodyUnsafe: false };
     const prepare = this.prepareHook ?? this.deps.preparePatch;
-    if (!prepare) return next;
+    if (!prepare) return { patch, bodyUnsafe: false };
+    let result: NotePatch | PreparedNotePatch | null;
     try {
-      return prepare(next);
+      result = prepare(patch);
     } catch {
       // A verification failure must never lose the edit: send the patch as it stands.
-      return next;
+      return { patch, bodyUnsafe: false };
     }
-  }
-
-  /** The patch a `pagehide` keepalive request must send, or null when everything is saved. */
-  pendingPatch(): NotePatch | null {
-    return this.prepare(diffNotePatch(this.baseline, this.draft));
+    if (result === null) return { patch: null, bodyUnsafe: false };
+    if ('patch' in result) {
+      const bodyUnsafe = result.bodyUnsafe === true;
+      let next = result.patch;
+      if (bodyUnsafe && next && 'body' in next) {
+        const { body: _body, ...rest } = next;
+        void _body;
+        next = Object.keys(rest).length ? rest : null;
+      }
+      return { patch: next, bodyUnsafe };
+    }
+    return { patch: result, bodyUnsafe: false };
   }
 
   /**
-   * What a `pagehide` keepalive must send: the patch and the revision premise, or `null` when
-   * everything is acknowledged.
-   *
-   * MED (2b): the premise is dropped only for the one case where it would lose censored text. A
-   * censor token revision is unacknowledged because this tab's own older PATCH is still in flight,
-   * so the only write an unguarded PATCH could override is that older save of this tab. Protecting
-   * the freshly censored body wins over concurrency there. In every other case the premise stays:
-   * another tab may have saved, and this tab must not overwrite it.
+   * What a `pagehide` keepalive must send. It always carries the revision premise; while the censor
+   * freeze is active it sends nothing at all.
    */
-  keepaliveRequest(): { patch: NotePatch; expectedUpdatedAt: string | null } | null {
-    const patch = this.prepare(diffNotePatch(this.baseline, this.draft));
-    if (patch === null) return null;
-    const body = patch.body;
-    const protectsCensor =
-      this.saving &&
-      this.censorRevisionTokens.length > 0 &&
-      typeof body === 'string' &&
-      this.censorRevisionTokens.some((token) => body.includes(token));
-    return { patch, expectedUpdatedAt: protectsCensor ? null : this.baseRevisionValue };
+  keepaliveRequest(): { patch: NotePatch; expectedUpdatedAt: string } | null {
+    if (this.stopped || this.frozen) return null;
+    const prepared = this.prepare(diffNotePatch(this.baseline, this.draft));
+    if (prepared.patch === null) return null;
+    return { patch: prepared.patch, expectedUpdatedAt: this.baseRevisionValue };
   }
 
   /**
    * Save pending edits now and resolve once every change is acknowledged. `true` means the server
-   * has the latest draft; `false` means a save failed (the draft is kept), the note is gone, or a
-   * revision conflict needs the user. A conflict is never retried in a loop.
+   * has the latest draft; `false` means a save failed (the draft is kept), the note is gone, a
+   * revision conflict needs the user, or the censor freeze is active. A conflict is never retried
+   * in a loop.
    */
   async flush(): Promise<boolean> {
     this.clearTimer();
@@ -315,47 +313,87 @@ export class NoteAutosave {
       }
       if (this.stopped) return false;
       if (this.conflicted) return false;
-      if (this.paused) return !this.isDirty();
+      if (this.frozen) return !this.isDirty();
       if (diffNotePatch(this.baseline, this.draft) === null) return true;
       if (!(await this.commit(true))) return false;
     }
   }
 
-  /** Stop the body debounce while the censor prompt is open (cancels its pending save). */
-  pauseBody(): void {
-    this.paused = true;
-    this.holdBody = true;
+  /**
+   * Freeze autosave for every field before the censor password prompt. Cancels a pending debounce
+   * and prevents flushes and keepalives; an already-sent request cannot be recalled.
+   */
+  freeze(): void {
+    this.frozen = true;
+    this.pending = false;
     this.clearTimer();
   }
 
   /**
-   * Ordinary abort (cancelled prompt / failed censor): release the pause and restore the
-   * debounce. Only used when no token is going to be applied.
+   * Cancelling a censor resumes normal autosave with the draft exactly as it was before the freeze
+   * (the plaintext was already part of it). The direct censor save uses its own path instead.
    */
-  resumeBody(): void {
-    this.paused = false;
-    this.holdBody = false;
-    if (this.stopped) return;
-    if (this.flushRequested) return; // wait for the token revision, then save it immediately
+  unfreeze(): void {
+    this.frozen = false;
+    if (this.stopped || this.conflicted) return;
     this.schedule();
   }
 
   /**
-   * A token was produced: the next `update` (the verified token document) is saved immediately
-   * and releases the pause. This deliberately does NOT save the current draft: while a censor
-   * prompt is open that draft is the plaintext the user is about to replace, and a page hide
-   * between here and the token update must still omit it.
+   * The one censor PATCH: the verified token body, sent directly with the last acknowledged
+   * revision as its premise. On success the baseline/revision come from the answer and the freeze
+   * is released; on 409 the queue stays frozen for the conflict banner; on a network error the
+   * request is kept so a retry uses the SAME body and premise.
    */
-  flushNextUpdate(): void {
-    this.flushRequested = true;
-    this.paused = true;
-    this.holdBody = true;
+  async saveCensoredBody(body: string): Promise<CensorSaveResult> {
+    if (this.stopped) return 'error';
     this.clearTimer();
+    // Never let the pre-censor plaintext remain the draft that unfreeze would schedule.
+    this.draft.body = body;
+    await this.waitForIdle();
+    if (this.pendingCensorSave === null) {
+      this.pendingCensorSave = { body, expectedUpdatedAt: this.baseRevisionValue };
+    }
+    return this.commitCensored();
   }
 
-  /** Whether the body is currently withheld from lifecycle saves (censor prompt in progress). */
-  isBodyHeld(): boolean {
-    return this.holdBody;
+  /** Retry a failed censor save with the same token body and the same revision premise. */
+  async retryCensoredSave(): Promise<CensorSaveResult> {
+    if (this.stopped || this.pendingCensorSave === null) return 'error';
+    await this.waitForIdle();
+    return this.commitCensored();
+  }
+
+  private async commitCensored(): Promise<CensorSaveResult> {
+    const request = this.pendingCensorSave;
+    if (request === null) return 'error';
+    this.saving = true;
+    this.deps.onStatus('saving');
+    try {
+      const revision = await this.deps.save({ body: request.body }, request.expectedUpdatedAt);
+      this.baseRevisionValue = revision;
+      this.baseline.body = request.body;
+      this.draft.body = request.body;
+      this.pendingCensorSave = null;
+      this.conflicted = false;
+      this.frozen = false;
+      this.deps.onStatus('saved');
+      return 'saved';
+    } catch (err) {
+      if (isStaleRevisionError(err)) {
+        this.conflicted = true;
+        this.deps.onStatus('conflict');
+        this.deps.onConflict?.(err);
+        this.conflictListener?.();
+        return 'conflict';
+      }
+      this.deps.onStatus('error');
+      this.deps.onError?.(err);
+      return isNoteGoneError(err) ? 'gone' : 'error';
+    } finally {
+      this.saving = false;
+      for (const resolve of this.idleWaiters.splice(0)) resolve();
+    }
   }
 
   /**
@@ -368,7 +406,12 @@ export class NoteAutosave {
     this.baseRevisionValue = remoteRevision;
     this.conflicted = false;
     this.pending = false;
-    return this.commit(false, true);
+    const kept = await this.commit(false, true);
+    if (kept) {
+      this.pendingCensorSave = null;
+      this.frozen = false;
+    }
+    return kept;
   }
 
   /** Reconcile with a fresh server snapshot (adopting the remote note after a conflict). */
@@ -378,10 +421,8 @@ export class NoteAutosave {
     this.conflicted = false;
     this.saving = false;
     this.pending = false;
-    this.paused = false;
-    this.holdBody = false;
-    this.flushRequested = false;
-    this.censorRevisionTokens = [];
+    this.frozen = false;
+    this.pendingCensorSave = null;
     this.baseRevisionValue = revision;
     this.baseline = clone(snapshot);
     this.draft = clone(snapshot);
@@ -390,9 +431,8 @@ export class NoteAutosave {
   /** A 404: stop autosaving altogether (the draft stays on screen). */
   stop(): void {
     this.stopped = true;
-    this.paused = false;
-    this.holdBody = false;
-    this.censorRevisionTokens = [];
+    this.frozen = false;
+    this.pendingCensorSave = null;
     this.clearTimer();
     this.pending = false;
   }

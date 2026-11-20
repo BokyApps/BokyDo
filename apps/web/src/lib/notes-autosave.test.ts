@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NotePatch } from '@bokydo/shared';
 import { ApiError } from './api.js';
 import type { NoteDraft } from './notes.js';
 import { NoteAutosave } from './notes-autosave.js';
@@ -122,8 +123,8 @@ describe('autosave debounce / diff / flush', () => {
 });
 
 describe('H4: preparePatch runs before every save, including keepalive', () => {
-  it('rewrites the body on the debounce and in pendingPatch', async () => {
-    const preparePatch = vi.fn((patch: { body?: string }) =>
+  it('rewrites the body on the debounce and in the keepalive request', async () => {
+    const preparePatch = vi.fn((patch: NotePatch) =>
       patch.body === undefined ? patch : { ...patch, body: `${patch.body} verified` },
     );
     const save = vi.fn(async () => NEXT);
@@ -136,7 +137,10 @@ describe('H4: preparePatch runs before every save, including keepalive', () => {
     await vi.advanceTimersByTimeAsync(800);
     expect(save).toHaveBeenCalledWith({ body: 'B2 verified' }, REV);
     controller.update(draft({ body: 'B3' }));
-    expect(controller.pendingPatch()).toEqual({ body: 'B3 verified' });
+    expect(controller.keepaliveRequest()).toEqual({
+      patch: { body: 'B3 verified' },
+      expectedUpdatedAt: NEXT,
+    });
   });
 
   it('keeps the original patch when the verifier throws', async () => {
@@ -161,61 +165,119 @@ describe('H4: preparePatch runs before every save, including keepalive', () => {
 
 const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
 
-describe('P1: the censor prompt pauses the body autosave', () => {
-  it('never PATCHes the plaintext: pause cancels the debounce, the token flush is immediate', async () => {
+describe('censor is its own save: one direct PATCH, then unfreeze', () => {
+  it('freezes every field: no debounce, flush or keepalive while frozen', async () => {
     const { save, controller } = setup();
-    controller.update(draft({ body: 'TOPSECRET' }));
-    await vi.advanceTimersByTimeAsync(300); // still inside the debounce window
-    controller.pauseBody(); // page.onCensor: synchronously BEFORE the password prompt
-    await vi.advanceTimersByTimeAsync(2000); // the user takes 2 s to type the password
+    controller.update(draft({ title: 'New title', body: 'TOPSECRET' }));
+    controller.freeze();
+    await vi.advanceTimersByTimeAsync(5000);
     expect(save).not.toHaveBeenCalled();
+    expect(await controller.flush()).toBe(false); // nothing may be sent; the dirty draft blocks
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(save).not.toHaveBeenCalled();
+    expect(controller.keepaliveRequest()).toBeNull();
+    expect(controller.isFrozen()).toBe(true);
+  });
 
-    controller.flushNextUpdate(); // censor succeeded: the next revision is urgent
-    // The pause is NOT released here (H2): the token document has not reached autosave yet.
+  it('a cancel unfreezes and saves the pre-censor draft exactly as it was', async () => {
+    const { save, controller } = setup();
+    controller.update(draft({ title: 'New title', body: 'TOPSECRET' }));
+    controller.freeze();
     await vi.advanceTimersByTimeAsync(2000);
     expect(save).not.toHaveBeenCalled();
-    expect(controller.pendingPatch()).toBeNull();
-    controller.update(draft({ body: TOKEN })); // the editor applied the verified token
-    await vi.advanceTimersByTimeAsync(0); // no debounce: saved on the next turn
+
+    controller.unfreeze();
+    await vi.advanceTimersByTimeAsync(800);
+    expect(save).toHaveBeenCalledWith({ title: 'New title', body: 'TOPSECRET' }, REV);
+    expect(controller.isFrozen()).toBe(false);
+  });
+
+  it('sends one direct token PATCH with the last acknowledged revision, then releases the freeze', async () => {
+    const { save, controller } = setup();
+    controller.update(draft({ title: 'Changed', body: 'TOPSECRET' }));
+    controller.freeze();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(save).not.toHaveBeenCalled();
+
+    expect(await controller.saveCensoredBody(TOKEN)).toBe('saved');
     expect(save).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith({ body: TOKEN }, REV);
     expect(JSON.stringify(save.mock.calls)).not.toContain('TOPSECRET');
-    expect(controller.isBodyHeld()).toBe(false);
+    expect(controller.baseRevision()).toBe(NEXT);
+    expect(controller.isFrozen()).toBe(false);
+
+    // Other dirty fields resume after the token body was acknowledged.
+    await vi.advanceTimersByTimeAsync(0);
+    await controller.flush();
+    expect(save).toHaveBeenLastCalledWith({ title: 'Changed' }, NEXT);
   });
 
-  it('omits a paused body from the keepalive patch but still sends other fields (H2)', () => {
-    const { controller } = setup();
-    controller.update(draft({ title: 'New title', body: 'TOPSECRET' }));
-    controller.pauseBody();
-    expect(controller.pendingPatch()).toEqual({ title: 'New title' });
-    expect(JSON.stringify(controller.pendingPatch())).not.toContain('TOPSECRET');
+  it('a 409 keeps the freeze and reports the conflict instead of retrying', async () => {
+    const { save, onStatus, onConflict, controller } = setup();
+    controller.freeze();
+    save.mockRejectedValueOnce(stale);
+    expect(await controller.saveCensoredBody(TOKEN)).toBe('conflict');
+    expect(onConflict).toHaveBeenCalledOnce();
+    expect(onStatus).toHaveBeenLastCalledWith('conflict');
+    expect(controller.isConflicted()).toBe(true);
+    expect(controller.isFrozen()).toBe(true);
+    expect(controller.keepaliveRequest()).toBeNull();
+    expect(await controller.flush()).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
   });
 
-  it('a paused body-only change produces no keepalive patch at all (H2)', () => {
-    const { controller } = setup();
-    controller.update(draft({ body: 'TOPSECRET' }));
-    controller.pauseBody();
-    expect(controller.pendingPatch()).toBeNull();
-  });
-
-  it('a cancelled prompt resumes normally and saves the (unchanged) draft', async () => {
+  it('a network error keeps the freeze and retry resends the SAME body and premise', async () => {
     const { save, controller } = setup();
-    controller.update(draft({ body: 'still plain' }));
-    controller.pauseBody();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(save).not.toHaveBeenCalled();
-    controller.resumeBody();
-    await vi.advanceTimersByTimeAsync(800);
-    expect(save).toHaveBeenCalledWith({ body: 'still plain' }, REV);
-  });
+    controller.freeze();
+    save.mockRejectedValueOnce(new Error('offline'));
+    expect(await controller.saveCensoredBody(TOKEN)).toBe('error');
+    expect(controller.isFrozen()).toBe(true);
+    expect(controller.keepaliveRequest()).toBeNull();
 
-  it('isDirty/pendingPatch reflect the unsaved draft', () => {
-    const { controller } = setup();
-    expect(controller.isDirty()).toBe(false);
-    controller.update(draft({ body: 'B2' }));
-    expect(controller.isDirty()).toBe(true);
-    expect(controller.pendingPatch()).toEqual({ body: 'B2' });
-    expect(controller.hasUnsavedWork()).toBe(true);
+    // A later edit must not become a new censor premise: retry is bound to the original request.
+    controller.update(draft({ title: 'Changed' }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    save.mockResolvedValueOnce(NEXT);
+    expect(await controller.retryCensoredSave()).toBe('saved');
+    expect(save).toHaveBeenLastCalledWith({ body: TOKEN }, REV);
+    expect(controller.isFrozen()).toBe(false);
+  });
+});
+
+describe('verification blocks a body that cannot be saved safely', () => {
+  it('never sends the rejected body, keeps other fields saving and reports unsafe', async () => {
+    const save = vi.fn(async () => NEXT);
+    const onStatus = vi.fn();
+    const controller = new NoteAutosave(
+      {
+        save,
+        onStatus,
+        delayMs: 800,
+        preparePatch: (patch) =>
+          patch.body === undefined
+            ? patch
+            : (() => {
+                const { body: _body, ...rest } = patch;
+                void _body;
+                return { patch: Object.keys(rest).length ? rest : null, bodyUnsafe: true };
+              })(),
+      },
+      draft(),
+      REV,
+    );
+    controller.update(draft({ title: 'Changed', body: 'BROKEN' }));
+    await vi.advanceTimersByTimeAsync(800);
+    expect(save).toHaveBeenCalledWith({ title: 'Changed' }, REV);
+    expect(JSON.stringify(save.mock.calls)).not.toContain('BROKEN');
+    expect(onStatus).toHaveBeenLastCalledWith('unsafe');
+    expect(controller.isDirty()).toBe(true); // the body is still unsaved
+    expect(controller.baseRevision()).toBe(NEXT);
+
+    // A body-only rejected save issues no request and keeps the draft dirty for the navigation guard.
+    expect(await controller.flush()).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -299,7 +361,10 @@ describe('stale revisions (optimistic concurrency)', () => {
     expect(await controller.flush()).toBe(false);
     expect(save).toHaveBeenCalledTimes(1); // a flush does not loop on a conflict
     expect(controller.isDirty()).toBe(true);
-    expect(controller.pendingPatch()).toEqual({ title: 'T3' });
+    expect(controller.keepaliveRequest()).toEqual({
+      patch: { title: 'T3' },
+      expectedUpdatedAt: REV,
+    });
   });
 
   it('a flush that gets 409 fails once, keeps the draft and does not loop', async () => {

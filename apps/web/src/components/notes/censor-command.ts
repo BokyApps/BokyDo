@@ -1,8 +1,15 @@
 import { Extension, type Editor, type JSONContent } from '@tiptap/core';
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import { EditorState, Plugin, PluginKey, type Transaction } from '@tiptap/pm/state';
-import { contentToMarkdown, docToMarkdown, markdownToDoc, markdownToInline } from './markdown.js';
-import { hasSourceMeta, withoutSourceMeta } from './source-meta.js';
+import type { CensorSaveResult } from '../../lib/notes.js';
+import {
+  contentToMarkdown,
+  docToMarkdown,
+  markdownToDoc,
+  markdownToInline,
+  verifyDocMarkdown,
+} from './markdown.js';
+import { hasSourceMeta, isPrivateAttr, withoutSourceMeta } from './source-meta.js';
 
 /**
  * Censor commands for the editor (ADR 0025 "Censoring"). Review-round-2 rules:
@@ -10,20 +17,33 @@ import { hasSourceMeta, withoutSourceMeta } from './source-meta.js';
  *  - Only a selection inside one textblock that can hold inline atoms is censored. A code block,
  *    embed, atom, or a range across blocks is rejected BEFORE the password prompt: a token there
  *    could not survive a reload as an atom (a code block would save it as plain text).
+ *  - A selection that crosses link-marked text or an image/file/internal chip is rejected with a
+ *    specific message; after building the replacement, any surviving mark or content attribute that
+ *    still contains the selected plaintext aborts the whole operation.
  *  - After building the replacement document it is serialised and parsed again; the censored atom
  *    must come back with the identical token at the corresponding position, otherwise nothing is
  *    changed at all.
  *  - The replacement transaction is dispatched and then the editor state is rebuilt with fresh
  *    history, so no undo/redo step ever holds the plaintext. onChange only sees the token document.
+ *  - Censoring is its own save: the verified token body is handed to the page for one direct PATCH
+ *    and the editor stays read-only until that save resolves.
  *  - Remove is bound to the ORIGINAL atom by a transient `removeId` attribute (mapped through
  *    transactions with the node). If that atom was deleted, Remove aborts instead of applying the
  *    plaintext to an identical token elsewhere.
  */
 
-export type CensorOutcome = 'ok' | 'cancelled' | 'aborted' | 'unsupported';
+export type CensorOutcome =
+  'ok' | 'cancelled' | 'aborted' | 'unsupported' | 'linked' | 'unsafe' | 'save-failed' | 'conflict';
+
+/** The content image/file/internal action's verdict for a selection. */
+export type CensorEligibility = 'ok' | 'unsupported' | 'linked';
+
+export type { CensorSaveResult };
 
 const CENSOR_TEXTBLOCKS = new Set(['paragraph', 'heading']);
 const ALLOWED_INLINE = new Set(['text', 'hardBreak']);
+/** Inline content that carries a link (or a link-like chip): never censor across it. */
+const LINKED_INLINE = new Set(['noteImage', 'fileChip', 'internalChip', 'noteUpload']);
 /** Containers whose paragraphs are ordinary editable text. */
 const ALLOWED_CONTAINERS = new Set([
   'blockquote',
@@ -64,6 +84,71 @@ export function censorableSelection(editor: Editor, from: number, to: number): b
     return false;
   });
   return ok;
+}
+
+/**
+ * Final-review rule: a censor selection may not cross text carrying a link mark, or an image,
+ * file or internal chip. Removing the censor later (or a repair that re-emits the plaintext as
+ * link text) would otherwise leave the cleared text in a linked construct, and the Markdown view
+ * would still show it in a destination or label. The toolbar shows a specific message for
+ * `linked`; `unsupported` keeps the old "not a code block or atom" message.
+ */
+export function censorSelectionIssue(
+  editor: Editor,
+  from: number,
+  to: number,
+): Exclude<CensorEligibility, 'ok'> | null {
+  // The link/chip message is more specific and wins over the generic unsupported one.
+  let linked = false;
+  if (Number.isInteger(from) && Number.isInteger(to) && from < to) {
+    editor.state.doc.nodesBetween(from, to, (node) => {
+      if (linked) return false;
+      if (node.isText && node.marks.some((mark) => mark.type.name === 'link')) {
+        linked = true;
+        return false;
+      }
+      if (LINKED_INLINE.has(node.type.name)) {
+        linked = true;
+        return false;
+      }
+      return true;
+    });
+  }
+  if (linked) return 'linked';
+  if (!censorableSelection(editor, from, to)) return 'unsupported';
+  return null;
+}
+
+/**
+ * Whether any surviving mark or content attribute still carries the text that was just censored.
+ * Source-meta and transient attrs are bookkeeping and are cleared by the censor transaction; a
+ * censored atom's token is ciphertext, never the plaintext. Anything else (link `href`/`title`,
+ * chip label, image alt, embed URL/label) is serialised and would keep the text recoverable.
+ */
+export function selectionLeaksIntoAttributes(doc: PMNode, plaintext: string): boolean {
+  if (!plaintext) return false;
+  let leak = false;
+  doc.descendants((node) => {
+    for (const mark of node.marks) {
+      for (const value of Object.values(mark.attrs as Record<string, unknown>)) {
+        if (typeof value === 'string' && value.includes(plaintext)) {
+          leak = true;
+          return false;
+        }
+      }
+    }
+    if (node.type.name !== 'censored') {
+      for (const [key, value] of Object.entries(node.attrs as Record<string, unknown>)) {
+        if (isPrivateAttr(key) || value == null) continue;
+        if (typeof value === 'string' && value.includes(plaintext)) {
+          leak = true;
+          return false;
+        }
+      }
+    }
+    return !leak;
+  });
+  return leak;
 }
 
 /** Every censored atom as `<top-level block>|<parent node>|<token>`, in document order. */
@@ -166,15 +251,19 @@ export async function censorSelection(
   from: number,
   to: number,
   onCensor: (markdown: string) => Promise<string | null>,
+  onCensoredBody?: (body: string, token: string) => Promise<CensorSaveResult>,
 ): Promise<CensorOutcome> {
   if (editor.isDestroyed || !editor.isEditable) return 'aborted';
-  if (!censorableSelection(editor, from, to)) return 'unsupported';
+  const issue = censorSelectionIssue(editor, from, to);
+  if (issue) return issue;
   const startDoc = editor.state.doc;
+  const selectedText = startDoc.textBetween(from, to, '\n', '\n');
   const slice = startDoc.slice(from, to);
   const markdown = contentToMarkdown(slice.content.toJSON() as JSONContent[]);
   const wasEditable = editor.isEditable;
   // Block editing while the (async) password prompt is open. `emitUpdate=false` avoids a spurious
-  // onChange carrying the still-plaintext document.
+  // onChange carrying the still-plaintext document. The page freezes autosave synchronously in
+  // onCensor, before its first await.
   editor.setEditable(false, false);
   let token: string | null;
   try {
@@ -197,11 +286,36 @@ export async function censorSelection(
     const tr = buildCensoredTransaction(editor, from, to, token);
     // Verify the saved form BEFORE dispatching anything: a token that cannot survive a reload is
     // not reported as success.
-    if (!censorRoundTripSurvives(editor, tr.doc, token)) return 'unsupported';
+    if (!censorRoundTripSurvives(editor, tr.doc, token)) {
+      restoreEditable(editor, wasEditable);
+      return 'unsupported';
+    }
+    const verified = verifyDocMarkdown(tr.doc.toJSON() as JSONContent);
+    if (verified.mismatch) {
+      restoreEditable(editor, wasEditable);
+      return 'unsafe';
+    }
+    // Nothing that survives may still hold the selected plaintext in a mark or content attribute.
+    if (selectionLeaksIntoAttributes(tr.doc, selectedText)) {
+      restoreEditable(editor, wasEditable);
+      return 'unsafe';
+    }
     dispatchWithoutHistory(editor, tr);
-    return 'ok';
-  } finally {
+    if (!onCensoredBody) {
+      restoreEditable(editor, wasEditable);
+      return 'ok';
+    }
+    // Censoring is its own save. The page sends exactly this verified body in ONE PATCH and keeps
+    // the editor read-only until it resolves; only a successful save restores editing.
+    const result = await onCensoredBody(verified.markdown, token);
+    if (result === 'saved') {
+      restoreEditable(editor, wasEditable);
+      return 'ok';
+    }
+    return result === 'conflict' ? 'conflict' : 'save-failed';
+  } catch (err) {
     restoreEditable(editor, wasEditable);
+    throw err;
   }
 }
 

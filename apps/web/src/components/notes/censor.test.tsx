@@ -7,12 +7,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyUncensored,
   censorSelection,
+  censorSelectionIssue,
   censorableSelection,
   censorRoundTripSurvives,
   CensoredRemovalTracker,
   commitCensored,
   findRemovalTarget,
   markCensoredForRemoval,
+  selectionLeaksIntoAttributes,
+  type CensorSaveResult,
 } from './censor-command.js';
 
 const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
@@ -37,6 +40,8 @@ const Censored = Node.create({
 });
 
 import { safeTableExtensions } from './table.js';
+import { buildExtensions } from './NoteEditor.js';
+import { markdownToDoc } from './markdown.js';
 
 let mounted: { editor: Editor; el: HTMLDivElement }[] = [];
 function makeEditor(content = '<p>hello TOPSECRET world</p>', extra: AnyExtension[] = []) {
@@ -120,6 +125,89 @@ describe('HIGH: edit while the password prompt is open aborts', () => {
     expect(await censorSelection(editor, 7, 7 + SECRET.length, async () => null)).toBe('cancelled');
     expect(editor.state.doc.textContent).toContain(SECRET);
     expect(editor.isEditable).toBe(true);
+  });
+});
+
+describe('final review: censor across links / direct token save', () => {
+  it('rejects a selection that touches linked text before prompting', async () => {
+    const { editor } = makeEditor(
+      '<p>hello <a href="https://example.com/">TOPSECRET</a> world</p>',
+    );
+    const from = 1 + 'hello '.length;
+    const to = from + SECRET.length;
+    expect(censorSelectionIssue(editor, from, to)).toBe('linked');
+    const onCensor = vi.fn(async () => TOKEN);
+    expect(await censorSelection(editor, from, to, onCensor)).toBe('linked');
+    expect(onCensor).not.toHaveBeenCalled();
+    expect(editor.state.doc.textContent).toContain(SECRET);
+  });
+
+  it('rejects an image, file or internal chip with the link message', () => {
+    const UUID = '123e4567-e89b-12d3-a456-426614174000';
+    for (const markdown of [
+      `before ![pic](/api/v1/note-files/${UUID}) after`,
+      `before [doc](/api/v1/note-files/${UUID}) after`,
+      `before [a note](bokydo:note/${UUID}) after`,
+    ]) {
+      const el = document.createElement('div');
+      document.body.appendChild(el);
+      const editor = new Editor({
+        element: el,
+        extensions: buildExtensions(),
+        content: markdownToDoc(markdown),
+      });
+      mounted.push({ editor, el });
+      const end = editor.state.doc.content.size - 1;
+      expect(censorSelectionIssue(editor, 1, end)).toBe('linked');
+    }
+  });
+
+  it('aborts when a surviving autolink suffix still carries the selected text', async () => {
+    const { editor } = makeEditor(
+      '<p>TOPSECRET <a href="https://example.com/TOPSECRET">https://example.com/TOPSECRET</a></p>',
+    );
+    expect(censorSelectionIssue(editor, 1, 1 + SECRET.length)).toBeNull();
+    expect(selectionLeaksIntoAttributes(editor.state.doc, SECRET)).toBe(true);
+    const onCensor = vi.fn(async () => TOKEN);
+    expect(await censorSelection(editor, 1, 1 + SECRET.length, onCensor)).toBe('unsafe');
+    expect(editor.state.doc.textContent).toContain(SECRET);
+    expect(editor.state.doc.textContent).not.toContain('█████');
+  });
+
+  it('stays read-only until the one direct token PATCH resolves, then restores editing', async () => {
+    const { editor } = makeEditor();
+    let resolveSave!: (result: CensorSaveResult) => void;
+    const pending = new Promise<CensorSaveResult>((resolve) => (resolveSave = resolve));
+    const onCensoredBody = vi.fn<(body: string, token: string) => Promise<CensorSaveResult>>(
+      async () => pending,
+    );
+    const outcomeP = censorSelection(
+      editor,
+      7,
+      7 + SECRET.length,
+      async () => TOKEN,
+      onCensoredBody,
+    );
+    await vi.waitFor(() => expect(onCensoredBody).toHaveBeenCalledOnce());
+    const [body, token] = onCensoredBody.mock.calls[0]!;
+    expect(token).toBe(TOKEN);
+    expect(body).toContain(TOKEN);
+    expect(body).not.toContain(SECRET);
+    expect(editor.isEditable).toBe(false); // the page's direct save is still pending
+
+    resolveSave('saved');
+    expect(await outcomeP).toBe('ok');
+    expect(editor.isEditable).toBe(true);
+  });
+
+  it('a failed token save keeps the editor read-only with the token document intact', async () => {
+    const { editor } = makeEditor();
+    const onCensoredBody = vi.fn(async () => 'error' as CensorSaveResult);
+    expect(
+      await censorSelection(editor, 7, 7 + SECRET.length, async () => TOKEN, onCensoredBody),
+    ).toBe('save-failed');
+    expect(editor.isEditable).toBe(false);
+    expect(editor.state.doc.textContent).not.toContain(SECRET);
   });
 });
 

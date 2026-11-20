@@ -5,7 +5,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { closeHistory } from '@tiptap/pm/history';
 import { DOMSerializer, type Fragment, type Slice } from '@tiptap/pm/model';
-import { EditorState } from '@tiptap/pm/state';
+import { EditorState, type NodeSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -25,7 +25,7 @@ import {
   refuseCutIfCensored,
   type DragCopyController,
 } from './clipboard.js';
-import { CensoredRemovalTracker } from './censor-command.js';
+import { CensoredRemovalTracker, type CensorSaveResult } from './censor-command.js';
 import {
   docToMarkdown,
   markdownToDoc,
@@ -47,8 +47,8 @@ export interface NoteEditorProps {
   onChange: (markdown: string) => void;
   editable?: boolean;
   /**
-   * Bumped when the page adopts a whole new document from the server (Load their version,
-   * Copy mine, a live-sync adoption). The next external Markdown application then rebuilds the
+   * Bumped when the page adopts a whole new document from the server (Load their version, a
+   * live-sync adoption). The next external Markdown application then rebuilds the
    * editor state with a fresh history — the same mechanism a local censor commit uses — so Undo
    * can never step back to a body the server replaced, including plaintext another tab censored.
    */
@@ -62,6 +62,9 @@ export interface NoteEditorProps {
   searchTasks?: (q: string) => Promise<{ id: string; content: string }[]>;
   /** Censor hooks (crypto is supplied by the caller; the editor never stores passwords). */
   onCensor?: (plaintextMarkdown: string) => Promise<string | null>;
+  /** The verified token body is saved directly by the page; the editor stays read-only until it
+   *  resolves and only a successful save restores editing. */
+  onCensoredBody?: (body: string, token: string) => Promise<CensorSaveResult>;
   /** CONTRACT CHANGE: Reveal is fire-and-forget; the page owns the plaintext overlay. */
   onReveal?: (token: string, anchor: RevealAnchor) => void;
   onUncensor?: (token: string) => Promise<string | null>;
@@ -91,6 +94,7 @@ function toCallbacks(props: NoteEditorProps): NoteCallbacks {
     searchNotes: props.searchNotes,
     searchTasks: props.searchTasks,
     onCensor: props.onCensor,
+    onCensoredBody: props.onCensoredBody,
     onReveal: props.onReveal,
     onUncensor: props.onUncensor,
     onProtectedCut: props.onProtectedCut,
@@ -154,14 +158,24 @@ export function resetEditorHistory(editor: Editor): void {
  * `view.dragging`, which an in-editor drop would insert as `█████`; one microtask after the
  * dragstart event, put the REAL slice ProseMirror passed to `transformCopied` back (N1: the exact
  * slice, including its openStart/openEnd node-selection metadata — never a fresh selection read).
- * The DataTransfer has already been written with the placeholder by then, and the drop happens
- * much later.
+ * Its `node` NodeSelection is restored too: a node drag (an image or censored atom) must keep the
+ * "move this node" semantics of ProseMirror's own dragging state.
  */
 export function retainRealDragSlice(editor: Editor, controller: DragCopyController): void {
   queueMicrotask(() => {
     const original = controller.originalSlice;
-    const dragging = editor.view.dragging;
-    if (dragging && original) editor.view.dragging = { slice: original, move: dragging.move };
+    const dragging = editor.view.dragging as {
+      slice: Slice;
+      move: boolean;
+      node?: NodeSelection | null;
+    } | null;
+    if (dragging && original) {
+      editor.view.dragging = {
+        slice: original,
+        move: dragging.move,
+        node: dragging.node ?? null,
+      } as typeof editor.view.dragging;
+    }
   });
 }
 
@@ -177,8 +191,12 @@ function makeNoteClipboardSerializer(schema: ReturnType<typeof getSchema>): DOMS
     override serializeFragment(
       fragment: Fragment,
       options: Parameters<DOMSerializer['serializeFragment']>[1] = {},
+      // ProseMirror passes the element that receives nested content as a THIRD argument. Dropping
+      // it made every recursive call create a detached document fragment, so nested nodes (a bold
+      // run, a list, a table cell) serialised to empty HTML and a cut/paste lost its text.
+      target?: Parameters<DOMSerializer['serializeFragment']>[2],
     ): ReturnType<DOMSerializer['serializeFragment']> {
-      return super.serializeFragment(stripPrivateAttrsFromFragment(fragment), options);
+      return super.serializeFragment(stripPrivateAttrsFromFragment(fragment), options, target);
     }
   }
   return new StrippedClipboardSerializer(base.nodes, base.marks);
@@ -411,7 +429,7 @@ export function NoteEditor(props: NoteEditorProps) {
         // would re-parse the whole note for each character typed.
         serializedRef.current?.({
           markdown: md,
-          verified: () => verifyDocMarkdown(doc, md).markdown,
+          verified: () => verifyDocMarkdown(doc, md),
         });
         onChangeRef.current(md);
       },

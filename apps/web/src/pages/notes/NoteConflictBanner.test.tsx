@@ -33,7 +33,6 @@ function props(over: Partial<NoteConflictBannerProps> = {}): NoteConflictBannerP
     onLoadTheirs: vi.fn(),
     onRetryFetch: vi.fn(),
     onKeepMine: vi.fn(),
-    onCopyMine: vi.fn(),
     ...over,
   };
 }
@@ -99,14 +98,32 @@ describe('MED: a failed saved-version fetch is its own banner state', () => {
     expect(buttonByText('Load their version')).toBeUndefined();
     // No remote revision was ever fetched, so Keep mine has no premise.
     expect(buttonByText('Keep mine')).toBeUndefined();
+    expect(buttonByText('Copy mine')).toBeUndefined();
 
     await click('Retry fetch');
     expect(p.onRetryFetch).toHaveBeenCalledOnce();
   });
 
-  it('still allows Keep mine when an earlier saved revision is known', async () => {
+  it('still offers no Keep mine even when an earlier revision was known', () => {
     const p = render({ fetchFailed: true, remoteRevision: 'R2' });
+    expect(buttonByText('Retry fetch')).toBeTruthy();
+    expect(buttonByText('Keep mine')).toBeUndefined();
+    expect(buttonByText('Copy mine')).toBeUndefined();
+    expect(p.onKeepMine).not.toHaveBeenCalled();
+  });
+});
+
+describe('safe actions only: Copy mine is gone, Keep mine binds to a fetched revision', () => {
+  it('Keep mine is disabled without a successfully fetched revision', () => {
+    render({ remoteRevision: null });
+    expect(buttonByText('Keep mine')?.disabled).toBe(true);
+  });
+
+  it('the censor confirmation passes the exact revision it was about', async () => {
+    const p = render({ censorWarning: true, remoteRevision: 'R2' });
     await click('Keep mine');
-    expect(p.onKeepMine).toHaveBeenCalledOnce();
+    expect(p.onKeepMine).not.toHaveBeenCalled(); // opening the question sends nothing
+    await click('Keep mine anyway');
+    expect(p.onKeepMine).toHaveBeenCalledWith('R2');
   });
 });

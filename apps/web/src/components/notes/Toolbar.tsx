@@ -2,7 +2,7 @@ import type { Editor } from '@tiptap/core';
 import { useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { NoteCallbacks } from './callbacks.js';
-import { censorSelection, censorableSelection } from './censor-command.js';
+import { censorSelection, censorSelectionIssue } from './censor-command.js';
 import { parseEmbedUrl } from './embed.js';
 import { classifyHref } from './markdown.js';
 
@@ -203,8 +203,18 @@ export function Toolbar({
       return;
     }
     // Reject before opening the password prompt: a token inside a code block, an embed or another
-    // atom cannot survive a reload as an atom, so it must never be reported as a success.
-    if (!censorableSelection(editor, from, to)) {
+    // atom cannot survive a reload as an atom, and censoring across a link/chip would leave the
+    // cleared text in a destination or label. Nothing is frozen when the selection is rejected.
+    const issue = censorSelectionIssue(editor, from, to);
+    if (issue === 'linked') {
+      setCensorError(
+        t('notes.editor.censorLinked', {
+          defaultValue: 'Remove the link before censoring this text',
+        }),
+      );
+      return;
+    }
+    if (issue === 'unsupported') {
       setCensorError(
         t('notes.editor.censorUnsupported', {
           defaultValue:
@@ -216,13 +226,33 @@ export function Toolbar({
     setCensorError(null);
     // censorSelection makes the editor read-only while the password prompt is open, aborts if the
     // document changed (stale selection), verifies the token survives a save, and wipes undo
-    // history so plaintext can't be restored.
-    const outcome = await censorSelection(editor, from, to, callbacks.onCensor);
+    // history so plaintext can't be restored. After a successful censor it keeps the editor
+    // read-only until the page's one direct token PATCH resolves.
+    const outcome = await censorSelection(
+      editor,
+      from,
+      to,
+      callbacks.onCensor,
+      callbacks.onCensoredBody,
+    );
     callbacks.onCensorSettled?.(outcome);
     if (outcome === 'aborted') {
       setCensorError(
         t('notes.editor.censorAborted', {
           defaultValue: 'The note changed while censoring. Nothing was changed — please try again.',
+        }),
+      );
+    } else if (outcome === 'linked') {
+      setCensorError(
+        t('notes.editor.censorLinked', {
+          defaultValue: 'Remove the link before censoring this text',
+        }),
+      );
+    } else if (outcome === 'unsafe') {
+      setCensorError(
+        t('notes.editor.censorUnsafe', {
+          defaultValue:
+            "This text couldn't be censored safely because it still appears in a link or another attribute.",
         }),
       );
     } else if (outcome === 'unsupported') {

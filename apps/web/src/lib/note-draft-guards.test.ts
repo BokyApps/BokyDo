@@ -1,10 +1,9 @@
 // @vitest-environment happy-dom
-import type { NotePatch } from '@bokydo/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NotePatch } from '@bokydo/shared';
 import { DraftLeaveGuard, installDraftGuards, type DraftSaver } from './note-draft-guards.js';
 import type { NoteDraft } from './notes.js';
 import { NoteAutosave } from './notes-autosave.js';
-import { censorWithBodyPause } from './notes-censor.js';
 
 function makeSaver(over: Partial<DraftSaver> = {}): DraftSaver & {
   flush: ReturnType<typeof vi.fn>;
@@ -12,8 +11,6 @@ function makeSaver(over: Partial<DraftSaver> = {}): DraftSaver & {
 } {
   return {
     hasUnsavedWork: () => true,
-    pendingPatch: () => ({ body: 'unsaved' }),
-    baseRevision: () => 'rev-1',
     keepaliveRequest: () => ({ patch: { body: 'unsaved' }, expectedUpdatedAt: 'rev-1' }),
     flush: vi.fn(async () => true),
     stop: vi.fn(),
@@ -23,6 +20,7 @@ function makeSaver(over: Partial<DraftSaver> = {}): DraftSaver & {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('P2: beforeunload / pagehide guards', () => {
@@ -78,12 +76,12 @@ describe('P2: beforeunload / pagehide guards', () => {
   });
 });
 
-describe('H2: pagehide during a censor prompt never sends the plaintext body', () => {
+describe('censor freeze: pagehide sends nothing, and a keepalive always has its premise', () => {
   const REV = '2026-11-18T10:00:00.000Z';
   const NEXT = '2026-11-18T10:00:01.000Z';
   const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
   const base: NoteDraft = { title: 'T', body: 'B', tags: [], pinned: false };
-  type SaveFn = (patch: NotePatch, revision: string) => Promise<string>;
+  type SaveFn = (patch: NotePatch, expectedUpdatedAt: string) => Promise<string>;
   let save: ReturnType<typeof vi.fn<SaveFn>>;
   let autosave: NoteAutosave;
 
@@ -93,195 +91,55 @@ describe('H2: pagehide during a censor prompt never sends the plaintext body', (
     autosave = new NoteAutosave({ save, onStatus: vi.fn(), delayMs: 800 }, base, REV);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function keepaliveBody(fetchMock: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe('/api/v1/notes/note-1');
-    expect(init.keepalive).toBe(true);
-    return JSON.parse(String(init.body)) as Record<string, unknown>;
-  }
-
-  it('sends other fields but omits body while paused', () => {
+  it('sends nothing while frozen, even though the plaintext draft is dirty', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
     autosave.update({ ...base, title: 'Changed', body: 'TOPSECRET' });
-    autosave.pauseBody(); // opened the password prompt
-    const stop = installDraftGuards(autosave, 'note-1');
-    window.dispatchEvent(new Event('pagehide'));
-    stop();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const body = keepaliveBody(fetchMock);
-    expect(body.title).toBe('Changed');
-    expect(body).not.toHaveProperty('body');
-    expect(JSON.stringify(body)).not.toContain('TOPSECRET');
-  });
+    autosave.freeze();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(save).not.toHaveBeenCalled();
+    expect(autosave.keepaliveRequest()).toBeNull();
 
-  it('sends nothing when only the paused body changed', () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
-    autosave.update({ ...base, body: 'TOPSECRET' });
-    autosave.pauseBody();
     const stop = installDraftGuards(autosave, 'note-1');
     window.dispatchEvent(new Event('pagehide'));
     stop();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('keeps the body held after a successful censor until the token draft arrives', async () => {
+  it('after cancelling, pagehide sends the PRE-censor draft with its premise', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
     autosave.update({ ...base, title: 'Changed', body: 'TOPSECRET' });
-    autosave.pauseBody();
-    autosave.flushNextUpdate(); // a token was produced; the editor has not applied it yet
+    autosave.freeze();
+    autosave.unfreeze();
     const stop = installDraftGuards(autosave, 'note-1');
     window.dispatchEvent(new Event('pagehide'));
+    stop();
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(keepaliveBody(fetchMock)).not.toHaveProperty('body');
-
-    // The verified token document reaches autosave: it saves immediately, without the debounce.
-    autosave.update({ ...base, title: 'Changed', body: TOKEN });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(save).toHaveBeenCalledWith({ title: 'Changed', body: TOKEN }, REV);
-    stop();
+    const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      title: 'Changed',
+      body: 'TOPSECRET',
+      expectedUpdatedAt: REV,
+    });
   });
 
-  it('the page censor path keeps the plaintext out of pagehide until the token arrives (2a)', async () => {
+  it('a pending censor save is never supplemented by a keepalive', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
-    autosave.update({ ...base, body: 'TOPSECRET' });
-    // Exactly what NoteDetail.onCensor does: pause, produce the token, hold the body.
-    const token = await censorWithBodyPause(autosave, { onCensor: async () => TOKEN }, 'TOPSECRET');
-    expect(token).toBe(TOKEN);
+    save.mockRejectedValueOnce(new Error('offline'));
+    autosave.freeze();
+    expect(await autosave.saveCensoredBody(TOKEN)).toBe('error');
     const stop = installDraftGuards(autosave, 'note-1');
     window.dispatchEvent(new Event('pagehide'));
-    // The editor has not handed the token document over yet: the body stays out entirely.
+    stop();
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(autosave.keepaliveRequest()).toBeNull();
+  });
 
+  it('every keepalive request names expectedUpdatedAt (never an unguarded body)', () => {
     autosave.update({ ...base, body: TOKEN });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(save).toHaveBeenCalledWith({ body: TOKEN }, REV);
-    stop();
-  });
-});
-
-describe('MED 2b: a censor revision waiting on this tab’s own save', () => {
-  const REV = '2026-11-18T10:00:00.000Z';
-  const NEXT = '2026-11-18T10:00:01.000Z';
-  const REMOTE = '2026-11-18T10:00:02.000Z';
-  const base: NoteDraft = { title: 'T', body: 'B', tags: [], pinned: false };
-  const TOKEN = '{{censored:v1:AAAAAAAAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAAAA}}';
-  type SaveFn = (patch: NotePatch, revision: string) => Promise<string>;
-
-  function keepalive(fetchMock: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe('/api/v1/notes/note-1');
-    expect(init.keepalive).toBe(true);
-    return JSON.parse(String(init.body)) as Record<string, unknown>;
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('drops the premise while an older PATCH of this tab is in flight', async () => {
-    const resolvers: ((revision: string) => void)[] = [];
-    const save = vi.fn<SaveFn>(() => new Promise<string>((resolve) => resolvers.push(resolve)));
-    const autosave = new NoteAutosave({ save, onStatus: vi.fn(), delayMs: 800 }, base, REV);
-
-    autosave.update({ ...base, title: 'Changed' });
-    await vi.advanceTimersByTimeAsync(800); // the older PATCH is now in flight
-    expect(save).toHaveBeenCalledTimes(1);
-
-    autosave.pauseBody();
-    autosave.flushNextUpdate();
-    autosave.update({ ...base, title: 'Changed', body: TOKEN }); // queued behind that save
-    expect(save).toHaveBeenCalledTimes(1);
-
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
-    const stop = installDraftGuards(autosave, 'note-1');
-    window.dispatchEvent(new Event('pagehide'));
-    const body = keepalive(fetchMock);
-    expect(body.body).toBe(TOKEN);
-    expect(body).not.toHaveProperty('expectedUpdatedAt');
-
-    // The queued token save still follows the older acknowledgement, with the new premise.
-    resolvers[0]!(NEXT);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(save).toHaveBeenLastCalledWith({ body: TOKEN }, NEXT);
-    stop();
-  });
-
-  it('keeps the premise when no save of this tab is in flight', async () => {
-    const save = vi
-      .fn<SaveFn>()
-      .mockRejectedValueOnce(new Error('network'))
-      .mockResolvedValue(NEXT);
-    const autosave = new NoteAutosave(
-      { save, onStatus: vi.fn(), onError: vi.fn(), delayMs: 800 },
-      base,
-      REV,
-    );
-
-    autosave.pauseBody();
-    autosave.flushNextUpdate();
-    autosave.update({ ...base, body: TOKEN });
-    await vi.advanceTimersByTimeAsync(0); // the token save failed; nothing is in flight
-    expect(save).toHaveBeenCalledTimes(1);
-
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
-    const stop = installDraftGuards(autosave, 'note-1');
-    window.dispatchEvent(new Event('pagehide'));
-    const body = keepalive(fetchMock);
-    expect(body.body).toBe(TOKEN);
-    expect(body.expectedUpdatedAt).toBe(REV);
-    stop();
-  });
-
-  it('keeps the premise for an ordinary body while an older save is in flight', async () => {
-    const resolvers: ((revision: string) => void)[] = [];
-    const save = vi.fn<SaveFn>(() => new Promise<string>((resolve) => resolvers.push(resolve)));
-    const autosave = new NoteAutosave({ save, onStatus: vi.fn(), delayMs: 800 }, base, REV);
-    autosave.update({ ...base, title: 'Changed' });
-    await vi.advanceTimersByTimeAsync(800);
-    autosave.update({ ...base, title: 'Changed 2', body: 'typed' });
-
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
-    const stop = installDraftGuards(autosave, 'note-1');
-    window.dispatchEvent(new Event('pagehide'));
-    const body = keepalive(fetchMock);
-    expect(body.body).toBe('typed');
-    expect(body.expectedUpdatedAt).toBe(REV);
-
-    resolvers[0]!(NEXT);
-    await vi.advanceTimersByTimeAsync(0);
-    stop();
-  });
-
-  it('restores the premise once the token revision is acknowledged', async () => {
-    const resolvers: ((revision: string) => void)[] = [];
-    const save = vi.fn<SaveFn>(() => new Promise<string>((resolve) => resolvers.push(resolve)));
-    const autosave = new NoteAutosave({ save, onStatus: vi.fn(), delayMs: 800 }, base, REV);
-    autosave.update({ ...base, title: 'Changed' });
-    await vi.advanceTimersByTimeAsync(800);
-    autosave.pauseBody();
-    autosave.flushNextUpdate();
-    autosave.update({ ...base, title: 'Changed', body: TOKEN });
-
-    // The older save acknowledges, then the queued token save acknowledges.
-    resolvers[0]!(NEXT);
-    await vi.advanceTimersByTimeAsync(0);
-    resolvers[1]!(REMOTE);
-    await vi.advanceTimersByTimeAsync(0);
-
-    // A later ordinary change is guarded again.
-    autosave.update({ ...base, title: 'Changed 3', body: TOKEN });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
-    const stop = installDraftGuards(autosave, 'note-1');
-    window.dispatchEvent(new Event('pagehide'));
-    expect(keepalive(fetchMock).expectedUpdatedAt).toBe(REMOTE);
-    stop();
+    const request = autosave.keepaliveRequest();
+    expect(request).not.toBeNull();
+    expect(request!.expectedUpdatedAt).toBe(REV);
+    expect(request!.patch).toEqual({ body: TOKEN });
   });
 });
 
