@@ -266,7 +266,9 @@ function NoteCard({ note }: { note: NoteSummary }) {
           </span>
         )}
       </div>
-      {note.snippet && <p className="mt-1 line-clamp-4 text-sm text-muted">{note.snippet}</p>}
+      {note.snippet && (
+        <p className="mt-1 line-clamp-4 whitespace-pre-line text-sm text-muted">{note.snippet}</p>
+      )}
       <div className="mt-auto flex flex-wrap items-end justify-between gap-2 pt-3">
         <div className="flex flex-wrap gap-1">
           {note.tags.map((tag) => (

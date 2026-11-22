@@ -131,7 +131,7 @@ export type NoteListQuery = z.infer<typeof noteListQuerySchema>;
 export interface NoteSummary {
   id: string;
   title: string;
-  /** Plain text from the body, censored spans replaced, at most `NOTE_SNIPPET_MAX` characters. */
+  /** The start of the body as plain text with line breaks, censored spans replaced, at most `NOTE_SNIPPET_MAX` characters. */
   snippet: string;
   tags: string[];
   state: NoteState;
@@ -336,9 +336,82 @@ export function toSearchText(title: string, tags: readonly string[], body: strin
     .trim();
 }
 
-/** A short plain-text preview for lists; censored spans show as █████. */
+const SNIPPET_SCAN_CHARS = 16_384;
+const SNIPPET_SCAN_LINES = 40;
+const SNIPPET_LINE_CHARS = 1_000;
+const SNIPPET_FENCE = /^\s{0,3}(?:`{3,}|~{3,})/;
+/** A GFM table's alignment row (`| --- | :-: |`): only pipes, colons, dashes and spaces. */
+const isTableRule = (line: string): boolean => line.includes('---') && /^[\s|:-]+$/.test(line);
+const SNIPPET_BLOCK_PREFIX = /^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d{1,9}[.)]\s+)/;
+/** `[label](dest)` and `![alt](src)`, bounded so a hostile line cannot backtrack for long. */
+const SNIPPET_LINK = /!?\[([^\]\n]{0,500})\]\([^)\n]{0,2100}\)/g;
+const SNIPPET_ENTITIES: Record<string, string> = {
+  '&nbsp;': ' ',
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+};
+const SNIPPET_ENTITY = /&(?:nbsp|amp|lt|gt|quot|#39);/g;
+const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/;
+
+/** One Markdown line as the text a reader sees: escapes resolved, emphasis markers dropped. */
+function snippetLine(raw: string): string {
+  let line = raw.slice(0, SNIPPET_LINE_CHARS).replace(/^::embed(?=\[)/, '');
+  for (let i = 0; i < 4 && SNIPPET_BLOCK_PREFIX.test(line); i++)
+    line = line.replace(SNIPPET_BLOCK_PREFIX, '');
+  line = line.replace(SNIPPET_LINK, '$1').replace(APP_URL, ' ');
+  let out = '';
+  let inCode = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line.charAt(i);
+    if (ch === '`') {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) {
+      out += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = line.charAt(i + 1);
+      if (ASCII_PUNCTUATION.test(next)) {
+        out += next;
+        i++;
+      }
+      continue;
+    }
+    if (ch === '*' || ch === '_' || ch === '~') continue;
+    out += ch === '|' ? ' ' : ch;
+  }
+  return out
+    .replace(SNIPPET_ENTITY, (e) => SNIPPET_ENTITIES[e] ?? e)
+    .replace(WHITESPACE, ' ')
+    .trim();
+}
+
+/**
+ * A short plain-text preview for lists: the first lines of the body as a reader sees them, with
+ * line breaks and punctuation kept, runs of blank lines collapsed, and censored spans as █████.
+ * Only the start of the body is read, so a hostile body costs a bounded amount of work.
+ */
 export function noteSnippet(body: string): string {
-  const text = toSearchText('', [], redactCensored(body));
+  const lines: string[] = [];
+  let inFence = false;
+  for (const raw of redactCensored(body)
+    .slice(0, SNIPPET_SCAN_CHARS)
+    .split('\n', SNIPPET_SCAN_LINES)) {
+    if (SNIPPET_FENCE.test(raw)) inFence = !inFence;
+    else if (inFence) lines.push(raw.slice(0, SNIPPET_LINE_CHARS).replace(WHITESPACE, ' ').trim());
+    else if (!isTableRule(raw)) lines.push(snippetLine(raw));
+  }
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (line || (kept.length && kept[kept.length - 1])) kept.push(line);
+  }
+  while (kept.length && !kept[kept.length - 1]) kept.pop();
+  const text = kept.join('\n');
   if (text.length <= NOTE_SNIPPET_MAX) return text;
   const cut = text.slice(0, NOTE_SNIPPET_MAX);
   // Never split a surrogate pair at the boundary.

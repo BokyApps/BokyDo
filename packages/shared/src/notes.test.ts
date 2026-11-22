@@ -110,6 +110,52 @@ describe('search text and snippets', () => {
     expect(text).not.toContain('  ');
   });
 
+  it('keeps line breaks and punctuation in snippets', () => {
+    const body = [
+      'This is a test note for something.',
+      '',
+      '# Header',
+      '',
+      'df**gdgdfg**',
+      '',
+      '&nbsp;',
+      '',
+      '&nbsp;',
+      '',
+      '> quoted \\*star\\* and [a link](https://example.com/)',
+      '',
+      '- [ ] a task',
+      '1. first `snake_case`',
+      '',
+      '| a | b |',
+      '| --- | :-: |',
+      '| 1 | 2 |',
+      '```',
+      'code_here',
+      '```',
+      '![photo](/api/v1/note-files/0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e)',
+    ].join('\n');
+    expect(noteSnippet(body)).toBe(
+      [
+        'This is a test note for something.',
+        '',
+        'Header',
+        '',
+        'dfgdgdfg',
+        '',
+        'quoted *star* and a link',
+        '',
+        'a task',
+        'first snake_case',
+        '',
+        'a b',
+        '1 2',
+        'code_here',
+        'photo',
+      ].join('\n'),
+    );
+  });
+
   it('replaces valid censor tokens in snippets and bounds their length', () => {
     const body = `${token('c2VjcmV0')} ${'word '.repeat(200)}`;
     const snippet = noteSnippet(body);

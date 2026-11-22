@@ -545,8 +545,9 @@ function readBlock(
   switch (t.type) {
     case 'paragraph_open': {
       const inline = tokens[i + 1];
+      const content = parseInline(inline, false, env);
       return {
-        node: { type: 'paragraph', content: parseInline(inline, false, env) },
+        node: { type: 'paragraph', content: isEmptyLineMarker(content) ? [] : content },
         next: i + 3,
         map,
       };
@@ -826,6 +827,23 @@ function pieceFor(node: JSONContent, atLineStart: boolean): string | null {
   }
 }
 
+/**
+ * An empty paragraph (a blank line the user made with Enter). Markdown collapses blank lines, so
+ * it is written as a paragraph holding only a non-breaking space, the usual way to keep one; other
+ * Markdown viewers and the exports show it as an empty line too. A document that is nothing but
+ * empty paragraphs is saved as an empty body.
+ */
+const EMPTY_LINE = '&nbsp;';
+
+function isEmptyLineMarker(content: JSONContent[]): boolean {
+  const only = content.length === 1 ? content[0]! : null;
+  return only?.type === 'text' && only.text === '\u00a0' && !only.marks?.length;
+}
+
+function isBlankParagraph(node: JSONContent): boolean {
+  return node.type === 'paragraph' && normaliseInlineEdges(node.content ?? []).length === 0;
+}
+
 const EMPHASIS_MARKS: ReadonlySet<string> = new Set(['bold', 'italic', 'strike']);
 
 const isWhitespace = (ch: string | undefined): boolean => ch !== undefined && /\s/.test(ch);
@@ -1088,6 +1106,7 @@ function serializeBlock(node: JSONContent, marker: ListMarker = 'a'): string {
   switch (node.type) {
     case 'paragraph': {
       const body = serializeInline(node.content);
+      if (!body) return EMPTY_LINE;
       // A paragraph that would re-parse as an `::embed[…](…)` atom must stay a literal paragraph.
       return body.replace(/^(::embed\[)/, '\\$1');
     }
@@ -1334,7 +1353,7 @@ function boundaryAfter(blocks: JSONContent[], index: number, preserved: boolean)
  */
 export function docToMarkdown(doc: JSONContent): string {
   const blocks = doc.content ?? [];
-  if (!blocks.length) return '';
+  if (blocks.every(isBlankParagraph)) return '';
   let out = '';
   const first = blocks[0]!;
   const lead = first.attrs?.lead;
@@ -1368,7 +1387,7 @@ function documentDefinitions(blocks: JSONContent[]): string[] {
 /** Serialize with NO source preservation, keeping reference definitions at the end. */
 function serializeFreshDoc(doc: JSONContent): string {
   const blocks = doc.content ?? [];
-  const body = serializeBlocks(blocks);
+  const body = blocks.every(isBlankParagraph) ? '' : serializeBlocks(blocks);
   const defs = documentDefinitions(blocks);
   return defs.length ? (body ? `${body}\n\n${defs.join('\n')}` : defs.join('\n')) : body;
 }

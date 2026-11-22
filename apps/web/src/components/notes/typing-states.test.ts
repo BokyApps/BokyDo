@@ -40,7 +40,7 @@ const cases: [string, string, (e: Editor) => void, string][] = [
     (e) => e.commands.insertContent(' # not a heading'),
     '\\# not a heading',
   ],
-  ['Enter at the end', 'Hello', (e) => e.commands.splitBlock(), 'Hello\n\n'],
+  ['Enter at the end', 'Hello', (e) => e.commands.splitBlock(), 'Hello\n\n&nbsp;'],
   [
     'Enter twice, then text',
     'Hello',
@@ -49,7 +49,7 @@ const cases: [string, string, (e: Editor) => void, string][] = [
       e.commands.splitBlock();
       e.commands.insertContent('x');
     },
-    'Hello\n\n\n\nx',
+    'Hello\n\n&nbsp;\n\nx',
   ],
   ['a break at the end', 'Hello', (e) => e.commands.setHardBreak(), 'Hello'],
   [
@@ -133,6 +133,20 @@ describe('saving half-typed notes', () => {
     const result = saved(start, act);
     expect(result.mismatch).toBe(false);
     expect(result.markdown).toBe(markdown);
+  });
+
+  it('keeps blank lines across a reload, and saves an empty note as an empty body', () => {
+    const result = saved('Hello', (e) => {
+      e.commands.splitBlock();
+      e.commands.splitBlock();
+      e.commands.splitBlock();
+      e.commands.insertContent('World');
+    });
+    expect(result.mismatch).toBe(false);
+    const reloaded = markdownToDoc(result.markdown).content ?? [];
+    expect(reloaded.map((block) => block.content?.length ?? 0)).toEqual([1, 0, 0, 1]);
+    expect(saved('', () => undefined).markdown).toBe('');
+    expect(saved('', (e) => e.commands.splitBlock()).markdown).toBe('');
   });
 
   it('keeps spaces inside a code span', () => {
