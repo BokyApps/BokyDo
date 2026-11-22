@@ -826,12 +826,118 @@ function pieceFor(node: JSONContent, atLineStart: boolean): string | null {
   }
 }
 
+const EMPHASIS_MARKS: ReadonlySet<string> = new Set(['bold', 'italic', 'strike']);
+
+const isWhitespace = (ch: string | undefined): boolean => ch !== undefined && /\s/.test(ch);
+
+function leadingWhitespaceEnd(text: string): number {
+  let i = 0;
+  while (i < text.length && isWhitespace(text[i])) i++;
+  return i;
+}
+
+function trailingWhitespaceStart(text: string): number {
+  let j = text.length;
+  while (j > 0 && isWhitespace(text[j - 1])) j--;
+  return j;
+}
+
+const isCode = (node: JSONContent): boolean => (node.marks ?? []).some((m) => m.type === 'code');
+
+const isBlankText = (node: JSONContent | undefined): boolean =>
+  node?.type === 'text' &&
+  !isCode(node) &&
+  leadingWhitespaceEnd(node.text ?? '') === (node.text ?? '').length;
+
+/**
+ * Inline content in the form Markdown can hold. While someone types, the editor is constantly in
+ * states Markdown cannot represent: `Hello ` before the next word, an empty line after Enter, a
+ * break at the end of a line, `**bold **`. markdown-it drops whitespace at the edges of a line,
+ * reads `**bold **` as literal asterisks and a block-final `\` + newline as a literal backslash,
+ * and an indented first line can become a code block or heading. So the serializer writes this
+ * equivalent form instead, and the save check (`reparsesTo`) compares documents in it:
+ *  - whitespace at the edge of emphasised text moves outside the delimiters;
+ *  - trailing breaks (and blank text after them) at the end of a block are dropped;
+ *  - whitespace at the start and end of each line is trimmed (code spans are left alone).
+ * In a table cell a break is written as `<br>`, so only the cell's own edges are trimmed.
+ */
+export function normaliseInlineEdges(nodes: JSONContent[], inCell = false): JSONContent[] {
+  const runs = mergeAdjacentText({ type: 'inline', content: nodes }).content ?? [];
+  const markTypes = (node: JSONContent | undefined) =>
+    new Set((node?.marks ?? []).map((m) => m.type));
+  const lifted: JSONContent[] = [];
+  runs.forEach((node, i) => {
+    const text = node.text ?? '';
+    const marks = node.marks ?? [];
+    if (node.type !== 'text' || !text || isCode(node)) {
+      lifted.push(node);
+      return;
+    }
+    // Only the delimiters that open before this run or close after it touch its edges.
+    const before = markTypes(runs[i - 1]);
+    const after = markTypes(runs[i + 1]);
+    const opening = marks.filter((m) => EMPHASIS_MARKS.has(m.type) && !before.has(m.type));
+    const closing = marks.filter((m) => EMPHASIS_MARKS.has(m.type) && !after.has(m.type));
+    const start = opening.length ? leadingWhitespaceEnd(text) : 0;
+    const end = closing.length ? Math.max(start, trailingWhitespaceStart(text)) : text.length;
+    if (start === 0 && end === text.length) {
+      lifted.push(node);
+      return;
+    }
+    const space = (s: string, drop: typeof marks): JSONContent => {
+      const kept = marks.filter((m) => !drop.includes(m));
+      return kept.length ? { type: 'text', text: s, marks: kept } : { type: 'text', text: s };
+    };
+    if (start > 0) lifted.push(space(text.slice(0, start), opening));
+    if (end > start) lifted.push({ ...node, text: text.slice(start, end) });
+    if (end < text.length) lifted.push(space(text.slice(end), closing));
+  });
+  const merged = mergeAdjacentText({ type: 'inline', content: lifted }).content ?? [];
+  let last = merged.length;
+  if (!inCell) {
+    while (last > 0 && (merged[last - 1]!.type === 'hardBreak' || isBlankText(merged[last - 1])))
+      last--;
+  }
+  const kept = merged.slice(0, last);
+  const isBreak = (node: JSONContent | undefined) => !inCell && node?.type === 'hardBreak';
+  const out: JSONContent[] = [];
+  kept.forEach((node, i) => {
+    if (node.type !== 'text' || isCode(node)) {
+      out.push(node);
+      return;
+    }
+    let text = node.text ?? '';
+    if (i === kept.length - 1 || isBreak(kept[i + 1]))
+      text = text.slice(0, trailingWhitespaceStart(text));
+    if (i === 0 || isBreak(kept[i - 1])) text = text.slice(leadingWhitespaceEnd(text));
+    if (text) out.push(text === node.text ? node : { ...node, text });
+  });
+  return out;
+}
+
+/**
+ * A copy of `node` in the form `normaliseInlineEdges` gives its text blocks, without the empty
+ * paragraphs Markdown cannot hold either. Only for comparing a document with its re-parse.
+ */
+function normaliseForReparse(node: JSONContent, inCell = false): JSONContent {
+  if (!node.content) return node;
+  if (node.type === 'paragraph' || node.type === 'heading') {
+    return { ...node, content: normaliseInlineEdges(node.content, inCell) };
+  }
+  const cell = node.type === 'tableCell' || node.type === 'tableHeader';
+  const content = node.content
+    .map((child) => normaliseForReparse(child, cell))
+    .filter((child) => !(child.type === 'paragraph' && !child.content?.length));
+  return { ...node, content };
+}
+
 /**
  * A mark-stack serializer: instead of wrapping each text node independently (which breaks nested
  * bold+italic, e.g. `**a *b* c**`), we keep marks open across runs and only emit delimiters when
  * the active mark set changes. Review fix: mixed bold/italic and overlapping marks round-trip.
  */
-function serializeInline(nodes: JSONContent[] = [], inCell = false): string {
+function serializeInline(input: JSONContent[] = [], inCell = false): string {
+  const nodes = normaliseInlineEdges(input, inCell);
   let out = '';
   let atLineStart = true;
   const stack: StackMark[] = [];
@@ -1305,7 +1411,7 @@ export function resetSerializationStats(): void {
 
 function reparsesTo(markdown: string, doc: JSONContent): boolean {
   try {
-    return docsEquivalent(markdownToDoc(markdown), doc);
+    return docsEquivalent(normaliseForReparse(markdownToDoc(markdown)), normaliseForReparse(doc));
   } catch {
     return false;
   }

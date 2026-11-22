@@ -874,9 +874,11 @@ function NoteDetailInner({ note }: { note: Note }) {
         <Button variant="ghost" className="text-danger" onClick={() => void onDeleteForever()}>
           {t('notes.delete', { defaultValue: 'Delete forever' })}
         </Button>
-        <Button variant="secondary" onClick={() => lockCensored('manual')} className="ml-1">
-          {t('notes.lock', { defaultValue: 'Lock censored text' })}
-        </Button>
+        {CENSORING_ENABLED && (
+          <Button variant="secondary" onClick={() => lockCensored('manual')} className="ml-1">
+            {t('notes.lock', { defaultValue: 'Lock censored text' })}
+          </Button>
+        )}
         <Popover
           align="right"
           trigger={(p) => (
