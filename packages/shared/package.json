@@ -14,6 +14,11 @@
       "bokydo-source": "./src/notes-refs.ts",
       "types": "./dist/notes-refs.d.ts",
       "default": "./dist/notes-refs.js"
+    },
+    "./notes-preview": {
+      "bokydo-source": "./src/notes-preview.ts",
+      "types": "./dist/notes-preview.d.ts",
+      "default": "./dist/notes-preview.js"
     }
   },
   "scripts": {

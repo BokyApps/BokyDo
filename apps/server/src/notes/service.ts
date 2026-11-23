@@ -15,6 +15,7 @@ import {
   type NoteTaskSummary,
 } from '@bokydo/shared';
 import { extractNoteRefs } from '@bokydo/shared/notes-refs';
+import { notePreview } from '@bokydo/shared/notes-preview';
 import {
   and,
   asc,
@@ -166,6 +167,11 @@ function summaryOf(row: NoteRow): NoteSummary {
   };
 }
 
+/** A list entry: the summary plus the formatted preview its card shows. */
+function listSummaryOf(row: NoteRow): NoteSummary {
+  return { ...summaryOf(row), preview: notePreview(row.body) };
+}
+
 /** Normalise the aggregated `note_task_links.source` values to `body`, `manual` order. */
 function linkSources(values: readonly string[] | null | undefined): NoteTaskLinkSource[] {
   const set = new Set(values ?? []);
@@ -231,7 +237,7 @@ export async function listNotes(
   return {
     ok: true,
     value: {
-      notes: page.map(summaryOf),
+      notes: page.map(listSummaryOf),
       nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
     },
   };
@@ -608,7 +614,7 @@ export async function notesForTask(
     .orderBy(desc(notes.pinned), desc(notes.updatedAt), desc(notes.id));
   return {
     ok: true,
-    value: rows.map((row) => ({ ...summaryOf(row), sources: linkSources(row.sources) })),
+    value: rows.map((row) => ({ ...listSummaryOf(row), sources: linkSources(row.sources) })),
   };
 }
 

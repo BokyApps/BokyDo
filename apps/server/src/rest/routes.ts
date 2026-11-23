@@ -105,6 +105,37 @@ const noteSummaryResource = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
+const notePreviewRun = z.object({
+  text: z.string(),
+  bold: z.literal(true).optional(),
+  italic: z.literal(true).optional(),
+  strike: z.literal(true).optional(),
+  code: z.literal(true).optional(),
+  link: z.literal(true).optional(),
+});
+/** List entries also carry the formatted start of the body for note cards (redacted, bounded). */
+const noteListEntryResource = noteSummaryResource.extend({
+  preview: z.array(
+    z.object({
+      kind: z.enum([
+        'paragraph',
+        'h1',
+        'h2',
+        'h3',
+        'quote',
+        'bullet',
+        'ordered',
+        'task',
+        'code',
+        'blank',
+      ]),
+      runs: z.array(notePreviewRun),
+      depth: z.number().int().optional(),
+      number: z.number().int().optional(),
+      checked: z.boolean().optional(),
+    }),
+  ),
+});
 const noteResource = noteSummaryResource.extend({
   body: z.string(),
   trashedAt: z.iso.datetime().nullable(),
@@ -128,7 +159,7 @@ const noteResource = noteSummaryResource.extend({
   ),
 });
 const noteList = z.object({
-  notes: z.array(noteSummaryResource),
+  notes: z.array(noteListEntryResource),
   nextCursor: z.string().nullable(),
 });
 const noteSingle = z.object({ note: noteResource });
@@ -140,7 +171,7 @@ const noteTags = z.object({
   tags: z.array(z.object({ tag: z.string(), count: z.number().int() })),
 });
 const taskNotes = z.object({
-  notes: z.array(noteSummaryResource.extend({ sources: z.array(z.enum(['body', 'manual'])) })),
+  notes: z.array(noteListEntryResource.extend({ sources: z.array(z.enum(['body', 'manual'])) })),
 });
 const noteFile = z.object({
   id: idSchema,

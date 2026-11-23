@@ -13,6 +13,7 @@ export default defineConfig({
       // A subpath before the barrel: alias prefixes match, so `@bokydo/shared` would otherwise
       // rewrite `@bokydo/shared/notes-refs` to a path under `index.ts`.
       '@bokydo/shared/notes-refs': shared('notes-refs.ts'),
+      '@bokydo/shared/notes-preview': shared('notes-preview.ts'),
       '@bokydo/shared': pkg('shared'),
       '@bokydo/themes': pkg('themes'),
       '@bokydo/nlp': pkg('nlp'),

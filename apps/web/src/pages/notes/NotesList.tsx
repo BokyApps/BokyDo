@@ -17,6 +17,7 @@ import {
   type NoteListParams,
 } from '../../lib/notes.js';
 import { useToast } from '../../lib/toasts.js';
+import { NotePreview } from './NotePreview.js';
 
 const TABS: NoteState[] = ['active', 'archived', 'trashed'];
 
@@ -266,8 +267,12 @@ function NoteCard({ note }: { note: NoteSummary }) {
           </span>
         )}
       </div>
-      {note.snippet && (
-        <p className="mt-1 line-clamp-4 whitespace-pre-line text-sm text-muted">{note.snippet}</p>
+      {note.preview?.length ? (
+        <NotePreview blocks={note.preview} />
+      ) : (
+        note.snippet && (
+          <p className="mt-1 line-clamp-4 whitespace-pre-line text-sm text-muted">{note.snippet}</p>
+        )
       )}
       <div className="mt-auto flex flex-wrap items-end justify-between gap-2 pt-3">
         <div className="flex flex-wrap gap-1">

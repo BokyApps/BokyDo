@@ -131,13 +131,44 @@ export type NoteListQuery = z.infer<typeof noteListQuerySchema>;
 export interface NoteSummary {
   id: string;
   title: string;
-  /** The start of the body as plain text with line breaks, censored spans replaced, at most `NOTE_SNIPPET_MAX` characters. */
+  /** The start of the body as plain text with line breaks, censored spans replaced, at most
+   *  `NOTE_SNIPPET_MAX` characters. */
   snippet: string;
   tags: string[];
   state: NoteState;
   pinned: boolean;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The start of the body with its formatting, for note cards. Only list responses carry it; it
+   * is built from the redacted body, so it never holds censored text.
+   */
+  preview?: NotePreviewBlock[];
+}
+
+/** A run of text in a card preview, with the inline formatting it has in the note. */
+export interface NotePreviewRun {
+  text: string;
+  bold?: true;
+  italic?: true;
+  strike?: true;
+  code?: true;
+  link?: true;
+}
+
+export type NotePreviewKind =
+  'paragraph' | 'h1' | 'h2' | 'h3' | 'quote' | 'bullet' | 'ordered' | 'task' | 'code' | 'blank';
+
+/** One line or block of a card preview. Plain data: the card renders it as text, never HTML. */
+export interface NotePreviewBlock {
+  kind: NotePreviewKind;
+  runs: NotePreviewRun[];
+  /** List nesting, 0 for a top-level item. */
+  depth?: number;
+  /** The item number of an `ordered` block. */
+  number?: number;
+  /** Whether a `task` block is ticked. */
+  checked?: boolean;
 }
 
 export interface NoteBacklink {

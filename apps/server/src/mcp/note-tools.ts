@@ -80,7 +80,9 @@ function present(note: Note): Note {
 }
 
 /** The list shape: the same free-text fields as a note, minus body, links and files. */
-function presentSummary(note: NoteSummary): NoteSummary {
+function presentSummary({ preview: _preview, ...note }: NoteSummary): NoteSummary {
+  // The card preview is for the web list; an AI already gets the snippet.
+  void _preview;
   return {
     ...note,
     title: redactCensored(note.title),
