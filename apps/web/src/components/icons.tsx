@@ -236,3 +236,13 @@ export const DownloadIcon = () => (
     <path d="M5 20h14" />
   </Icon>
 );
+export const ExpandIcon = () => (
+  <Icon>
+    <path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" />
+  </Icon>
+);
+export const CollapseIcon = () => (
+  <Icon>
+    <path d="M20 4l-6 6M14 5v5h5M4 20l6-6M10 19v-5H5" />
+  </Icon>
+);

@@ -117,7 +117,7 @@ import { ConfirmProvider } from '../../lib/confirm.js';
 import { notesKeys, noteFocusSurface } from '../../lib/notes.js';
 import { censorTokenDigest } from '../../lib/notes-censor.js';
 import { ToastProvider } from '../../lib/toasts.js';
-import { NoteDetail } from './NoteDetail.js';
+import { NoteCardEditor, NoteDetail } from './NoteDetail.js';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -317,6 +317,46 @@ describe('every note save is guarded by the revision it was based on', () => {
     });
     expect(patchCalls).toHaveLength(2);
     expect(patchCalls[1]).toEqual({ body: 'B3', expectedUpdatedAt: R2 });
+  });
+});
+
+describe('a note edited on its card', () => {
+  async function renderCard(): Promise<void> {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ToastProvider>
+            <ConfirmProvider>
+              <NoteCardEditor noteId="note-1" fallback={<p>preview</p>} />
+            </ConfirmProvider>
+          </ToastProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await settle();
+    await settle();
+  }
+
+  it('saves title and body edits with the same revision guard as the page', async () => {
+    await renderCard();
+    expect(container.textContent).not.toContain('Move to trash');
+    await type(title(), 'Card title');
+    await type(body(), 'Card body');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(patchCalls).toEqual([{ title: 'Card title', body: 'Card body', expectedUpdatedAt: R1 }]);
+  });
+
+  it('opens the full note in full screen', async () => {
+    await renderCard();
+    const open = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open full screen"]',
+    );
+    expect(open).not.toBeNull();
+    await act(async () => open?.click());
+    expect(localStorage.getItem('bokydo.notes.fullScreen')).toBe('1');
+    localStorage.clear();
   });
 });
 

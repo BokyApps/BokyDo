@@ -1,13 +1,10 @@
 import type { NoteState, NoteSummary } from '@bokydo/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Page, ViewHeader } from '../../components/ViewHeader.js';
 import { Alert, Button, Card, inputClass } from '../../components/ui.js';
-import { StarIcon } from '../../components/icons.js';
 import { ApiError } from '../../lib/api.js';
-import { localeTag } from '../../lib/locale.js';
 import {
   createNote,
   fetchNotePage,
@@ -17,14 +14,13 @@ import {
   type NoteListParams,
 } from '../../lib/notes.js';
 import { useToast } from '../../lib/toasts.js';
-import { NotePreview } from './NotePreview.js';
+import { NoteCard, useStableOrder } from './NoteCard.js';
 
 const TABS: NoteState[] = ['active', 'archived', 'trashed'];
 
 export function NotesList() {
   const { t } = useTranslation();
   const client = useQueryClient();
-  const navigate = useNavigate();
   const toast = useToast();
 
   const [tab, setTab] = useState<NoteState>('active');
@@ -48,25 +44,38 @@ export function NotesList() {
   });
   const tags = useQuery(noteTagsQuery);
 
+  /** The note just created on the board: its card opens with the title focused. */
+  const [focusId, setFocusId] = useState<string | null>(null);
   const create = useMutation({
     mutationFn: (id: string) => createNote({ id, title: '', body: '', tags: [], pinned: false }),
     onSuccess: async (_res, id) => {
       await client.invalidateQueries({ queryKey: notesKeys.lists() });
-      await navigate({ to: '/notes/$noteId', params: { noteId: id } });
+      setFocusId(id);
     },
-    onError: (err, id) => {
+    onError: async (err, id) => {
       // A retried create with the same id is idempotent: the note already exists, so just open it.
       if (err instanceof ApiError && err.code === 'id_conflict') {
-        void navigate({ to: '/notes/$noteId', params: { noteId: id } });
+        await client.invalidateQueries({ queryKey: notesKeys.lists() });
+        setFocusId(id);
       } else {
         toast({ tone: 'error', message: noteErrorMessage(err) });
       }
     },
   });
 
-  const newNote = () => create.mutate(crypto.randomUUID());
+  const newNote = () => {
+    // A new note is active and unfiltered, so show the board it will appear on.
+    setTab('active');
+    setTag(null);
+    setSearch('');
+    setQ('');
+    create.mutate(crypto.randomUUID());
+  };
 
-  const notes = list.data?.pages.flatMap((page) => page.notes) ?? [];
+  const notes = useStableOrder(
+    list.data?.pages.flatMap((page) => page.notes) ?? [],
+    JSON.stringify(params),
+  );
   const pinned = notes.filter((n) => n.pinned);
   const others = notes.filter((n) => !n.pinned);
 
@@ -202,23 +211,27 @@ export function NotesList() {
         </Card>
       )}
 
-      {pinned.length > 0 && (
-        <section aria-label={t('notes.pinned', { defaultValue: 'Pinned' })} className="mb-6">
-          <h2 className="mb-2 text-xs font-semibold text-muted">
-            {t('notes.pinned', { defaultValue: 'Pinned' })}
-          </h2>
-          <NoteGrid notes={pinned} />
-        </section>
-      )}
-      {others.length > 0 && (
-        <section aria-label={t('notes.other', { defaultValue: 'Notes' })}>
+      {notes.length > 0 && (
+        <div className="bk-notes-canvas">
           {pinned.length > 0 && (
-            <h2 className="mb-2 text-xs font-semibold text-muted">
-              {t('notes.other', { defaultValue: 'Notes' })}
-            </h2>
+            <section aria-label={t('notes.pinned', { defaultValue: 'Pinned' })} className="mb-6">
+              <h2 className="mb-2 text-xs font-semibold text-muted">
+                {t('notes.pinned', { defaultValue: 'Pinned' })}
+              </h2>
+              <NoteGrid notes={pinned} focusId={focusId} />
+            </section>
           )}
-          <NoteGrid notes={others} />
-        </section>
+          {others.length > 0 && (
+            <section aria-label={t('notes.other', { defaultValue: 'Notes' })}>
+              {pinned.length > 0 && (
+                <h2 className="mb-2 text-xs font-semibold text-muted">
+                  {t('notes.other', { defaultValue: 'Notes' })}
+                </h2>
+              )}
+              <NoteGrid notes={others} focusId={focusId} />
+            </section>
+          )}
+        </div>
       )}
 
       {list.hasNextPage && (
@@ -236,56 +249,12 @@ export function NotesList() {
   );
 }
 
-function NoteGrid({ notes }: { notes: NoteSummary[] }) {
+function NoteGrid({ notes, focusId }: { notes: NoteSummary[]; focusId: string | null }) {
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="bk-notes-board">
       {notes.map((note) => (
-        <NoteCard key={note.id} note={note} />
+        <NoteCard key={note.id} note={note} autoFocus={note.id === focusId} />
       ))}
     </div>
-  );
-}
-
-function NoteCard({ note }: { note: NoteSummary }) {
-  const { t } = useTranslation();
-  return (
-    <Link
-      to="/notes/$noteId"
-      params={{ noteId: note.id }}
-      className="flex min-h-28 flex-col rounded-xl border border-line bg-surface p-4 shadow-sm transition hover:border-accent hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 break-words font-semibold">
-          {note.title || t('notes.untitled', { defaultValue: 'Untitled' })}
-        </h3>
-        {note.pinned && (
-          <span
-            className="shrink-0 text-accent"
-            aria-label={t('notes.pinned', { defaultValue: 'Pinned' })}
-          >
-            <StarIcon filled />
-          </span>
-        )}
-      </div>
-      {note.preview?.length ? (
-        <NotePreview blocks={note.preview} />
-      ) : (
-        note.snippet && (
-          <p className="mt-1 line-clamp-4 whitespace-pre-line text-sm text-muted">{note.snippet}</p>
-        )
-      )}
-      <div className="mt-auto flex flex-wrap items-end justify-between gap-2 pt-3">
-        <div className="flex flex-wrap gap-1">
-          {note.tags.map((tag) => (
-            <span key={tag} className="rounded-full bg-surface-alt px-2 py-0.5 text-xs text-muted">
-              #{tag}
-            </span>
-          ))}
-        </div>
-        <time className="text-xs text-muted" dateTime={note.updatedAt}>
-          {new Date(note.updatedAt).toLocaleString(localeTag())}
-        </time>
-      </div>
-    </Link>
   );
 }

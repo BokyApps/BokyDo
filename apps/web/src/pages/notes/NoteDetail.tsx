@@ -15,13 +15,17 @@ import {
 } from '../../components/ui.js';
 import {
   ArchiveIcon,
+  CollapseIcon,
   DownloadIcon,
+  ExpandIcon,
   LinkIcon,
   StarIcon,
   TrashIcon,
 } from '../../components/icons.js';
 import { useConfirm } from '../../lib/confirm.js';
+import { localeTag } from '../../lib/locale.js';
 import { DraftLeaveGuard, installDraftGuards } from '../../lib/note-draft-guards.js';
+import { readNoteFullScreen, saveNoteFullScreen } from '../../lib/note-layout.js';
 import {
   censorConflictWarning,
   deleteNote,
@@ -114,8 +118,50 @@ export function NoteDetail({ noteId }: { noteId: string }) {
   return null;
 }
 
-function NoteDetailInner({ note }: { note: Note }) {
+/**
+ * A note edited in place on its card. It is the same editing session as the full page (autosave,
+ * conflicts, live updates, the leave guard), laid out for a small resizable card. Until the full
+ * note has loaded the card shows `fallback` (the list's formatted preview).
+ */
+export function NoteCardEditor({
+  noteId,
+  fallback,
+  autoFocus = false,
+}: {
+  noteId: string;
+  fallback: ReactNode;
+  autoFocus?: boolean;
+}) {
+  const query = useQuery(noteQuery(noteId));
+  const phase = noteLoadPhase(query);
+  if (phase === 'ready' && query.data) {
+    return (
+      <NoteDetailInner key={query.data.id} note={query.data} variant="card" autoFocus={autoFocus} />
+    );
+  }
+  return <>{fallback}</>;
+}
+
+function NoteDetailInner({
+  note,
+  variant = 'page',
+  autoFocus = false,
+}: {
+  note: Note;
+  variant?: 'page' | 'card';
+  autoFocus?: boolean;
+}) {
   const { t } = useTranslation();
+  const card = variant === 'card';
+  const [fullScreen, setFullScreen] = useState(readNoteFullScreen);
+  const toggleFullScreen = () => {
+    saveNoteFullScreen(!fullScreen);
+    setFullScreen(!fullScreen);
+  };
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (autoFocus) titleRef.current?.focus();
+  }, [autoFocus]);
   const client = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
@@ -219,6 +265,8 @@ function NoteDetailInner({ note }: { note: Note }) {
   useEffect(() => {
     if (censorChecked.current) return;
     censorChecked.current = true;
+    // A card skips the extra GET while censoring is off: no marker can have been written.
+    if (card && !CENSORING_ENABLED) return;
     let active = true;
     void (async () => {
       try {
@@ -232,7 +280,7 @@ function NoteDetailInner({ note }: { note: Note }) {
     return () => {
       active = false;
     };
-  }, [note.id]);
+  }, [note.id, card]);
 
   // --- debounced, diff-only autosave ------------------------------------------------------------
   const [autosave] = useState(
@@ -770,7 +818,169 @@ function NoteDetailInner({ note }: { note: Note }) {
   // bring back text censored elsewhere. The banner then requires an explicit confirmation.
   const conflictCensorWarning = conflict ? censorConflictWarning(conflict.body, draft.body) : false;
 
-  return (
+  const editor = (
+    <Suspense
+      fallback={
+        <p className="text-sm text-muted" role="status">
+          {t('common.loading', { defaultValue: 'Loading…' })}
+        </p>
+      }
+    >
+      <NoteEditor
+        key={lockKey}
+        markdown={draft.body}
+        historyResetKey={historyResetKey}
+        editable={!gone && !censorFrozen}
+        onChange={(markdown) => setDraft((d) => ({ ...d, body: markdown }))}
+        onUploadFile={onUploadFile}
+        onOpenInternal={onOpenInternal}
+        searchNotes={searchNoteOptions}
+        searchTasks={searchTasks}
+        // Censoring ships as its own follow-up: without these callbacks the editor offers no
+        // Censor, Reveal or Remove action and existing tokens show as █████ only.
+        {...(CENSORING_ENABLED ? { onCensor, onCensoredBody, onReveal, onUncensor } : {})}
+        onProtectedCut={onProtectedCut}
+        onCensorSettled={onCensorSettled}
+        onRemoveCensorFailed={onRemoveCensorFailed}
+        onSerialized={onSerialized}
+        revealState={revealState}
+        onCloseReveal={() => reveal.close()}
+      />
+    </Suspense>
+  );
+
+  const leaveDialog = blocker.status === 'blocked' && (
+    <Dialog
+      open
+      onClose={() => blocker.reset()}
+      title={t('notes.leaveTitle', { defaultValue: 'Your latest changes are not saved' })}
+    >
+      <p className="text-sm text-muted">
+        {t('notes.leaveMessage', {
+          defaultValue:
+            "The note couldn't be saved. Retry, or discard your changes and leave this note.",
+        })}
+      </p>
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <Button variant="secondary" onClick={() => blocker.reset()}>
+          {t('notes.leaveStay', { defaultValue: 'Stay on this note' })}
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            guard.discard();
+            blocker.proceed();
+          }}
+        >
+          {t('notes.leaveDiscard', { defaultValue: 'Discard changes and leave' })}
+        </Button>
+        {status === 'conflict' ? (
+          // A navigation-triggered 409 has its own resolution path: close this dialog so the
+          // banner (Load theirs / Keep mine) is what the user acts on, not a blind retry.
+          <Button onClick={() => blocker.reset()}>
+            {t('notes.conflict.resolve', { defaultValue: 'Resolve conflict' })}
+          </Button>
+        ) : (
+          <Button onClick={() => void retrySave()} busy={retrying}>
+            {t('common.retry', { defaultValue: 'Try again' })}
+          </Button>
+        )}
+      </div>
+    </Dialog>
+  );
+
+  if (card) {
+    const busy = gone || conflict || conflictFetchFailed || unsafeBody || status !== 'saved';
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-1 px-3 pt-2">
+          <input
+            ref={titleRef}
+            type="text"
+            className="min-w-0 flex-1 bg-transparent py-1 font-semibold text-fg outline-none placeholder:text-muted"
+            aria-label={t('notes.titleLabel', { defaultValue: 'Note title' })}
+            placeholder={t('notes.untitled', { defaultValue: 'Untitled' })}
+            maxLength={200}
+            disabled={gone || censorFrozen}
+            value={draft.title}
+            onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+          />
+          <IconButton
+            label={
+              draft.pinned
+                ? t('notes.unpin', { defaultValue: 'Unpin' })
+                : t('notes.pin', { defaultValue: 'Pin' })
+            }
+            aria-pressed={draft.pinned}
+            onClick={() => setDraft((d) => ({ ...d, pinned: !d.pinned }))}
+            className={draft.pinned ? 'text-accent' : 'bk-note-card-hover'}
+          >
+            <StarIcon filled={draft.pinned} />
+          </IconButton>
+          <IconButton
+            label={t('notes.openFullScreen', { defaultValue: 'Open full screen' })}
+            className="bk-note-card-hover"
+            onClick={() => {
+              saveNoteFullScreen(true);
+              void navigate({ to: '/notes/$noteId', params: { noteId: note.id } });
+            }}
+          >
+            <ExpandIcon />
+          </IconButton>
+        </div>
+        {(gone || unsafeBody || conflict || conflictFetchFailed) && (
+          <div className="px-3 pt-1 text-xs">
+            {gone || unsafeBody ? (
+              <p className="text-danger" role="alert">
+                {saveLabel}
+              </p>
+            ) : (
+              <NoteConflictBanner
+                censorWarning={conflictCensorWarning}
+                busy={conflictBusy}
+                fetchFailed={conflictFetchFailed}
+                remoteRevision={conflict?.updatedAt ?? null}
+                onLoadTheirs={() => void loadTheirs()}
+                onRetryFetch={() => void resolveConflict()}
+                onKeepMine={(confirmedRevision) => void keepMine(confirmedRevision)}
+              />
+            )}
+          </div>
+        )}
+        <div className="bk-note-card-body min-h-0 flex-1 overflow-auto px-3">{editor}</div>
+        <div className="flex flex-wrap items-end justify-between gap-2 px-3 pb-2 pt-1">
+          <div className="flex min-w-0 flex-wrap gap-1">
+            {draft.tags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-surface-alt px-2 py-0.5 text-xs text-muted"
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+          <span className="ml-auto text-xs text-muted" aria-live="polite" role="status">
+            {busy ? (
+              saveLabel
+            ) : (
+              <time dateTime={note.updatedAt}>
+                {new Date(note.updatedAt).toLocaleString(localeTag())}
+              </time>
+            )}
+          </span>
+          {status === 'error' && !gone && !conflict && !censorFrozen && (
+            <Button variant="secondary" onClick={() => void retrySave()} busy={retrying}>
+              {t('notes.retrySave', { defaultValue: 'Retry save' })}
+            </Button>
+          )}
+        </div>
+        {passwordDialog}
+        {leaveDialog}
+      </div>
+    );
+  }
+
+  const page = (
     <Page wide>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Link to="/notes" className="text-sm text-muted hover:text-accent">
@@ -779,6 +989,17 @@ function NoteDetailInner({ note }: { note: Note }) {
         <span className="ml-auto text-xs text-muted" aria-live="polite" role="status">
           {saveLabel}
         </span>
+        <IconButton
+          label={
+            fullScreen
+              ? t('notes.exitFullScreen', { defaultValue: 'Exit full screen' })
+              : t('notes.fullScreen', { defaultValue: 'Full screen' })
+          }
+          aria-pressed={fullScreen}
+          onClick={toggleFullScreen}
+        >
+          {fullScreen ? <CollapseIcon /> : <ExpandIcon />}
+        </IconButton>
         {status === 'error' && !gone && !conflict && !censorFrozen && (
           <Button variant="secondary" onClick={() => void retrySave()} busy={retrying}>
             {t('notes.retrySave', { defaultValue: 'Retry save' })}
@@ -957,34 +1178,7 @@ function NoteDetailInner({ note }: { note: Note }) {
           onChange={(tags) => setDraft((d) => ({ ...d, tags }))}
         />
 
-        <Suspense
-          fallback={
-            <p className="text-sm text-muted" role="status">
-              {t('common.loading', { defaultValue: 'Loading…' })}
-            </p>
-          }
-        >
-          <NoteEditor
-            key={lockKey}
-            markdown={draft.body}
-            historyResetKey={historyResetKey}
-            editable={!gone && !censorFrozen}
-            onChange={(markdown) => setDraft((d) => ({ ...d, body: markdown }))}
-            onUploadFile={onUploadFile}
-            onOpenInternal={onOpenInternal}
-            searchNotes={searchNoteOptions}
-            searchTasks={searchTasks}
-            // Censoring ships as its own follow-up: without these callbacks the editor offers no
-            // Censor, Reveal or Remove action and existing tokens show as █████ only.
-            {...(CENSORING_ENABLED ? { onCensor, onCensoredBody, onReveal, onUncensor } : {})}
-            onProtectedCut={onProtectedCut}
-            onCensorSettled={onCensorSettled}
-            onRemoveCensorFailed={onRemoveCensorFailed}
-            onSerialized={onSerialized}
-            revealState={revealState}
-            onCloseReveal={() => reveal.close()}
-          />
-        </Suspense>
+        {editor}
       </div>
 
       <LinkedFrom note={note} />
@@ -1005,47 +1199,12 @@ function NoteDetailInner({ note }: { note: Note }) {
       />
       {passwordDialog}
 
-      {blocker.status === 'blocked' && (
-        <Dialog
-          open
-          onClose={() => blocker.reset()}
-          title={t('notes.leaveTitle', { defaultValue: 'Your latest changes are not saved' })}
-        >
-          <p className="text-sm text-muted">
-            {t('notes.leaveMessage', {
-              defaultValue:
-                "The note couldn't be saved. Retry, or discard your changes and leave this note.",
-            })}
-          </p>
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={() => blocker.reset()}>
-              {t('notes.leaveStay', { defaultValue: 'Stay on this note' })}
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                guard.discard();
-                blocker.proceed();
-              }}
-            >
-              {t('notes.leaveDiscard', { defaultValue: 'Discard changes and leave' })}
-            </Button>
-            {status === 'conflict' ? (
-              // A navigation-triggered 409 has its own resolution path: close this dialog so the
-              // banner (Load theirs / Keep mine) is what the user acts on, not a blind retry.
-              <Button onClick={() => blocker.reset()}>
-                {t('notes.conflict.resolve', { defaultValue: 'Resolve conflict' })}
-              </Button>
-            ) : (
-              <Button onClick={() => void retrySave()} busy={retrying}>
-                {t('common.retry', { defaultValue: 'Try again' })}
-              </Button>
-            )}
-          </div>
-        </Dialog>
-      )}
+      {leaveDialog}
     </Page>
   );
+
+  if (!fullScreen) return page;
+  return <div className="fixed inset-0 z-40 overflow-auto bg-bg">{page}</div>;
 }
 
 function SectionTitle({ children }: { children: ReactNode }) {

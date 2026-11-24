@@ -3,7 +3,8 @@ import type { NotePreviewBlock, NotePreviewRun } from '@bokydo/shared';
 /**
  * The formatted start of a note on its card: headings, emphasis, lists, quotes and code from the
  * server's `preview` (already redacted and bounded). Everything is rendered as text nodes; the
- * preview never contains HTML. Links are styled but not clickable, since the whole card is a link.
+ * preview never contains HTML. It stands in for the card until its editor loads, so links are
+ * styled but not clickable.
  */
 export function NotePreview({ blocks }: { blocks: NotePreviewBlock[] }) {
   return (

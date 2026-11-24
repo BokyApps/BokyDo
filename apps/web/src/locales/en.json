@@ -480,6 +480,7 @@
         "title": "No notes yet",
         "trash": "Trash is empty."
       },
+      "exitFullScreen": "Exit full screen",
       "export": {
         "label": "Export",
         "markdown": "Markdown",
@@ -488,6 +489,7 @@
         "word": "Word"
       },
       "files": "Files",
+      "fullScreen": "Full screen",
       "gone": "This note was deleted — copy your text",
       "leaveDiscard": "Discard changes and leave",
       "leaveMessage": "The note couldn't be saved. Retry, or discard your changes and leave this note.",
@@ -507,6 +509,7 @@
       "newFirst": "Create your first note",
       "newFromTask": "New note from task",
       "noLinkedTasks": "No tasks linked yet.",
+      "openFullScreen": "Open full screen",
       "other": "Notes",
       "picker": {
         "empty": "No results",

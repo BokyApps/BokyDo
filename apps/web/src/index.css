@@ -551,3 +551,110 @@ body {
   resize: vertical;
   tab-size: 2;
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * Notes board: cards on a dotted canvas, each edited in place and resizable from its corner.
+ * The card's toolbar only shows while the card has focus, docked to the bottom so the text does
+ * not move when it appears.
+ * ------------------------------------------------------------------------------------------ */
+.bk-notes-canvas {
+  padding: 1rem;
+  border: 1px solid var(--bk-border);
+  border-radius: 0.9rem;
+  background-color: var(--bk-bg);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--bk-muted) 35%, transparent) 1px,
+    transparent 1.2px
+  );
+  background-size: 22px 22px;
+}
+.bk-notes-board {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.bk-note-card {
+  display: flex;
+  flex-direction: column;
+  width: 20rem;
+  height: 18rem;
+  min-width: 12rem;
+  min-height: 7rem;
+  max-width: 100%;
+  overflow: hidden;
+  resize: both;
+  border: 1px solid var(--bk-border);
+  border-radius: 0.75rem;
+  background: var(--bk-surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  transition: border-color 120ms ease;
+}
+.bk-note-card:hover {
+  border-color: color-mix(in srgb, var(--bk-accent) 45%, var(--bk-border));
+}
+.bk-note-card:focus-within {
+  border-color: var(--bk-accent);
+}
+.bk-note-card .bk-note-card-hover {
+  opacity: 0;
+}
+.bk-note-card:hover .bk-note-card-hover,
+.bk-note-card:focus-within .bk-note-card-hover {
+  opacity: 1;
+}
+@media (hover: none) {
+  .bk-note-card .bk-note-card-hover {
+    opacity: 1;
+  }
+}
+.bk-note-card-body {
+  display: flex;
+  flex-direction: column;
+}
+.bk-note-card .bk-note-editor {
+  flex: 1 0 auto;
+  gap: 0.35rem;
+}
+.bk-note-card .bk-note-toolbar-wrap {
+  order: 2;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding-bottom: 0.25rem;
+  background: var(--bk-surface);
+}
+.bk-note-card:not(:focus-within) .bk-note-toolbar-wrap {
+  display: none;
+}
+.bk-note-card .bk-note-toolbar {
+  gap: 0;
+  padding: 0.1rem;
+}
+.bk-note-card .bk-tool-button {
+  min-width: 1.75rem;
+  height: 1.75rem;
+  font-size: 0.8rem;
+}
+.bk-note-card .bk-wysiwyg-wrap {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  background: transparent;
+}
+.bk-note-card .bk-wysiwyg-wrap > div {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.bk-note-card .bk-note-prosemirror {
+  flex: 1 0 auto;
+  min-height: 3rem;
+  padding: 0.15rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+.bk-note-card .bk-note-textarea {
+  flex: 1 0 auto;
+  min-height: 8rem;
+}
