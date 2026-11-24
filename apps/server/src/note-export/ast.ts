@@ -1,4 +1,10 @@
-import { CENSOR_PLACEHOLDER, parseEmbedUrl, redactCensored, safeHref } from '@bokydo/shared';
+import {
+  CENSOR_PLACEHOLDER,
+  parseEmbedUrl,
+  redactCensored,
+  safeHref,
+  splitMediaWidth,
+} from '@bokydo/shared';
 import MarkdownIt, { type Token } from 'markdown-it';
 import { TooLargeError, checkBodyShape } from './limits.js';
 
@@ -234,7 +240,8 @@ function parseInline(children: readonly Token[] | null): Run[] {
         const src = String(token.attrGet('src') ?? '');
         runs.push({
           kind: 'image',
-          alt: token.content,
+          // A display width (`alt|300`) is for the editor; exports use the plain alt text.
+          alt: splitMediaWidth(token.content).label,
           src,
           fileId: noteFileId(src),
         });
@@ -292,7 +299,7 @@ function embedFromRuns(runs: Run[]): EmbedBlock | null {
   if (!embed) return null;
   return {
     type: 'embed',
-    label: label.trim() || embed.openUrl,
+    label: splitMediaWidth(label).label.trim() || embed.openUrl,
     openUrl: embed.openUrl,
     provider: embed.provider,
   };

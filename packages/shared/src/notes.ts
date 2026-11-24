@@ -375,6 +375,30 @@ const SNIPPET_FENCE = /^\s{0,3}(?:`{3,}|~{3,})/;
 const isTableRule = (line: string): boolean => line.includes('---') && /^[\s|:-]+$/.test(line);
 const SNIPPET_BLOCK_PREFIX = /^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d{1,9}[.)]\s+)/;
 /** `[label](dest)` and `![alt](src)`, bounded so a hostile line cannot backtrack for long. */
+/**
+ * A display width on an image or embed, written the way Obsidian does: `![alt|300](…)` and
+ * `::embed[label|480](…)`. Only a trailing `|` and a plausible pixel width counts, so ordinary
+ * text with a pipe in it stays text. Shared so the editor, previews and exports all agree.
+ */
+export const MEDIA_WIDTH_MIN = 48;
+export const MEDIA_WIDTH_MAX = 4000;
+
+export function splitMediaWidth(label: string): { label: string; width: number | null } {
+  const bar = label.lastIndexOf('|');
+  if (bar < 0) return { label, width: null };
+  const digits = label.slice(bar + 1);
+  if (!/^\d{2,4}$/.test(digits)) return { label, width: null };
+  const width = Number(digits);
+  if (width < MEDIA_WIDTH_MIN || width > MEDIA_WIDTH_MAX) return { label, width: null };
+  return { label: label.slice(0, bar), width };
+}
+
+/** A width the editor may store, or null (no width: the media's natural size, up to the column). */
+export function clampMediaWidth(width: unknown): number | null {
+  if (typeof width !== 'number' || !Number.isFinite(width)) return null;
+  return Math.min(MEDIA_WIDTH_MAX, Math.max(MEDIA_WIDTH_MIN, Math.round(width)));
+}
+
 const SNIPPET_LINK = /!?\[([^\]\n]{0,500})\]\([^)\n]{0,2100}\)/g;
 const SNIPPET_ENTITIES: Record<string, string> = {
   '&nbsp;': ' ',
@@ -392,7 +416,9 @@ function snippetLine(raw: string): string {
   let line = raw.slice(0, SNIPPET_LINE_CHARS).replace(/^::embed(?=\[)/, '');
   for (let i = 0; i < 4 && SNIPPET_BLOCK_PREFIX.test(line); i++)
     line = line.replace(SNIPPET_BLOCK_PREFIX, '');
-  line = line.replace(SNIPPET_LINK, '$1').replace(APP_URL, ' ');
+  line = line
+    .replace(SNIPPET_LINK, (_m, label: string) => splitMediaWidth(label).label)
+    .replace(APP_URL, ' ');
   let out = '';
   let inCode = false;
   for (let i = 0; i < line.length; i++) {

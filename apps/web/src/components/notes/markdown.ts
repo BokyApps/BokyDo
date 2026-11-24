@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion --
    Index access below is bounds-checked by the surrounding loop/length conditions. */
-import { safeHref } from '@bokydo/shared';
+import { clampMediaWidth, safeHref, splitMediaWidth } from '@bokydo/shared';
 import type { JSONContent } from '@tiptap/core';
 import MarkdownIt, { type Env, type StateBlock, type StateInline, type Token } from 'markdown-it';
 import { parseToken } from '../../lib/censor.js';
@@ -123,6 +123,12 @@ function escapeText(text: string, atLineStart: boolean): string {
 
 function escapeLabel(text: string): string {
   return escapeText(text, false).replace(/\r?\n/g, ' ');
+}
+
+/** `|300` after an image alt or embed label, when the user has sized it. */
+function mediaWidthSuffix(width: unknown): string {
+  const clamped = width === null || width === undefined ? null : clampMediaWidth(width);
+  return clamped === null ? '' : `|${clamped}`;
 }
 
 function serializeHref(href: string): string {
@@ -428,7 +434,12 @@ function parseInlineChildren(children: Token[], initialMarks: Mark[] = []): JSON
         const alt = t.content;
         const cls = classifyHref(src);
         if (cls.kind === 'file') {
-          out.push({ type: 'noteImage', attrs: { id: cls.id, alt }, ...withMarks(marks) });
+          // `![alt|300](…)`: the Obsidian-style display width.
+          const sized = splitMediaWidth(alt);
+          const attrs = sized.width
+            ? { id: cls.id, alt: sized.label, width: sized.width }
+            : { id: cls.id, alt };
+          out.push({ type: 'noteImage', attrs, ...withMarks(marks) });
         } else {
           // Unsafe/foreign image src: show the literal markdown as text, never an <img>.
           pushText(`![${alt}](${src})`);
@@ -633,9 +644,13 @@ function readBlock(
       const raw = typeof meta.raw === 'string' ? meta.raw : formatEmbedLine(label, url);
       // The block rule only marks allow-listed URLs as `valid`; this is defence in depth so a
       // future rule change cannot create a node the renderer refuses.
+      const sized = splitMediaWidth(label);
       return {
         node: parseEmbedUrl(url)
-          ? { type: 'embed', attrs: { label, url } }
+          ? {
+              type: 'embed',
+              attrs: sized.width ? { label: sized.label, url, width: sized.width } : { label, url },
+            }
           : invalidEmbedParagraph(label, url, raw),
         next: i + 1,
         map,
@@ -817,7 +832,7 @@ function pieceFor(node: JSONContent, atLineStart: boolean): string | null {
         ? String(node.attrs.token)
         : CENSORED_PLACEHOLDER;
     case 'noteImage':
-      return `![${escapeLabel(String(node.attrs?.alt ?? ''))}](${NOTE_FILE_PREFIX}${isValidNoteFileId(node.attrs?.id) ? node.attrs.id : ''})`;
+      return `![${escapeLabel(String(node.attrs?.alt ?? ''))}${mediaWidthSuffix(node.attrs?.width)}](${NOTE_FILE_PREFIX}${isValidNoteFileId(node.attrs?.id) ? node.attrs.id : ''})`;
     case 'fileChip':
       return `[${escapeLabel(String(node.attrs?.name ?? ''))}](${NOTE_FILE_PREFIX}${isValidNoteFileId(node.attrs?.id) ? node.attrs.id : ''})`;
     case 'internalChip':
@@ -1141,7 +1156,9 @@ function serializeBlock(node: JSONContent, marker: ListMarker = 'a'): string {
     case 'embed': {
       const label = String(node.attrs?.label ?? '');
       const url = String(node.attrs?.url ?? '');
-      return isValidEmbedUrl(url) ? formatEmbedLine(label, url) : label || url;
+      return isValidEmbedUrl(url)
+        ? formatEmbedLine(`${label}${mediaWidthSuffix(node.attrs?.width)}`, url)
+        : label || url;
     }
     case 'noteUpload':
       return ''; // transient upload placeholder is never persisted to Markdown
@@ -1527,7 +1544,10 @@ function sanitizeElement(el: Element): void {
           name === 'data-colwidth'));
     if (unsafeName) {
       el.removeAttribute(attr.name);
-    } else if (tag === 'img' && !['src', 'alt', 'data-note-image', 'data-id'].includes(name)) {
+    } else if (
+      tag === 'img' &&
+      !['src', 'alt', 'data-note-image', 'data-id', 'data-width'].includes(name)
+    ) {
       el.removeAttribute(attr.name);
     } else if (
       (tag === 'a' || tag === 'span' || tag === 'div') &&

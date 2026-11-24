@@ -8,6 +8,7 @@ import {
   parseCensorToken,
   parseEmbedUrl,
   redactCensored,
+  splitMediaWidth,
   toSearchText,
   utf8Length,
 } from './notes.js';
@@ -330,5 +331,20 @@ describe('embeds', () => {
       `https://www.youtube.com/watch?v=${'a'.repeat(3000)}`,
     ])
       expect(parseEmbedUrl(url), url).toBeNull();
+  });
+});
+
+describe('media widths', () => {
+  it('reads an Obsidian-style width and leaves other pipes alone', () => {
+    expect(splitMediaWidth('photo|300')).toEqual({ label: 'photo', width: 300 });
+    expect(splitMediaWidth('a|b|640')).toEqual({ label: 'a|b', width: 640 });
+    for (const label of ['photo', 'a|b', 'x|5', 'x|99999', 'x|300px', 'x|'])
+      expect(splitMediaWidth(label)).toEqual({ label, width: null });
+  });
+
+  it('keeps sizes out of snippets', () => {
+    expect(
+      noteSnippet('![photo|300](/api/v1/note-files/123e4567-e89b-12d3-a456-426614174000) caption'),
+    ).toBe('photo caption');
   });
 });

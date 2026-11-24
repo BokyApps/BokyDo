@@ -74,3 +74,13 @@ describe('note card preview', () => {
     ]);
   });
 });
+
+describe('sized media in the preview', () => {
+  it('shows the alt text and embed label without the width', () => {
+    const blocks = notePreview(
+      '![photo|300](/api/v1/note-files/123e4567-e89b-12d3-a456-426614174000)\n\n::embed[Talk|480](https://www.youtube.com/watch?v=dQw4w9WgXcQ)',
+    );
+    const text = blocks.map((block) => block.runs.map((run) => run.text).join(''));
+    expect(text).toEqual(['photo', '▶ Talk']);
+  });
+});

@@ -658,3 +658,41 @@ body {
   flex: 1 0 auto;
   min-height: 8rem;
 }
+
+/* Resizable images and embeds in a note: a corner handle while editing. ------------------- */
+span.bk-media-sized {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+}
+span.bk-media-sized > img.bk-note-image {
+  display: block;
+  width: 100%;
+}
+.bk-embed-card.bk-media-sized {
+  position: relative;
+  max-width: 100%;
+}
+.bk-media-handle {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bk-surface);
+  border-radius: 4px;
+  background: var(--bk-accent);
+  cursor: nwse-resize;
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 120ms ease;
+}
+.bk-media-sized:hover > .bk-media-handle,
+.ProseMirror-selectednode .bk-media-handle,
+.bk-media-handle:focus-visible {
+  opacity: 1;
+}
+.ProseMirror[contenteditable='false'] .bk-media-handle {
+  display: none;
+}

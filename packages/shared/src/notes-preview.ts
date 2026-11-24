@@ -1,6 +1,7 @@
 import MarkdownIt, { type Token } from 'markdown-it';
 import {
   redactCensored,
+  splitMediaWidth,
   type NotePreviewBlock,
   type NotePreviewKind,
   type NotePreviewRun,
@@ -74,7 +75,7 @@ function inlineRuns(token: Token): NotePreviewRun[] {
         push(runFor('\n', marks));
         break;
       case 'image':
-        push(runFor(child.content || 'image', { ...marks, italic: 1 }));
+        push(runFor(splitMediaWidth(child.content).label || 'image', { ...marks, italic: 1 }));
         break;
       case 'strong_open':
         marks.bold++;
@@ -108,6 +109,8 @@ function inlineRuns(token: Token): NotePreviewRun[] {
   // A `::embed[label](url)` line shows as a play marker and its label.
   if (first && !first.link && first.text.startsWith(EMBED_PREFIX) && runs.length > 1) {
     first.text = `▶ ${first.text.slice(EMBED_PREFIX.length)}`;
+    const last = runs.at(-1);
+    if (last?.link) last.text = splitMediaWidth(last.text).label;
   }
   return runs;
 }

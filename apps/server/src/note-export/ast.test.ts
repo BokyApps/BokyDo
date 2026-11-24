@@ -143,6 +143,14 @@ describe('note export AST', () => {
     );
   });
 
+  it('exports sized images and embeds under their plain alt text and label', () => {
+    const { blocks } = parseNoteBody(
+      `![photo|300](/api/v1/note-files/${FILE_ID})\n\n::embed[Talk|480](https://youtu.be/dQw4w9WgXcQ)\n`,
+    );
+    expect(only(blocks, 'image')).toMatchObject({ fileId: FILE_ID, alt: 'photo' });
+    expect(only(blocks, 'embed')).toMatchObject({ label: 'Talk' });
+  });
+
   it('turns bokydo links into app links and drops unsafe schemes', () => {
     const { blocks } = parseNoteBody(
       `[a](bokydo:note/${NOTE_ID}) [b](bokydo:task/${TASK_ID}) [c](javascript:alert(1)) [d](https://example.com)\n`,

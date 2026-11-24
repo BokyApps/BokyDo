@@ -33,6 +33,12 @@ export const CORPUS: [string, string][] = [
   ['file chip', `[report.pdf](/api/v1/note-files/${UUID})`],
   ['internal note link', `[a note](bokydo:note/${UUID})`],
   ['valid embed', '::embed[My video](https://www.youtube.com/watch?v=dQw4w9WgXcQ)'],
+  ['sized note image', `![alt text|320](/api/v1/note-files/${UUID})`],
+  [
+    'sized image in a table cell',
+    `| a | ![pic\\|200](/api/v1/note-files/${UUID}) |\n| --- | --- |`,
+  ],
+  ['sized embed', '::embed[My video|480](https://www.youtube.com/watch?v=dQw4w9WgXcQ)'],
   ['censored token', `before ${VALID} after`],
   ['soft break', 'soft\nbreak inside a paragraph'],
   [

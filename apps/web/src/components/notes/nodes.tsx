@@ -1,3 +1,4 @@
+import { clampMediaWidth, MEDIA_WIDTH_MIN } from '@bokydo/shared';
 import { Mark, mergeAttributes, Node, type NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import {
@@ -6,6 +7,8 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyUncensored, clearRemovalMark, markCensoredForRemoval } from './censor-command.js';
@@ -74,6 +77,161 @@ export const SafeLink = Mark.create({
 // Note-file image: only /api/v1/note-files/<uuid>(\?inline=1)? is ever rendered as an <img>.
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Resizable media. An image or embed can be given a display width by dragging its corner handle
+// (or with the arrow keys on the handle); it is saved in the Markdown the way Obsidian writes it,
+// `![alt|300](…)` / `::embed[label|480](…)`. A double-click on the handle goes back to the
+// natural size. The handle only shows while the editor is editable.
+// ---------------------------------------------------------------------------------------------
+
+/** The width a pasted or copied element carries in `data-width`. */
+function widthFromDom(el: HTMLElement): number | null {
+  const raw = el.getAttribute('data-width');
+  return raw && /^\d{1,4}$/.test(raw) ? clampMediaWidth(Number(raw)) : null;
+}
+
+const widthAttribute = {
+  default: null,
+  parseHTML: (el: HTMLElement) => widthFromDom(el),
+  // The node's own renderHTML writes `data-width`; nothing else may reach the DOM.
+  renderHTML: () => ({}),
+};
+
+const KEY_STEP = 20;
+
+export function MediaResizeHandle({
+  target,
+  width,
+  canEdit,
+  onResize,
+}: {
+  target: RefObject<HTMLElement | null>;
+  width: number | null;
+  /** Read at event time: the editor's editable flag can change without re-rendering this view. */
+  canEdit: () => boolean;
+  onResize: (width: number | null) => void;
+}) {
+  const { t } = useTranslation();
+  /** The widest the media can be shown: the editor column it sits in. */
+  const columnWidth = (el: HTMLElement) =>
+    el.closest('.ProseMirror')?.clientWidth ?? Number.POSITIVE_INFINITY;
+  const fit = (el: HTMLElement, value: number) =>
+    clampMediaWidth(Math.min(value, Math.max(MEDIA_WIDTH_MIN, columnWidth(el))));
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const el = target.current;
+    if (!el || !canEdit() || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const handle = event.currentTarget;
+    const startX = event.clientX;
+    const startWidth = el.getBoundingClientRect().width;
+    const before = el.style.width;
+    let next: number | null = null;
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Not every pointer can be captured (a synthetic one); moves still reach the handle.
+    }
+    const move = (e: PointerEvent) => {
+      next = fit(el, startWidth + e.clientX - startX);
+      if (next !== null) el.style.width = `${next}px`;
+    };
+    const finish = (commit: boolean) => (e: PointerEvent) => {
+      if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onCancel);
+      if (commit && next !== null) onResize(next);
+      else el.style.width = before;
+    };
+    const onUp = finish(true);
+    const onCancel = finish(false);
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onCancel);
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    const el = target.current;
+    if (!el || !canEdit()) return;
+    const current = width ?? el.getBoundingClientRect().width;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      event.stopPropagation();
+      onResize(fit(el, current + (event.key === 'ArrowRight' ? KEY_STEP : -KEY_STEP)));
+    } else if (event.key === 'Escape' || event.key === 'Delete' || event.key === 'Backspace') {
+      // Keys on the handle never reach the editor (they would delete the media).
+      event.stopPropagation();
+      if (event.key !== 'Escape') {
+        event.preventDefault();
+        onResize(null);
+      }
+    }
+  };
+
+  return (
+    <span
+      role="slider"
+      tabIndex={0}
+      aria-label={t('notes.editor.resizeMedia', { defaultValue: 'Resize' })}
+      aria-valuemin={MEDIA_WIDTH_MIN}
+      aria-valuemax={4000}
+      aria-valuenow={width ?? undefined}
+      aria-valuetext={
+        width ? `${width}px` : t('notes.editor.naturalSize', { defaultValue: 'Natural size' })
+      }
+      title={t('notes.editor.resizeHint', {
+        defaultValue: 'Drag to resize. Double-click for the natural size.',
+      })}
+      className="bk-media-handle"
+      contentEditable={false}
+      onPointerDown={onPointerDown}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (canEdit()) onResize(null);
+      }}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
+export function NoteImageView({ node, editor, updateAttributes }: NodeViewProps) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const id = isValidNoteFileId(node.attrs.id) ? String(node.attrs.id) : '';
+  const width = clampMediaWidth(node.attrs.width);
+  if (!id) {
+    return (
+      <NodeViewWrapper as="span" className="bk-note-image-missing">
+        {CENSORED_PLACEHOLDER}
+      </NodeViewWrapper>
+    );
+  }
+  return (
+    <NodeViewWrapper
+      as="span"
+      ref={ref}
+      className="bk-media-sized"
+      style={width ? { width } : undefined}
+    >
+      <img
+        data-note-image="1"
+        data-id={id}
+        src={`${NOTE_FILE_PREFIX}${id}?inline=1`}
+        alt={domString(node.attrs.alt)}
+        className="bk-note-image"
+      />
+      <MediaResizeHandle
+        target={ref}
+        width={width}
+        canEdit={() => editor.isEditable}
+        onResize={(next) => updateAttributes({ width: next })}
+      />
+    </NodeViewWrapper>
+  );
+}
+
 export const NoteImage = Node.create({
   name: 'noteImage',
   group: 'inline',
@@ -81,7 +239,7 @@ export const NoteImage = Node.create({
   atom: true,
   selectable: true,
   addAttributes() {
-    return { id: { default: '' }, alt: { default: '' } };
+    return { id: { default: '' }, alt: { default: '' }, width: widthAttribute };
   },
   parseHTML() {
     return [
@@ -96,7 +254,7 @@ export const NoteImage = Node.create({
           const dataId = el.getAttribute('data-id');
           // If a data-id is present it must agree with the (only trusted) src.
           if (dataId && dataId !== id) return false;
-          return { id, alt: el.getAttribute('alt') ?? '' };
+          return { id, alt: el.getAttribute('alt') ?? '', width: widthFromDom(el) };
         },
       },
     ];
@@ -104,16 +262,21 @@ export const NoteImage = Node.create({
   renderHTML({ node, HTMLAttributes }) {
     const id = isValidNoteFileId(node.attrs.id) ? node.attrs.id : '';
     if (!id) return ['span', { class: 'bk-note-image-missing' }, CENSORED_PLACEHOLDER];
+    const width = clampMediaWidth(node.attrs.width);
     return [
       'img',
       mergeAttributes(HTMLAttributes, {
         'data-note-image': '1',
         'data-id': id,
+        ...(width ? { 'data-width': String(width) } : {}),
         src: `${NOTE_FILE_PREFIX}${id}?inline=1`,
         alt: domString(node.attrs.alt),
         class: 'bk-note-image',
       }),
     ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(NoteImageView);
   },
 });
 
@@ -396,9 +559,20 @@ export const Censored = Node.create({
 // Embed atom: click-to-load, credentialless iframe, always-present "Open in new tab" link.
 // ---------------------------------------------------------------------------------------------
 
-export function EmbedView({ node }: NodeViewProps) {
+export function EmbedView({ node, editor, updateAttributes }: NodeViewProps) {
   const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const width = clampMediaWidth(node.attrs.width);
+  const sized = width ? { width } : undefined;
+  const handle = (
+    <MediaResizeHandle
+      target={cardRef}
+      width={width}
+      canEdit={() => editor.isEditable}
+      onResize={(next) => updateAttributes({ width: next })}
+    />
+  );
   const label = domString(node.attrs.label);
   const url = domString(node.attrs.url);
   const embed = parseEmbedUrl(url);
@@ -452,18 +626,31 @@ export function EmbedView({ node }: NodeViewProps) {
 
   if (playing && canPlay) {
     return (
-      <NodeViewWrapper as="div" className="bk-embed-card" contentEditable={false}>
+      <NodeViewWrapper
+        as="div"
+        ref={cardRef}
+        className="bk-embed-card bk-media-sized"
+        style={sized}
+        contentEditable={false}
+      >
         <div ref={hostRef} className="bk-embed-frame-host" contentEditable={false} />
         <div className="bk-embed-footer">
           <span className="bk-embed-label">{label || providerLabel}</span>
           {openLink}
         </div>
+        {handle}
       </NodeViewWrapper>
     );
   }
 
   return (
-    <NodeViewWrapper as="div" className="bk-embed-card" contentEditable={false}>
+    <NodeViewWrapper
+      as="div"
+      ref={cardRef}
+      className="bk-embed-card bk-media-sized"
+      style={sized}
+      contentEditable={false}
+    >
       <div className="bk-embed-head">
         <span className="bk-embed-provider">{providerLabel}</span>
         <span className="bk-embed-label">{label || embed.id}</span>
@@ -480,6 +667,7 @@ export function EmbedView({ node }: NodeViewProps) {
         </p>
       )}
       <div className="bk-embed-footer">{openLink}</div>
+      {handle}
     </NodeViewWrapper>
   );
 }
@@ -490,7 +678,7 @@ export const Embed = Node.create({
   atom: true,
   selectable: true,
   addAttributes() {
-    return { label: { default: '' }, url: { default: '' } };
+    return { label: { default: '' }, url: { default: '' }, width: widthAttribute };
   },
   parseHTML() {
     return [
@@ -500,7 +688,7 @@ export const Embed = Node.create({
           if (typeof el === 'string') return false;
           const url = el.getAttribute('data-url') ?? '';
           if (!isValidEmbedUrl(url)) return false;
-          return { label: el.getAttribute('data-label') ?? '', url };
+          return { label: el.getAttribute('data-label') ?? '', url, width: widthFromDom(el) };
         },
       },
     ];
@@ -515,6 +703,9 @@ export const Embed = Node.create({
         'data-embed': '1',
         'data-label': label,
         'data-url': url,
+        ...(clampMediaWidth(node.attrs.width)
+          ? { 'data-width': String(clampMediaWidth(node.attrs.width)) }
+          : {}),
         class: 'bk-embed-card',
       }),
       label || url,
