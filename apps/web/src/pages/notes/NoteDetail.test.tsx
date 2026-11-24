@@ -15,13 +15,14 @@ const router = vi.hoisted(() => ({
   blocker: { status: 'idle' as 'idle' | 'blocked' },
   proceed: vi.fn(),
   reset: vi.fn(),
+  navigate: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, className }: { children?: ReactNode; className?: string }) => (
     <a className={className}>{children}</a>
   ),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => router.navigate,
   useBlocker: () => ({
     status: router.blocker.status,
     proceed: router.proceed,
@@ -357,6 +358,19 @@ describe('a note edited on its card', () => {
     await act(async () => open?.click());
     expect(localStorage.getItem('bokydo.notes.fullScreen')).toBe('1');
     localStorage.clear();
+  });
+
+  it('minimising a full-screen note goes back to the board', async () => {
+    localStorage.setItem('bokydo.notes.fullScreen', '1');
+    router.navigate.mockClear();
+    await render();
+    const minimise = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Minimise to card"]',
+    );
+    expect(minimise).not.toBeNull();
+    await act(async () => minimise?.click());
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/notes' });
+    expect(localStorage.getItem('bokydo.notes.fullScreen')).toBeNull();
   });
 });
 

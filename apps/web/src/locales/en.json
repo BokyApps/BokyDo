@@ -480,7 +480,6 @@
         "title": "No notes yet",
         "trash": "Trash is empty."
       },
-      "exitFullScreen": "Exit full screen",
       "export": {
         "label": "Export",
         "markdown": "Markdown",
@@ -505,6 +504,7 @@
       "linkTaskSearch": "Search tasks",
       "loadMore": "Load more",
       "lock": "Lock censored text",
+      "minimise": "Minimise to card",
       "new": "New note",
       "newFirst": "Create your first note",
       "newFromTask": "New note from task",

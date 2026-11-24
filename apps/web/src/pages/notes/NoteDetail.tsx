@@ -154,9 +154,19 @@ function NoteDetailInner({
   const { t } = useTranslation();
   const card = variant === 'card';
   const [fullScreen, setFullScreen] = useState(readNoteFullScreen);
+  /**
+   * Full screen is entered from a card or from the page, and minimising always returns to the
+   * board, where the note is back on its card (leaving it on the normal page looked like nothing
+   * happened).
+   */
   const toggleFullScreen = () => {
-    saveNoteFullScreen(!fullScreen);
-    setFullScreen(!fullScreen);
+    if (fullScreen) {
+      saveNoteFullScreen(false);
+      void navigate({ to: '/notes' });
+      return;
+    }
+    saveNoteFullScreen(true);
+    setFullScreen(true);
   };
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -992,7 +1002,7 @@ function NoteDetailInner({
         <IconButton
           label={
             fullScreen
-              ? t('notes.exitFullScreen', { defaultValue: 'Exit full screen' })
+              ? t('notes.minimise', { defaultValue: 'Minimise to card' })
               : t('notes.fullScreen', { defaultValue: 'Full screen' })
           }
           aria-pressed={fullScreen}
