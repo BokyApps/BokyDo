@@ -72,6 +72,7 @@ import { useSyncState } from '../../lib/sync.js';
 import { useToast } from '../../lib/toasts.js';
 import { liveTasks } from '../../lib/views.js';
 import { usePasswordPrompt } from './PasswordDialog.js';
+import { NoteCardTitlebar } from './NoteCardTitlebar.js';
 import { NoteConflictBanner } from './NoteConflictBanner.js';
 import { ResourcePicker, type PickerItem } from './ResourcePicker.js';
 import { TagEditor } from './TagEditor.js';
@@ -168,10 +169,6 @@ function NoteDetailInner({
     saveNoteFullScreen(true);
     setFullScreen(true);
   };
-  const titleRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (autoFocus) titleRef.current?.focus();
-  }, [autoFocus]);
   const client = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
@@ -903,41 +900,39 @@ function NoteDetailInner({
     const busy = gone || conflict || conflictFetchFailed || unsafeBody || status !== 'saved';
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-1 px-3 pt-2">
-          <input
-            ref={titleRef}
-            type="text"
-            className="min-w-0 flex-1 bg-transparent py-1 font-semibold text-fg outline-none placeholder:text-muted"
-            aria-label={t('notes.titleLabel', { defaultValue: 'Note title' })}
-            placeholder={t('notes.untitled', { defaultValue: 'Untitled' })}
-            maxLength={200}
-            disabled={gone || censorFrozen}
-            value={draft.title}
-            onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-          />
-          <IconButton
-            label={
-              draft.pinned
-                ? t('notes.unpin', { defaultValue: 'Unpin' })
-                : t('notes.pin', { defaultValue: 'Pin' })
-            }
-            aria-pressed={draft.pinned}
-            onClick={() => setDraft((d) => ({ ...d, pinned: !d.pinned }))}
-            className={draft.pinned ? 'text-accent' : 'bk-note-card-hover'}
-          >
-            <StarIcon filled={draft.pinned} />
-          </IconButton>
-          <IconButton
-            label={t('notes.openFullScreen', { defaultValue: 'Open full screen' })}
-            className="bk-note-card-hover"
-            onClick={() => {
-              saveNoteFullScreen(true);
-              void navigate({ to: '/notes/$noteId', params: { noteId: note.id } });
-            }}
-          >
-            <ExpandIcon />
-          </IconButton>
-        </div>
+        <NoteCardTitlebar
+          title={draft.title}
+          startRenaming={autoFocus}
+          onRename={
+            gone || censorFrozen ? undefined : (title) => setDraft((d) => ({ ...d, title }))
+          }
+          actions={
+            <>
+              <IconButton
+                label={
+                  draft.pinned
+                    ? t('notes.unpin', { defaultValue: 'Unpin' })
+                    : t('notes.pin', { defaultValue: 'Pin' })
+                }
+                aria-pressed={draft.pinned}
+                onClick={() => setDraft((d) => ({ ...d, pinned: !d.pinned }))}
+                className={draft.pinned ? 'text-accent' : 'bk-note-card-hover'}
+              >
+                <StarIcon filled={draft.pinned} />
+              </IconButton>
+              <IconButton
+                label={t('notes.openFullScreen', { defaultValue: 'Open full screen' })}
+                className="bk-note-card-hover"
+                onClick={() => {
+                  saveNoteFullScreen(true);
+                  void navigate({ to: '/notes/$noteId', params: { noteId: note.id } });
+                }}
+              >
+                <ExpandIcon />
+              </IconButton>
+            </>
+          }
+        />
         {(gone || unsafeBody || conflict || conflictFetchFailed) && (
           <div className="px-3 pt-1 text-xs">
             {gone || unsafeBody ? (

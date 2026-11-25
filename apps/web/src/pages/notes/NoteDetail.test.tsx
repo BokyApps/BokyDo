@@ -341,12 +341,39 @@ describe('a note edited on its card', () => {
   it('saves title and body edits with the same revision guard as the page', async () => {
     await renderCard();
     expect(container.textContent).not.toContain('Move to trash');
+    // The title is shown in the card's title bar; double-click it to rename, Enter to finish.
+    expect(container.querySelector('input[aria-label="Note title"]')).toBeNull();
+    const handle = container.querySelector('.bk-note-card-handle');
+    await act(async () => handle?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
     await type(title(), 'Card title');
+    await act(async () =>
+      title().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+    );
+    expect(container.querySelector('input[aria-label="Note title"]')).toBeNull();
+    expect(container.querySelector('.bk-note-card-handle')?.textContent).toBe('Card title');
     await type(body(), 'Card body');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(800);
     });
     expect(patchCalls).toEqual([{ title: 'Card title', body: 'Card body', expectedUpdatedAt: R1 }]);
+  });
+
+  it('Escape abandons a rename', async () => {
+    await renderCard();
+    const handle = container.querySelector<HTMLElement>('.bk-note-card-handle');
+    const before = handle?.textContent;
+    await act(async () =>
+      handle?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true })),
+    );
+    await type(title(), 'Not this');
+    await act(async () =>
+      title().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    );
+    expect(container.querySelector('.bk-note-card-handle')?.textContent).toBe(before);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(patchCalls).toEqual([]);
   });
 
   it('opens the full note in full screen', async () => {

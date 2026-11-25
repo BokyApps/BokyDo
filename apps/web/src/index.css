@@ -583,12 +583,117 @@ body {
   min-height: 7rem;
   max-width: 100%;
   overflow: hidden;
-  resize: both;
+  position: relative;
   border: 1px solid var(--bk-border);
   border-radius: 0.75rem;
   background: var(--bk-surface);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
   transition: border-color 120ms ease;
+}
+.bk-note-card-dragging {
+  z-index: 20;
+  opacity: 0.9;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.28);
+}
+/* The title bar: drag it to move the card, double-click to rename. */
+.bk-note-card-titlebar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 2.25rem;
+  padding: 0.15rem 0.35rem 0.15rem 0.75rem;
+  border-bottom: 1px solid var(--bk-border);
+  background: var(--bk-surface-alt);
+}
+.bk-note-card-handle {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  border-radius: 0.25rem;
+}
+.bk-note-card-dragging .bk-note-card-handle {
+  cursor: grabbing;
+}
+.bk-note-card-handle:focus-visible {
+  outline: 2px solid var(--bk-accent);
+  outline-offset: 1px;
+}
+/* Resize from any edge or corner: thin invisible strips along the border. */
+.bk-card-edge {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+.bk-card-edge-n,
+.bk-card-edge-s {
+  left: 10px;
+  right: 10px;
+  height: 7px;
+  cursor: ns-resize;
+}
+.bk-card-edge-n {
+  top: -1px;
+}
+.bk-card-edge-s {
+  bottom: -1px;
+}
+.bk-card-edge-e,
+.bk-card-edge-w {
+  top: 10px;
+  bottom: 10px;
+  width: 7px;
+  cursor: ew-resize;
+}
+.bk-card-edge-e {
+  right: -1px;
+}
+.bk-card-edge-w {
+  left: -1px;
+}
+.bk-card-edge-ne,
+.bk-card-edge-se,
+.bk-card-edge-sw,
+.bk-card-edge-nw {
+  width: 14px;
+  height: 14px;
+}
+.bk-card-edge-ne {
+  top: -1px;
+  right: -1px;
+  cursor: nesw-resize;
+}
+.bk-card-edge-sw {
+  bottom: -1px;
+  left: -1px;
+  cursor: nesw-resize;
+}
+.bk-card-edge-nw {
+  top: -1px;
+  left: -1px;
+  cursor: nwse-resize;
+}
+.bk-card-edge-se {
+  right: -1px;
+  bottom: -1px;
+  cursor: nwse-resize;
+}
+/* A small grip in the corner shows the card can be resized. */
+.bk-card-edge-se::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--bk-muted);
+  border-bottom: 2px solid var(--bk-muted);
+  border-bottom-right-radius: 2px;
+  opacity: 0.45;
 }
 .bk-note-card:hover {
   border-color: color-mix(in srgb, var(--bk-accent) 45%, var(--bk-border));

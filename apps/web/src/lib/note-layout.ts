@@ -1,13 +1,16 @@
 /**
- * Per-device layout choices for notes: each card's size on the board, and whether an opened note
- * fills the whole window. They live in localStorage because they describe this screen (a phone and
+ * Per-device layout choices for notes: each card's size and place on the board, and whether an
+ * opened note fills the whole window. They live in localStorage because they describe this screen (a phone and
  * a desktop want different card sizes), not the note, so they are never synced or saved with it.
  */
 
 const SIZES_KEY = 'bokydo.notes.cardSizes';
 const FULL_SCREEN_KEY = 'bokydo.notes.fullScreen';
+const ORDER_KEY = 'bokydo.notes.order';
 /** Old entries for deleted notes are dropped once the map grows past this. */
 const MAX_SIZES = 500;
+/** The board order remembers at most this many notes; any beyond fall back to newest first. */
+const MAX_ORDER = 2000;
 
 export interface CardSize {
   width: number;
@@ -75,5 +78,23 @@ export function saveNoteFullScreen(full: boolean): void {
     else storage()?.removeItem(FULL_SCREEN_KEY);
   } catch {
     // Only the preference is lost.
+  }
+}
+
+/** The order the cards were dragged into on this device, first card first. */
+export function readNoteOrder(): string[] {
+  try {
+    const raw: unknown = JSON.parse(storage()?.getItem(ORDER_KEY) ?? '[]');
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveNoteOrder(ids: string[]): void {
+  try {
+    storage()?.setItem(ORDER_KEY, JSON.stringify(ids.slice(0, MAX_ORDER)));
+  } catch {
+    // Only the arrangement is lost.
   }
 }

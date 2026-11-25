@@ -380,6 +380,8 @@
     "notes": {
       "archive": "Archive",
       "back": "Back to notes",
+      "cardHandleHint": "Drag to move. Double-click to rename.",
+      "cardHandleMoveHint": "Drag to move.",
       "censor": {
         "censor": "Censor",
         "confirmPassword": "Confirm password",

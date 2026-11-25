@@ -1,4 +1,4 @@
-import type { NoteState, NoteSummary } from '@bokydo/shared';
+import type { NoteState } from '@bokydo/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,7 +14,7 @@ import {
   type NoteListParams,
 } from '../../lib/notes.js';
 import { useToast } from '../../lib/toasts.js';
-import { NoteCard, useStableOrder } from './NoteCard.js';
+import { NoteBoard, useNoteOrder } from './NoteCard.js';
 
 const TABS: NoteState[] = ['active', 'archived', 'trashed'];
 
@@ -72,9 +72,12 @@ export function NotesList() {
     create.mutate(crypto.randomUUID());
   };
 
-  const notes = useStableOrder(
+  // The cards keep the arrangement they were dragged into, except in search results, which are
+  // ranked by the search.
+  const { notes, move } = useNoteOrder(
     list.data?.pages.flatMap((page) => page.notes) ?? [],
     JSON.stringify(params),
+    q === '',
   );
   const pinned = notes.filter((n) => n.pinned);
   const others = notes.filter((n) => !n.pinned);
@@ -218,7 +221,7 @@ export function NotesList() {
               <h2 className="mb-2 text-xs font-semibold text-muted">
                 {t('notes.pinned', { defaultValue: 'Pinned' })}
               </h2>
-              <NoteGrid notes={pinned} focusId={focusId} />
+              <NoteBoard notes={pinned} focusId={focusId} onMove={move} />
             </section>
           )}
           {others.length > 0 && (
@@ -228,7 +231,7 @@ export function NotesList() {
                   {t('notes.other', { defaultValue: 'Notes' })}
                 </h2>
               )}
-              <NoteGrid notes={others} focusId={focusId} />
+              <NoteBoard notes={others} focusId={focusId} onMove={move} />
             </section>
           )}
         </div>
@@ -246,15 +249,5 @@ export function NotesList() {
         </div>
       )}
     </Page>
-  );
-}
-
-function NoteGrid({ notes, focusId }: { notes: NoteSummary[]; focusId: string | null }) {
-  return (
-    <div className="bk-notes-board">
-      {notes.map((note) => (
-        <NoteCard key={note.id} note={note} autoFocus={note.id === focusId} />
-      ))}
-    </div>
   );
 }
