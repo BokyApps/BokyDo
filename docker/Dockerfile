@@ -40,23 +40,30 @@ RUN pnpm -r build \
 
 FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:ec2313763dd43931543bd03830466e0c409ce73a487e8d46f10db72d3b816c1c AS runtime-base
 
-# Distroless has not incorporated DSA-6613-1 yet. Download the exact fixed package
-# through Debian's signed repository and carry its library and inventory together.
+# Distroless has not incorporated DSA-6613-1 (zlib) or the libzstd fix for CVE-2026-124851 yet.
+# Download the exact fixed packages through Debian's signed repository and carry each library
+# with its dpkg inventory, so scanners see the fixed versions.
 FROM build AS runtime-security
 # The slim build image omits system CAs; reuse the runtime's trust store for HTTPS APT.
 COPY --from=runtime-base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN printf 'deb https://security.debian.org/debian-security trixie-security main\n' > /tmp/security.list \
  && apt-get update -o Dir::Etc::sourcelist=/tmp/security.list -o Dir::Etc::sourceparts=- -o APT::Update::Error-Mode=any \
- && mkdir /zlib-download /runtime-security \
- && cd /zlib-download \
+ && mkdir /security-download /runtime-security \
+ && cd /security-download \
  && apt-get install --download-only --no-install-recommends -y \
       -o Dir::Etc::sourcelist=/tmp/security.list -o Dir::Etc::sourceparts=- \
-      -o Dir::Cache::archives=/zlib-download 'zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1' \
- && dpkg-deb -x ./*.deb /runtime-security \
- && mkdir -p /runtime-security/var/lib/dpkg/status.d /package-metadata \
- && dpkg-deb -f ./*.deb > /runtime-security/var/lib/dpkg/status.d/zlib1g \
- && dpkg-deb -e ./*.deb /package-metadata \
- && cp /package-metadata/md5sums /runtime-security/var/lib/dpkg/status.d/zlib1g.md5sums
+      -o Dir::Cache::archives=/security-download \
+      'zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1' 'libzstd1=1.5.7+dfsg-1+deb13u1' \
+ && test "$(ls ./*.deb | wc -l)" -eq 2 \
+ && mkdir -p /runtime-security/var/lib/dpkg/status.d \
+ && for deb in ./*.deb; do \
+      pkg="$(dpkg-deb -f "$deb" Package)" \
+      && dpkg-deb -x "$deb" /runtime-security \
+      && dpkg-deb -f "$deb" > "/runtime-security/var/lib/dpkg/status.d/$pkg" \
+      && rm -rf /package-metadata && mkdir /package-metadata \
+      && dpkg-deb -e "$deb" /package-metadata \
+      && cp /package-metadata/md5sums "/runtime-security/var/lib/dpkg/status.d/$pkg.md5sums" || exit 1; \
+    done
 
 # ---- runtime -------------------------------------------------------------------------------------
 # Distroless: no shell, no package manager, runs as uid 65532.

@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { type FileHandle, open } from 'node:fs/promises';
 import path from 'node:path';
 import type { AttachmentStore } from '../attachments/store.js';
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL_BYTES, type ImageInfo } from './image-info.js';
@@ -44,8 +45,8 @@ function missingFile(err: unknown): boolean {
 
 /**
  * Read the note files the document shows as pictures, on the main thread. It does as little as
- * possible: a `stat` for the real size against the per-image and per-export budgets, then one
- * `readFile` with an `AbortSignal`. The structural walk (PNG chunk/CRC, JPEG markers) happens in
+ * possible: one open handle, its `stat` for the real size against the per-image and per-export
+ * budgets, then one read of that handle with an `AbortSignal`. The structural walk (PNG chunk/CRC, JPEG markers) happens in
  * the export worker, where it is bounded by the isolate's heap and memory deadline; the main
  * thread never parses attacker-controlled image bytes.
  *
@@ -80,26 +81,33 @@ export async function loadNoteImages(
     checkAborted();
     if (!/^[0-9a-f-]{36}$/.test(file.id)) continue;
     const filePath = path.join(store.dir, file.id);
-    let size: number;
+    // One open handle for the size check and the read, so the file that was measured is the
+    // file that is read (no stat-then-open race). O_NONBLOCK keeps a FIFO from hanging the open.
+    let handle: FileHandle;
     try {
-      const info = await stat(filePath);
-      if (!info.isFile()) continue;
-      size = info.size;
+      handle = await open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
     } catch (err) {
       if (missingFile(err)) continue;
       checkAborted();
       throw err;
     }
-    if (size <= 0 || size > MAX_IMAGE_BYTES) continue;
-    if (read + size > MAX_IMAGE_TOTAL_BYTES) return { images: new Map(), tooLarge: true };
-    opts.onRead?.();
     let bytes: Buffer;
     try {
-      bytes = await readFile(filePath, signal ? { signal } : {});
-    } catch (err) {
-      checkAborted();
-      if (missingFile(err)) continue;
-      throw err;
+      const info = await handle.stat();
+      if (!info.isFile()) continue;
+      const size = info.size;
+      if (size <= 0 || size > MAX_IMAGE_BYTES) continue;
+      if (read + size > MAX_IMAGE_TOTAL_BYTES) return { images: new Map(), tooLarge: true };
+      opts.onRead?.();
+      try {
+        bytes = await handle.readFile(signal ? { signal } : {});
+      } catch (err) {
+        checkAborted();
+        if (missingFile(err)) continue;
+        throw err;
+      }
+    } finally {
+      await handle.close();
     }
     checkAborted();
     // A file that grew between the stat and the read is not worth embedding.

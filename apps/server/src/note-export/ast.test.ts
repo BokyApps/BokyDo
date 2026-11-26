@@ -159,7 +159,7 @@ describe('note export AST', () => {
     expect(runs[0]).toMatchObject({ appLink: { kind: 'note', id: NOTE_ID }, text: 'a' });
     expect(runs[2]).toMatchObject({ appLink: { kind: 'task', id: TASK_ID }, text: 'b' });
     // A `javascript:` destination never becomes a link; markdown-it leaves the label as text.
-    expect(runs.some((run) => run.href?.startsWith('javascript:'))).toBe(false);
+    expect(runs.some((run) => /^\s*(javascript|data|vbscript):/i.test(run.href ?? ''))).toBe(false);
     expect(runs[3]?.text).toContain('[c](javascript:alert(1))');
     expect(runs[4]?.href).toBe('https://example.com/');
   });
