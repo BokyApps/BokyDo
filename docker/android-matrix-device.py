@@ -13,12 +13,14 @@ import subprocess
 import sys
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--api", type=int, required=True, choices=[34, 35, 36])
 parser.add_argument("--serial", default="emulator-5562")
 parser.add_argument("--apk", type=Path, required=True)
 parser.add_argument("--tests", type=Path, required=True)
+parser.add_argument("--update-apk", type=Path, required=True)
 parser.add_argument("--fixture", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--reuse-installed", action="store_true", help="Skip install only when installed APK digests match")
@@ -103,6 +105,8 @@ habits = api("/api/v1/habits")
 habit = next(h for h in habits["habits"] if h["id"] == fixture["habitId"])
 assert habit["name"] == "Daily widget habit"
 api("/api/v1/habits/" + habit["id"] + "/check-ins/" + habits["today"], "PUT", {"completed": False})
+weekly = next(h for h in habits["habits"] if h["name"] == "Weekly widget habit")
+api("/api/v1/habits/" + weekly["id"] + "/check-ins/" + habits["today"], "PUT", {"completed": False})
 print(f"API {args.api}: installing exact signed release and private helpers", flush=True)
 if args.reuse_installed:
     for package, apk in (("com.bokyapps.bokydo", args.apk), ("com.bokyapps.bokydo.test", args.tests)):
@@ -114,6 +118,10 @@ if args.reuse_installed:
 else:
     save("install.txt", cmd("install", "--no-incremental", "-r", str(args.apk), timeout=240)
          + cmd("install", "--no-incremental", "-r", "-t", str(args.tests), timeout=240))
+# Display setup belongs to emulator provisioning, before APK installation/startup.
+# Do not trigger asynchronous configuration/process restarts during a cold-start gate.
+assert cmd("shell", "wm", "size").strip().splitlines()[-1].rsplit(":", 1)[-1].strip() == "1080x1920", "Provision a 1080x1920 display first"
+assert cmd("shell", "wm", "density").strip().splitlines()[-1].rsplit(":", 1)[-1].strip() == "400", "Provision density400 first"
 cmd("reverse", "tcp:18090", "tcp:18090")
 # Guard even WebView subresource redirects: the entire disposable device can only use loopback.
 # adb reverse uses the emulator transport and remains available without external IP egress.
@@ -151,6 +159,72 @@ if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in scenari
     diagnostic = re.sub(r"(?:https?|com\.bokyapps\.bokydo):[^\s]+", "[fixture URL omitted]", diagnostic)
     print("Matrix process diagnostics:\n" + diagnostic, flush=True)
     raise AssertionError(scenario)
+print(f"API {args.api}: real in-app APK update through the system installer", flush=True)
+# The original instrumentation targets the app process, so it cannot survive replacement.
+# Drive only the installer boundary externally, then start a fresh instrumentation run.
+cmd("shell", "appops", "set", "com.bokyapps.bokydo", "REQUEST_INSTALL_PACKAGES", "allow")
+cmd("shell", "am", "force-stop", "com.bokyapps.bokydo")
+cmd("shell", "am", "start", "-n", "com.bokyapps.bokydo/.MainActivity", "--es",
+    "com.bokyapps.bokydo.extra.DESTINATION", "settings")
+
+
+def tap_ui(label, timeout=120):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            cmd("shell", "uiautomator", "dump", "/data/local/tmp/bokydo-update-ui.xml", timeout=20)
+            root = ET.fromstring(cmd("shell", "cat", "/data/local/tmp/bokydo-update-ui.xml"))
+            for node in root.iter("node"):
+                # Native installer buttons may expose all-caps text (UPDATE) while
+                # Compose app controls retain title case. Match the complete label only.
+                labels = (node.get("text", "").casefold(), node.get("content-desc", "").casefold())
+                if label.casefold() not in labels or node.get("enabled") != "true":
+                    continue
+                bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+                if bounds:
+                    left, top, right, bottom = map(int, bounds.groups())
+                    if right > left and bottom > top:
+                        cmd("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+                        return
+        except (RuntimeError, ET.ParseError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(0.5)
+    capture_screen()
+    raise AssertionError("Missing updater/installer control: " + label)
+
+
+tap_ui("Download update")
+tap_ui("Install update")
+tap_ui("Update")  # Android's own installation confirmation; never uninstall or clear data.
+update_hash = hashlib.sha256(args.update_apk.read_bytes()).hexdigest()
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    paths = cmd("shell", "pm", "path", "com.bokyapps.bokydo", check=False).strip().splitlines()
+    if len(paths) == 1 and paths[0].startswith("package:"):
+        installed = cmd("shell", "sha256sum", paths[0][len("package:"):], check=False).split()
+        if installed and installed[0] == update_hash:
+            break
+    time.sleep(1)
+else:
+    capture_screen()
+    raise AssertionError("The hosted APK was not installed through the system updater")
+# Instrumenting the product force-stops it and clears widget RemoteViews. Target the
+# external helper package for this observation, leaving the updated provider untouched.
+updated = cmd("shell", "am", "instrument", "-w", "-r",
+              "com.bokyapps.bokydo.test/com.bokyapps.bokydo.WidgetRetentionInstrumentation", timeout=600)
+save("updated-state.txt", updated)
+if f"INSTRUMENTATION_RESULT: stream=PASS Android API {args.api}:" not in updated:
+    capture_screen()
+    diagnostics = cmd("logcat", "-d", "-v", "brief", "-s", "BokyDoWidgets:I",
+                      "GlanceAppWidget:E", "GlanceAppWidgetReceiver:E", "WM-WorkerWrapper:E",
+                      "AndroidRuntime:E", "*:S")
+    diagnostics = re.sub(r"(?:https?|com\.bokyapps\.bokydo):[^\s]+", "[fixture URL omitted]", diagnostics)
+    print("Post-update widget diagnostics:\n" + diagnostics[-16000:], flush=True)
+    save("post-update-widgets.json", json.dumps({
+        "appwidgets": cmd("shell", "dumpsys", "appwidget"),
+        "logs": diagnostics,
+    }, indent=2))
+    raise AssertionError(updated)
 print(f"API {args.api}: signed-in process restart", flush=True)
 restart = subprocess.run([sys.executable, str(script)], env=dict(env, BOKYDO_ANDROID_EXPECT_TEXT="Today"), capture_output=True, text=True)
 save("signed-in-restarts.txt", restart.stdout + restart.stderr)
@@ -166,6 +240,7 @@ for _ in range(30):
         "createdTaskPersisted": any(t["content"] == f"Matrix task api{args.api}" for t in opened),
         "widgetTaskCompletionPersisted": any(t["content"] == "Project fixture" for t in completed),
         "widgetHabitCheckInPersisted": any(h["id"] == fixture["habitId"] and h["todayCompleted"] for h in habits),
+        "nativeHabitCheckInPersisted": any(h["name"] == "Weekly widget habit" and h["todayCompleted"] for h in habits),
     }
     if all(checks.values()):
         break
@@ -184,6 +259,10 @@ result = {
     "signedInRestarts": 3,
     "nativeOAuth": True,
     "fourTaskWidgetViews": True,
+    "unrestrictedFullWidthWidget": True,
+    "inboxAndTodayHabitOverviews": True,
+    "inAppSystemUpdateRetainsDataAndWidgets": True,
+    "updatedApkSha256": update_hash,
     "habitWidgetAndNavigation": True,
     "backend": checks,
     "elapsedSeconds": round(time.time() - started),

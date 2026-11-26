@@ -12,8 +12,8 @@ android {
         applicationId = "com.bokyapps.bokydo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = providers.gradleProperty("bokydoVersionCode").orElse("5").get().toInt().also { require(it > 0) }
+        versionName = providers.gradleProperty("bokydoVersionName").orElse("0.1.4").get()
         testInstrumentationRunner = if (providers.gradleProperty("releaseMatrixSmoke").orNull == "true") {
             "com.bokyapps.bokydo.ReleaseMatrixInstrumentation"
         } else if (providers.gradleProperty("releaseConstructorSmoke").orNull == "true") {

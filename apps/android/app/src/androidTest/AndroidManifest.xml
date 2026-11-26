@@ -4,6 +4,14 @@
     <queries>
         <package android:name="com.bokyapps.bokydo" />
     </queries>
+    <!-- AGP configures the first instrumentation entry from testInstrumentationRunner. -->
+    <instrumentation
+        android:name="com.bokyapps.bokydo.ReleaseMatrixInstrumentation"
+        android:targetPackage="com.bokyapps.bokydo" />
+    <!-- A self-targeted controller observes post-update widgets without stopping the product. -->
+    <instrumentation
+        android:name="com.bokyapps.bokydo.WidgetRetentionInstrumentation"
+        android:targetPackage="com.bokyapps.bokydo.test" />
     <!-- These helpers belong to the private test APK, never the published release. -->
     <application
         android:name="android.app.Application"

@@ -22,6 +22,14 @@ class DeviceSettings(context: Context) {
         _dynamicColor.value = on
     }
 
+    /** Habit visibility is per server/account/view on this phone, like the web view options. */
+    fun habitOverviewVisible(owner: String, view: String): Boolean =
+        prefs.getBoolean("habits:$owner:$view", true)
+
+    fun setHabitOverviewVisible(owner: String, view: String, visible: Boolean) {
+        prefs.edit().putBoolean("habits:$owner:$view", visible).apply()
+    }
+
     /** The zone the travel prompt was last shown for. */
     var lastOfferedZone: String?
         get() = prefs.getString("offeredZone", null)
