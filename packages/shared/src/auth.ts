@@ -116,6 +116,7 @@ export const registerRequestSchema = z
     inviteToken: tokenSchema.optional(),
   })
   .strict();
+export const initialAdminRequestSchema = z.object({ username: usernameSchema, password }).strict();
 export const inviteInspectSchema = z.object({ token: tokenSchema }).strict();
 export interface InviteInfo {
   valid: boolean;

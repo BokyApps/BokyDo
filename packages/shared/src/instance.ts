@@ -6,6 +6,8 @@ export const instanceStatusSchema = z.object({
   version: z.string(),
   /** False until the initial admin has completed the setup wizard. */
   setupComplete: z.boolean(),
+  /** True only while no user accounts exist. */
+  initialAdminRequired: z.boolean(),
   /** Shown on password forms; not sensitive. */
   passwordMinLength: z.number().int(),
   /** Whether a "Create account" link should be shown (open registration). */

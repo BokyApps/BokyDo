@@ -55,8 +55,12 @@ check "the stack is just app + postgres (no init container)" \
 check "app is healthy"                 test "$(docker inspect -f '{{.State.Health.Status}}' "${PROJECT}-app-1")" = healthy
 check "readyz reports DB reachable"    test "$(http_code "$BASE/readyz")" = 200
 check "instance status: setup pending" bash -c "curl -s $BASE/api/v1/instance | grep -q '\"setupComplete\":false'"
-check "admin passphrase banner printed once" \
-  test "$("${C[@]}" logs app | grep -c 'Passphrase: [a-z-]\{20,\}')" = 1
+check "first boot offers admin signup" \
+  bash -c "curl -s $BASE/api/v1/instance | jq -e .initialAdminRequired"
+check "first boot creates no user account" \
+  test "$(docker exec "${PROJECT}-db-1" psql -U bokydo -d bokydo -Atc 'select count(*) from users')" = 0
+check "first boot logs no generated admin passphrase" \
+  bash -c "! ${C[*]} logs app | grep -q 'Passphrase:'"
 
 echo "== container hardening"
 check "app runs as non-root"           test "$(docker inspect -f '{{.Config.User}}' "${PROJECT}-app-1")" = nonroot
@@ -103,20 +107,20 @@ check "oversized body rejected (413)" \
   test "$(head -c 1100000 /dev/zero | tr '\0' a | http_code -X POST -H 'content-type: application/json' --data-binary @- "$BASE/api/v1/instance")" = 413
 
 echo "== first-run setup flow"
-PASSPHRASE=$("${C[@]}" logs app | grep -o 'Passphrase: [a-z-]*' | head -1 | cut -d' ' -f2)
 NEWPW='quartz-lantern-gravel-ribbon-smoke'
-check "foreign Origin cannot log in" \
+check "foreign Origin cannot claim the initial admin" \
   test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H 'content-type: application/json' \
-    --data "{\"username\":\"admin\",\"password\":\"$PASSPHRASE\"}" "$BASE/api/v1/auth/login")" = 403
-r=$(api POST /api/v1/auth/login "{\"username\":\"admin\",\"password\":\"$PASSPHRASE\"}")
-check "admin signs in with the one-time passphrase" test "$(status_of "$r")" = 200
+    --data "{\"username\":\"admin\",\"password\":\"$NEWPW\"}" "$BASE/api/v1/setup/admin")" = 403
+r=$(api POST /api/v1/setup/admin "{\"username\":\"admin\",\"password\":\"$NEWPW\"}")
+check "owner creates the initial admin and signs in" test "$(status_of "$r")" = 201
 CSRF=$(body_of "$r" | jq -r .csrfToken)
 check "session cookie is HttpOnly" grep -q '#HttpOnly_127.0.0.1' "$JAR"
-check "setup blocked until password changed" \
-  bash -c "[[ \"$(body_of "$(api GET /api/v1/setup)" | jq -r .error)\" == password_change_required ]]"
-r=$(api POST /api/v1/auth/password "{\"currentPassword\":\"$PASSPHRASE\",\"newPassword\":\"$NEWPW\"}")
-check "password changed" test "$(status_of "$r")" = 200
-CSRF=$(body_of "$r" | jq -r .csrfToken)
+check "chosen password needs no forced change" \
+  test "$(body_of "$(api GET /api/v1/setup)" | jq -r .passwordChanged)" = true
+check "admin signup closes after the first account" \
+  bash -c "curl -s $BASE/api/v1/instance | jq -e '.initialAdminRequired == false'"
+check "another admin cannot be created through first-run signup" \
+  test "$(status_of "$(api POST /api/v1/setup/admin "{\"username\":\"intruder\",\"password\":\"$NEWPW\"}")")" = 409
 r=$(api PUT /api/v1/setup/public-url "{\"publicUrl\":\"$BASE\"}")
 check "public URL set" test "$(body_of "$r" | jq -r .canComplete)" = true
 r=$(api PATCH /api/v1/admin/settings '{"email.smtpHost":"mailpit","email.smtpPort":1025,"email.smtpSecurity":"none","email.smtpUsername":"bokydo","email.smtpPassword":"smoke-smtp-secret","email.fromAddress":"bokydo@example.com"}')

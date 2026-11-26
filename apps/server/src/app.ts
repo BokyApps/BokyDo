@@ -2,6 +2,7 @@ import path from 'node:path';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { RAMBLE_LIVE, type Health, type InstanceStatus } from '@bokydo/shared';
+import { count } from 'drizzle-orm';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { STATUS_CODES } from 'node:http';
 import { registerAdminSettingsRoutes } from './admin/settings-routes.js';
@@ -23,6 +24,7 @@ import { registerWebApp } from './http/static.js';
 import type { AppSecrets } from './security/app-secrets.js';
 import { SettingsService } from './settings/settings-service.js';
 import { registerSetupRoutes } from './setup/routes.js';
+import { users } from './db/schema.js';
 import { EventBus } from './sync/events.js';
 import { registerSyncRoutes } from './sync/routes.js';
 import { registerOAuthRoutes } from './oauth/routes.js';
@@ -322,6 +324,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       name: 'BokyDo',
       version: VERSION,
       setupComplete: settings.isSetupComplete(),
+      initialAdminRequired: ((await db.select({ n: count() }).from(users))[0]?.n ?? 0) === 0,
       passwordMinLength: settings.get('security.passwordMinLength'),
       registrationOpen: settings.get('access.registrationMode') === 'open',
       emailEnabled: notifier.canEmail,
@@ -345,7 +348,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerPublicAuthRoutes(app, authDeps);
   registerAccountRoutes(app, authDeps);
   registerAdminUserRoutes(app, authDeps);
-  registerSetupRoutes(app, settings);
+  registerSetupRoutes(app, authDeps);
   registerAdminSettingsRoutes(app, { db, settings, mailer });
   registerSyncRoutes(app, { sync, events, sessions, tokens: apiTokens });
   registerOAuthServer(app, { db, settings, tokens: apiTokens, key: deps.secrets.sessionKey });

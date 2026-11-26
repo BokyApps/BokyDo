@@ -4,11 +4,6 @@ import { buildApp } from './app.js';
 import { ensureAppSecrets } from './security/app-secrets.js';
 import { ensureDbPassword } from './security/db-password.js';
 import { readSecretFile } from './security/secret-files.js';
-import {
-  credentialBanner,
-  ensureInitialAdmin,
-  INITIAL_ADMIN_USERNAME,
-} from './setup/initial-admin.js';
 import { VERSION } from './version.js';
 import { REQUEST_LOG_OPTIONS } from './http/log-redaction.js';
 
@@ -31,19 +26,6 @@ async function main(): Promise<void> {
     webRoot: config.webRoot,
     logger: { level: config.logLevel, ...REQUEST_LOG_OPTIONS },
   });
-
-  const passphrase = await ensureInitialAdmin(dbHandle.db);
-  if (passphrase) {
-    app.log.info('initial admin account created; one-time passphrase printed to stdout');
-    // Printed directly (not via the JSON logger) so it is readable in `docker compose logs`.
-    process.stdout.write(
-      credentialBanner({
-        heading: 'BokyDo initial admin account',
-        username: INITIAL_ADMIN_USERNAME,
-        passphrase,
-      }) + '\n',
-    );
-  }
 
   const purge = setInterval(
     () =>
