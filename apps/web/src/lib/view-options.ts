@@ -7,6 +7,8 @@ export interface ViewOptions {
   sort: SortMode;
   group: GroupMode;
   showCompleted: boolean;
+  /** Dedicated personal-habit panel in Inbox and Today. */
+  showHabits: boolean;
   /** For views without a synced layout of their own (labels, filters). */
   layout: Layout;
 }
@@ -19,6 +21,7 @@ export function useViewOptions(key: string, defaults: Partial<ViewOptions> = {})
       sort: 'manual',
       group: 'none',
       showCompleted: false,
+      showHabits: true,
       layout: 'list',
       ...defaults,
     };

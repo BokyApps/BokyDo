@@ -24,6 +24,7 @@ import { Board, orderBetween } from '../components/Board.js';
 import { ActivityList, CommentThread } from '../components/Comments.js';
 import { CalendarView } from '../components/Calendar.js';
 import { CompletedList } from '../components/CompletedList.js';
+import { HabitOverview } from '../components/HabitOverview.js';
 import { ProjectDialog } from '../components/ProjectDialog.js';
 import { Avatar, ShareDialog, useMembers } from '../components/Sharing.js';
 import { InlineAdd } from '../components/TaskEditor.js';
@@ -88,7 +89,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
         title={project.isInbox ? t('project.inbox') : project.name}
         options={options}
         setOptions={setOptions}
-        allow={{ completed: layout === 'list' }}
+        allow={{ completed: layout === 'list', habits: project.isInbox }}
         layout={{ value: layout, onChange: setLayout }}
         actions={
           !project.isInbox && (
@@ -164,7 +165,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
         />
       )}
       {layout === 'list' && (
-        <TaskDnd showCompleted={options.showCompleted}>
+        <TaskDnd showCompleted={options.showCompleted} readOnly={!canEdit}>
           <SortableTaskList
             id="section:none"
             tasks={groups.get(null) ?? []}
@@ -193,6 +194,9 @@ export function ProjectView({ projectId }: { projectId: string }) {
           </h2>
           <CompletedList projectId={projectId} />
         </section>
+      )}
+      {project.isInbox && options.showHabits && (
+        <HabitOverview onHide={() => setOptions({ showHabits: false })} />
       )}
       <ProjectDialog open={editing} onClose={() => setEditing(false)} project={project} />
       <ShareDialog project={project} open={sharing} onClose={() => setSharing(false)} />

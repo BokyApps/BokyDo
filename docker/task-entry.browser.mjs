@@ -47,18 +47,14 @@ try {
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   // Poll the server rather than trusting an optimistic row in the browser's local cache.
   const saved = async (content) => {
-    const handle = await page.waitForFunction(
-      async (name) => {
-        const response = await fetch('/api/v1/tasks');
-        if (!response.ok) return false;
-        return (await response.json()).tasks.find((task) => task.content === name) ?? false;
-      },
-      content,
-      { polling: 200 },
-    );
-    const task = await handle.jsonValue();
-    assert(task, `Task ${content} must reach the server`);
-    return task;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const response = await api.get(`${base}/api/v1/tasks`);
+      assert(response.ok());
+      const task = (await response.json()).tasks.find((item) => item.content === content);
+      if (task) return task;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.fail(`Task ${content} must reach the server`);
   };
   const verify = (task, date, priority) => {
     assert.equal(task.due?.date, date);

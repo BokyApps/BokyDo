@@ -2,6 +2,7 @@ import type { Task } from '@bokydo/shared';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DatePicker } from '../components/pickers.js';
+import { HabitOverview } from '../components/HabitOverview.js';
 import { InlineAdd } from '../components/TaskEditor.js';
 import { PlainTaskList } from '../components/TaskTree.js';
 import { EmptyState, Page, ViewHeader } from '../components/ViewHeader.js';
@@ -41,6 +42,7 @@ export function TodayPage() {
         subtitle={`${weekdayName} ${formatDate(today, prefs)}`}
         options={options}
         setOptions={setOptions}
+        allow={{ sort: true, group: true, habits: true }}
       />
       {overdue.length > 0 && (
         <section aria-label={t('today.overdue')} className="mb-6">
@@ -63,8 +65,13 @@ export function TodayPage() {
       ))}
       <InlineAdd defaults={{ due: makeDue(today, null, today, prefs) }} />
       {overdue.length + due.length === 0 && (
-        <EmptyState title={t('today.allDoneTitle')}>{t('today.allDoneMessage')}</EmptyState>
+        <EmptyState title={t('today.noTasksTitle', { defaultValue: 'No tasks due today' })}>
+          {t('today.noTasksMessage', {
+            defaultValue: 'Your task list is clear. Habits are tracked separately.',
+          })}
+        </EmptyState>
       )}
+      {options.showHabits && <HabitOverview onHide={() => setOptions({ showHabits: false })} />}
     </Page>
   );
 }
