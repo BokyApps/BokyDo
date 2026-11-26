@@ -1,0 +1,1 @@
+Task widgets have a visible, accessible add-task icon that stays available with long project names. Every widget includes a separate BokyDo icon to open the main app. Quick add has distinct task-entry and app-open buttons.

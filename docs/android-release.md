@@ -108,6 +108,10 @@ complete it; the header opens its list and + starts an addition there. **BokyDo 
 personal daily/weekly habits and today's check-ins. Its header opens Browse → Habits in the app.
 Manage habits opens the web tracker for creation and editing.
 
+From 0.1.5, task widgets reserve space for the add-task icon even with a long project name.
+Every widget has a small BokyDo logo button that opens the main Today screen without opening
+task entry. The quick-add widget has separate add and app-open buttons and starts two cells wide.
+
 Both list widgets resize and scroll, have a refresh action, and follow the app's palette and
 bundled font (task widgets also offer a light/dark override). Up to 12 entries appear in a widget;
 open its list for additional entries. Text bitmaps retain full accessibility labels. Updates
@@ -191,7 +195,9 @@ be selected against a release. The signed test APK is a private verification art
 14, 15 and 16 emulators (API 34–36). It verifies three fresh cold starts, native OAuth sign-in
 and task creation, Inbox/Today/Upcoming/project widgets, task completion, habit check-ins and
 widget navigation, Inbox/Today habit sections with check-in and hide controls, and full-width
-widget rendering beyond360dp. It also downloads and installs a newer same-certificate APK through
+widget rendering beyond360dp. It checks task-widget creation in the configured project,
+quick-add-widget creation in Inbox, both action icons inside a compact 180dp widget, and each
+widget's separate app-open button. It also downloads and installs a newer same-certificate APK through
 Android's system installer, checks retained sign-in/check-ins/widget configuration, then verifies
 three signed-in process restarts. An independent backend read checks
 that the created task and widget actions persisted. It retains application data between starts.
