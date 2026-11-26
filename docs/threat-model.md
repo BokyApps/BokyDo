@@ -2,6 +2,11 @@
 
 Living document, STRIDE per component. Every deliverable updates it. **v0.21 — F1–F4, W1–W6, W7a, W7b, W7d (SuperGrok), W8 (server, UI), W9 (assist, ask, reports, triage), W10a (+ project-limited tokens), W10b, W10c, W10d, W11a (server), W11b, W11c, W11d, W11e, W12b, A1, A2 (slice 1), A3, M1 (2026-10-08).**
 
+Personal-trial hardening (2026-11-02): patched the dependency advisories in F-042. The release-age
+gate remains enabled, with exact exceptions for the glob/minimatch security fixes and their two
+required dependencies. Secret-scan exceptions require both a known synthetic value and its test
+path; canaries verify that other credentials and production paths remain covered.
+
 ## Assets
 
 | Asset                                                                 | Where                                           | Why it matters                                    |

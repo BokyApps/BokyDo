@@ -1,0 +1,11 @@
+title = "BokyDo secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact synthetic credentials used by the fake AI and Todoist test services"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)apps/server/src/(assist|import|ramble)/[A-Za-z0-9.-]+\.test\.ts$''']
+regexes = ['''^(sk-test-0123456789|sk-live-secret-key-1234567890|0123456789abcdef0123456789abcdef01234567)$''']

@@ -35,6 +35,7 @@ describe('SSRF-safe outbound WebSocket', () => {
   it('reaches a host through the shared lookup and streams both ways', async () => {
     const { port } = await echoServer();
     // The name resolves via the shared policy lookup (not the OS resolver) to the pinned address.
+    // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- loopback-only echo server used to test the pinned lookup
     const socket = await connect(`ws://models.test:${port}/`, {
       headers: { authorization: 'Bearer secret' },
     });
@@ -55,6 +56,7 @@ describe('SSRF-safe outbound WebSocket', () => {
 
   it('refuses plain ws under a public-only (https) policy', async () => {
     await expect(
+      // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- asserts that insecure public WebSockets are rejected
       connect('ws://api.openai.com/realtime', { policy: PUBLIC_ONLY }),
     ).rejects.toMatchObject({ reason: 'insecure_url' });
   });

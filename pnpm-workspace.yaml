@@ -11,6 +11,14 @@ allowBuilds:
   '@swc/core': false
 # Don't install versions published less than 7 days ago (time for hijacked releases to be caught).
 minimumReleaseAge: 10080
+# Exact security fixes for GHSA-3g3m-2fjr-6pw4 / GHSA-g3hv-75wg-m249.
+# Published 2026-10-27; keep the normal age gate for every other release.
+minimumReleaseAgeExclude:
+  - glob@14.0.2
+  - minimatch@11.0.1
+  # Required by those exact patched versions.
+  - '@isaacs/nonrecursive-glob-match@1.0.1'
+  - path-scurry@3.0.0
 # Transitive deps may only come from the registry (no git/tarball URLs).
 blockExoticSubdeps: true
 # Refuse updates whose publish provenance is weaker than earlier versions.
@@ -21,6 +29,9 @@ trustPolicyIgnoreAfter: 43200
 strictPeerDependencies: true
 
 overrides:
+  # AbortSignal cancellation bypass and globparts amplification; no older-branch fixes.
+  glob: 14.0.2
+  minimatch: 11.0.1
   # drizzle-kit → @esbuild-kit pins esbuild 0.18 (GHSA-67mh-4wv8-2f99). Dev-only, but keep audits clean.
   '@esbuild-kit/core-utils>esbuild': ^0.25.0
   # F-029 (GHSA-68fv-2mgg-jv7q): Vite/PostCSS pin 1.2.1. Build-time only; keep audits clean.
