@@ -1,0 +1,1 @@
+Fix the immediate startup crash in optimized release APKs by preserving the WorkManager database constructor. Add signed-release cold-start checks that verify the process stays alive and its first screen renders.
