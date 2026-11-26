@@ -51,6 +51,7 @@ const TodayPage = lazy(() => import('./pages/TodayPage.js'), 'TodayPage');
 const UpcomingPage = lazy(() => import('./pages/UpcomingPage.js'), 'UpcomingPage');
 const CompletedPage = lazy(() => import('./pages/CompletedPage.js'), 'CompletedPage');
 const HabitsPage = lazy(() => import('./pages/HabitsPage.js'), 'HabitsPage');
+const NotesPage = lazy(() => import('./pages/NotesPage.js'), 'NotesPage');
 const TemplatesPage = lazy(() => import('./pages/TemplatesPage.js'), 'TemplatesPage');
 const SettingsPage = lazy(() => import('./pages/SettingsPage.js'), 'SettingsPage');
 const InvitationsPage = lazy(() => import('./pages/SharingPages.js'), 'InvitationsPage');
@@ -196,6 +197,8 @@ const routeTree = rootRoute.addChildren([
     appPage('/upcoming', UpcomingPage),
     appPage('/completed', CompletedPage),
     appPage('/habits', HabitsPage),
+    appPage('/notes', NotesPage),
+    appPage('/notes/$noteId', NotesPage),
     createRoute({
       getParentRoute: () => appRoute,
       path: '/productivity',

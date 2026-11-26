@@ -3,11 +3,17 @@ import { defineConfig } from 'vitest/config';
 
 const pkg = (name: string) =>
   fileURLToPath(new URL(`../../packages/${name}/src/index.ts`, import.meta.url));
+const shared = (file: string) =>
+  fileURLToPath(new URL(`../../packages/shared/src/${file}`, import.meta.url));
 
 export default defineConfig({
   resolve: {
     // Test workspace packages from source; no build step needed.
     alias: {
+      // A subpath before the barrel: alias prefixes match, so `@bokydo/shared` would otherwise
+      // rewrite `@bokydo/shared/notes-refs` to a path under `index.ts`.
+      '@bokydo/shared/notes-refs': shared('notes-refs.ts'),
+      '@bokydo/shared/notes-preview': shared('notes-preview.ts'),
       '@bokydo/shared': pkg('shared'),
       '@bokydo/themes': pkg('themes'),
       '@bokydo/nlp': pkg('nlp'),

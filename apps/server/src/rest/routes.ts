@@ -8,6 +8,10 @@ import {
   habitCreateRequestSchema,
   habitPatchSchema,
   habitCheckInSchema,
+  noteCreateRequestSchema,
+  noteDisplayStateSchema,
+  noteListQuerySchema,
+  notePatchSchema,
   orderKeySchema,
   prioritySchema,
   projectVisibilitySchema,
@@ -88,8 +92,107 @@ const taskSingle = z.object({ task: taskResource });
 const projectList = z.object({ projects: z.array(projectResource) });
 const projectSingle = z.object({ project: projectResource });
 
+// Notes (ADR 0025). The response shapes mirror `packages/shared/src/notes.ts`; the request
+// schemas are shared, so REST cannot accept a body the notes service would reject.
+const noteSummaryResource = z.object({
+  id: idSchema,
+  title: z.string(),
+  /** Plain text from the body, censored spans replaced, at most 200 characters. */
+  snippet: z.string(),
+  tags: z.array(z.string()),
+  state: noteDisplayStateSchema,
+  pinned: z.boolean(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+const notePreviewRun = z.object({
+  text: z.string(),
+  bold: z.literal(true).optional(),
+  italic: z.literal(true).optional(),
+  strike: z.literal(true).optional(),
+  code: z.literal(true).optional(),
+  link: z.literal(true).optional(),
+});
+/** List entries also carry the formatted start of the body for note cards (redacted, bounded). */
+const noteListEntryResource = noteSummaryResource.extend({
+  preview: z.array(
+    z.object({
+      kind: z.enum([
+        'paragraph',
+        'h1',
+        'h2',
+        'h3',
+        'quote',
+        'bullet',
+        'ordered',
+        'task',
+        'code',
+        'blank',
+      ]),
+      runs: z.array(notePreviewRun),
+      depth: z.number().int().optional(),
+      number: z.number().int().optional(),
+      checked: z.boolean().optional(),
+    }),
+  ),
+});
+const noteResource = noteSummaryResource.extend({
+  body: z.string(),
+  trashedAt: z.iso.datetime().nullable(),
+  backlinks: z.array(z.object({ id: idSchema, title: z.string() })),
+  linkedTasks: z.array(
+    z.object({
+      id: idSchema,
+      content: z.string(),
+      projectId: idSchema,
+      completed: z.boolean(),
+      sources: z.array(z.enum(['body', 'manual'])),
+    }),
+  ),
+  files: z.array(
+    z.object({
+      id: idSchema,
+      filename: z.string(),
+      contentType: z.string(),
+      size: z.number().int(),
+    }),
+  ),
+});
+const noteList = z.object({
+  notes: z.array(noteListEntryResource),
+  nextCursor: z.string().nullable(),
+});
+const noteSingle = z.object({ note: noteResource });
+/** What a write-only token gets back: identity, without a body it may not read. */
+const noteReceipt = z.object({
+  note: z.object({ id: idSchema, updatedAt: z.iso.datetime() }),
+});
+const noteTags = z.object({
+  tags: z.array(z.object({ tag: z.string(), count: z.number().int() })),
+});
+const taskNotes = z.object({
+  notes: z.array(noteListEntryResource.extend({ sources: z.array(z.enum(['body', 'manual'])) })),
+});
+const noteFile = z.object({
+  id: idSchema,
+  filename: z.string(),
+  contentType: z.string(),
+  size: z.number().int(),
+});
+
 /** For tests: real responses must match what the OpenAPI document promises. */
-export const RESPONSE_SCHEMAS = { taskList, taskSingle, projectList, projectSingle };
+export const RESPONSE_SCHEMAS = {
+  taskList,
+  taskSingle,
+  projectList,
+  projectSingle,
+  noteList,
+  noteSingle,
+  noteReceipt,
+  noteTags,
+  taskNotes,
+  noteFile,
+};
 
 /**
  * Write bodies are the sync command schemas minus the id the route supplies itself. Deriving them
@@ -123,9 +226,27 @@ interface RestOperation {
   summary: string;
   tag: string;
   scopes: readonly ApiScope[];
+  /** Overrides the default success status (204 for a DELETE, 201 for a POST). */
+  status?: number;
   query?: z.ZodType;
   body?: z.ZodType;
+  /** The body is raw bytes (an upload), not JSON. */
+  rawBody?: true;
+  /** Extra string header parameters, such as an upload's display filename. */
+  headers?: Record<string, { description: string; required?: boolean }>;
   response?: z.ZodType;
+  /** The success body is one of these schemas (a full note, or the write-only receipt). */
+  responseOneOf?: z.ZodType[];
+  /** The success response is raw bytes (a download), not JSON. */
+  rawResponse?: true;
+  /** Media types a raw response may use; defaults to `application/octet-stream`. */
+  responseMediaTypes?: string[];
+  /** Extra statuses, or overriding descriptions for the ones every operation has. */
+  /**
+   * Extra statuses, or overriding descriptions for the ones every operation has. `success: true`
+   * gives the status the same body as the main success response (an idempotent retry's 200).
+   */
+  responses?: Record<string, { description: string; success?: true }>;
 }
 
 const habitResource = z.object({
@@ -146,6 +267,12 @@ const habitResource = z.object({
   history: z.array(z.object({ date: z.string(), completed: z.boolean() })),
 });
 const habitSingle = z.object({ habit: habitResource });
+
+/** The notes routes refuse project-limited tokens the way habits do, with a distinct error. */
+const notesForbidden = {
+  description:
+    'The token does not carry the required scope (`insufficient_scope`), or it is limited to projects (`project_limited_token`); notes are account-wide',
+};
 
 export const REST_OPERATIONS: RestOperation[] = [
   {
@@ -289,6 +416,156 @@ export const REST_OPERATIONS: RestOperation[] = [
     body: habitCheckInSchema,
     response: habitSingle,
   },
+  {
+    method: 'get',
+    path: '/api/v1/notes',
+    summary: 'List your notes, pinned first; search, tag and state filters',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    query: noteListQuerySchema,
+    response: noteList,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/notes/tags',
+    summary: 'Your distinct note tags with counts (trashed notes excluded)',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    response: noteTags,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/notes',
+    summary: 'Create a note (a stable id makes retries safe)',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    body: noteCreateRequestSchema,
+    responseOneOf: [noteSingle, noteReceipt],
+    responses: {
+      '200': {
+        description:
+          'The note already exists with this id and exactly this content: an idempotent retry',
+        success: true,
+      },
+      '409': {
+        description:
+          '`id_conflict`: this id belongs to another account, or to a note with different content',
+      },
+      '403': notesForbidden,
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/notes/:id',
+    summary: 'One note with its body, backlinks, linked tasks and files',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    response: noteSingle,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'patch',
+    path: '/api/v1/notes/:id',
+    summary: 'Update a note (title, body, tags, pin, archive or trash)',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    body: notePatchSchema,
+    // A token without notes:read may write, but only gets the identity back.
+    responseOneOf: [noteSingle, noteReceipt],
+    responses: {
+      '403': notesForbidden,
+      '409': {
+        description:
+          '`stale_revision`: `expectedUpdatedAt` is not the current revision of the note, so nothing was written. The body is `{"error":"stale_revision"}` and, for a token with `notes:read`, the current `updatedAt` to reload and merge against.',
+      },
+    },
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/notes/:id',
+    summary: 'Delete a note forever, with its files and links',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    status: 204,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'put',
+    path: '/api/v1/notes/:id/tasks/:taskId',
+    summary: 'Link a note to a task you can see (also needs tasks:read)',
+    tag: 'Notes',
+    scopes: ['notes:write', 'tasks:read'],
+    status: 204,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'delete',
+    path: '/api/v1/notes/:id/tasks/:taskId',
+    summary: 'Remove a manual note-to-task link',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    status: 204,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/tasks/:taskId/notes',
+    summary: 'Your own notes linked to a task you can see (also needs tasks:read)',
+    tag: 'Notes',
+    scopes: ['notes:read', 'tasks:read'],
+    response: taskNotes,
+    responses: { '403': notesForbidden },
+  },
+  {
+    method: 'post',
+    path: '/api/v1/notes/:id/files',
+    summary: 'Upload a file to a note (raw bytes; filename in X-Filename)',
+    tag: 'Notes',
+    scopes: ['notes:write'],
+    status: 201,
+    rawBody: true,
+    headers: {
+      'X-Filename': {
+        description: 'Display filename, URL-encoded; defaults to “file”. It never touches disk.',
+      },
+    },
+    response: noteFile,
+    responses: {
+      '403': {
+        description:
+          '`uploads_disabled` when this instance disables uploads, `project_limited_token` for a project-limited token, or `insufficient_scope` without notes:write',
+      },
+      '413': {
+        description:
+          '`too_large`: the file is over `attachments.maxSizeMb`, or over the bytes left in your note-file quota',
+      },
+      '429': {
+        description:
+          '`rate_limited` (120 uploads an hour), or `limit_exceeded` when you already have the maximum number of note files or no quota bytes left',
+      },
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/v1/note-files/:id',
+    summary: 'Download a note file (?inline=1 renders PNG, JPEG, GIF and WebP inline)',
+    tag: 'Notes',
+    scopes: ['notes:read'],
+    query: z.object({ inline: z.enum(['1']).optional() }).strict(),
+    rawResponse: true,
+    // Only raster images keep their detected type, and only when inline; everything else is
+    // opaque binary so an SVG or HTML upload can never render as active content.
+    responseMediaTypes: [
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'application/octet-stream',
+    ],
+    responses: { '403': notesForbidden },
+  },
 ];
 
 /** Zod → JSON Schema 2020-12, which is the dialect OpenAPI 3.1 uses. */
@@ -314,6 +591,8 @@ function queryParameters(schema: z.ZodType): unknown[] {
 const successStatus = (method: RestOperation['method']) =>
   method === 'post' ? '201' : method === 'delete' ? '204' : '200';
 
+const binarySchema = { type: 'string', format: 'binary' };
+
 export function buildOpenApiDocument(publicUrl: string | null): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const op of REST_OPERATIONS) {
@@ -327,33 +606,63 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
       });
     }
     if (op.query) parameters.push(...queryParameters(op.query));
+    for (const [name, header] of Object.entries(op.headers ?? {}))
+      parameters.push({
+        name,
+        in: 'header',
+        required: header.required ?? false,
+        description: header.description,
+        schema: { type: 'string' },
+      });
     const path = op.path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-    const ok = successStatus(op.method);
+    const ok = String(op.status ?? successStatus(op.method));
+    const requestContent = op.rawBody
+      ? { 'application/octet-stream': { schema: binarySchema } }
+      : op.body
+        ? { 'application/json': { schema: toJsonSchema(op.body, 'input') } }
+        : null;
+    const responseContent = op.rawResponse
+      ? Object.fromEntries(
+          (op.responseMediaTypes ?? ['application/octet-stream']).map((type) => [
+            type,
+            { schema: binarySchema },
+          ]),
+        )
+      : op.responseOneOf
+        ? {
+            'application/json': {
+              schema: { oneOf: op.responseOneOf.map((schema) => toJsonSchema(schema, 'output')) },
+            },
+          }
+        : op.response
+          ? { 'application/json': { schema: toJsonSchema(op.response, 'output') } }
+          : null;
     paths[path] ??= {};
     paths[path][op.method] = {
       summary: op.summary,
       tags: [op.tag],
       security: [{ bearerAuth: [...op.scopes] }],
       ...(parameters.length ? { parameters } : {}),
-      ...(op.body && op.method !== 'get'
-        ? {
-            requestBody: {
-              required: true,
-              content: { 'application/json': { schema: toJsonSchema(op.body, 'input') } },
-            },
-          }
+      ...(op.method !== 'get' && requestContent
+        ? { requestBody: { required: true, content: requestContent } }
         : {}),
       responses: {
         [ok]: {
           description: ok === '204' ? 'Deleted' : 'Success',
-          ...(op.response && ok !== '204'
-            ? { content: { 'application/json': { schema: toJsonSchema(op.response, 'output') } } }
-            : {}),
+          ...(ok !== '204' && responseContent ? { content: responseContent } : {}),
         },
         '400': { description: 'Invalid body, query or path parameters' },
         '401': { description: 'Missing, malformed or unknown bearer token' },
         '403': { description: 'The token does not carry the required scope' },
         '404': { description: 'No such resource, or it is not visible to you' },
+        ...Object.fromEntries(
+          Object.entries(op.responses ?? {}).map(([status, { description, success }]) => [
+            status,
+            success && responseContent
+              ? { description, content: responseContent }
+              : { description },
+          ]),
+        ),
       },
     };
   }
@@ -363,7 +672,7 @@ export function buildOpenApiDocument(publicUrl: string | null): Record<string, u
       title: 'BokyDo REST API',
       version: '1.0.0',
       description:
-        'Resource-oriented access to tasks, projects and personal habits for integrations. Authenticate with a personal access token or an OAuth 2.1 access token as a bearer token; each operation needs the scope listed on it. Everything is scoped to what the token’s owner can see.',
+        'Resource-oriented access to tasks, projects, personal habits and notes for integrations. Authenticate with a personal access token or an OAuth 2.1 access token as a bearer token; each operation needs the scope listed on it. Everything is scoped to what the token’s owner can see.',
     },
     ...(publicUrl ? { servers: [{ url: publicUrl }] } : {}),
     components: {

@@ -1,3 +1,14 @@
+import type { QueryClient } from '@tanstack/react-query';
+import { queryClient } from './queries.js';
+
+/**
+ * Notes views refresh on every live user-event / reconnect hint, just like habit views (whose
+ * invalidation is passed in by the caller). Kept as a small helper so the key mapping is testable.
+ */
+export function invalidateLiveNotes(qc: Pick<QueryClient, 'invalidateQueries'>): void {
+  void qc.invalidateQueries({ queryKey: ['notes'] });
+}
+
 /** Live hints plus reconnect/focus/periodic catch-up. Hints never contain account data. */
 export function watchLiveChanges(pull: () => Promise<void>, invalidate: () => void): () => void {
   let disposed = false;
@@ -7,6 +18,7 @@ export function watchLiveChanges(pull: () => Promise<void>, invalidate: () => vo
     if (disposed) return;
     void pull().catch(() => undefined);
     invalidate();
+    invalidateLiveNotes(queryClient);
   };
   const poke = () => {
     // Coalesce bursts (including our own writes) instead of sending a pull for every event.

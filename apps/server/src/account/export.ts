@@ -1,8 +1,21 @@
 import { writeCsv, type Task } from '@bokydo/shared';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import type { AttachmentStore } from '../attachments/store.js';
 import type { Database } from '../db/client.js';
-import { aiCredentials, attachments, habitCheckIns, habits, tasks, users } from '../db/schema.js';
+import {
+  aiCredentials,
+  attachments,
+  habitCheckIns,
+  habits,
+  noteFiles,
+  noteLinks,
+  noteTaskLinks,
+  notes,
+  tasks,
+  users,
+} from '../db/schema.js';
 import type { ApiTokenStore } from '../oauth/token-store.js';
 import { visibleProjects } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
@@ -13,6 +26,8 @@ export interface ExportDeps {
   db: Database;
   sync: SyncService;
   store: AttachmentStore;
+  /** `<dataDir>/note-files`: note files live apart from attachments (ADR 0025). */
+  noteFileStore: AttachmentStore;
   tokens: ApiTokenStore;
   publicUrl: string | null;
 }
@@ -78,8 +93,78 @@ export function buildExport(deps: ExportDeps, userId: string): ZipWriter {
       .innerJoin(habits, eq(habitCheckIns.habitId, habits.id))
       .where(eq(habits.ownerUserId, userId));
 
+    // Notes, in every state including the trash, from one consistent snapshot. The body is
+    // exported exactly as stored: a censored span stays ciphertext, because its plaintext is only
+    // ever in the user's browser. Every child query joins its note and owner, so a stale id list
+    // can never pull in another account's link or file, and files must still be `ready` and
+    // owned by the user: an upload in progress or a foreign file is not exported.
+    const { ownedNotes, ownedNoteLinks, ownedNoteTaskLinks, ownedNoteFiles } =
+      await deps.db.transaction(
+        async (tx) => {
+          const ownedNotes = await tx
+            .select()
+            .from(notes)
+            .where(eq(notes.ownerUserId, userId))
+            .orderBy(asc(notes.createdAt), asc(notes.id));
+          const ownedNoteLinks = await tx
+            .select({ fromNoteId: noteLinks.fromNoteId, toNoteId: noteLinks.toNoteId })
+            .from(noteLinks)
+            .innerJoin(notes, eq(notes.id, noteLinks.fromNoteId))
+            .where(eq(notes.ownerUserId, userId));
+          const ownedNoteTaskLinks = await tx
+            .select({
+              noteId: noteTaskLinks.noteId,
+              taskId: noteTaskLinks.taskId,
+              source: noteTaskLinks.source,
+            })
+            .from(noteTaskLinks)
+            .innerJoin(notes, eq(notes.id, noteTaskLinks.noteId))
+            .where(eq(notes.ownerUserId, userId));
+          const ownedNoteFiles = (
+            await tx
+              .select({ file: noteFiles })
+              .from(noteFiles)
+              .innerJoin(notes, eq(notes.id, noteFiles.noteId))
+              .where(
+                and(
+                  eq(notes.ownerUserId, userId),
+                  eq(noteFiles.ownerUserId, userId),
+                  eq(noteFiles.status, 'ready'),
+                ),
+              )
+              .orderBy(asc(noteFiles.createdAt), asc(noteFiles.id))
+          ).map((row) => row.file);
+          return { ownedNotes, ownedNoteLinks, ownedNoteTaskLinks, ownedNoteFiles };
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+      );
+
     const attachmentFile = (a: (typeof files)[number]) =>
       `attachments/${a.id}/${safeEntryName(a.filename).replace(/\//g, '_')}`;
+    const noteFileEntry = (f: (typeof ownedNoteFiles)[number]) =>
+      `notes/files/${f.id}/${safeEntryName(f.filename).replace(/\//g, '_')}`;
+    // Probe every file before export.json is written: a row whose bytes have already gone is
+    // listed under `missingFiles` instead of becoming a silently empty entry. The files that are
+    // present are opened again as they are added, so one that disappears in between breaks the
+    // download rather than being quietly left out.
+    const missingFiles: { id: string; reason: 'missing' }[] = [];
+    const entries: { entry: string; store: AttachmentStore; id: string; date: Date }[] = [];
+    for (const a of files) {
+      if (await hasBytes(deps.store, a.id))
+        entries.push({ entry: attachmentFile(a), store: deps.store, id: a.id, date: a.createdAt });
+      else missingFiles.push({ id: a.id, reason: 'missing' });
+    }
+    for (const f of ownedNoteFiles) {
+      if (await hasBytes(deps.noteFileStore, f.id))
+        entries.push({
+          entry: noteFileEntry(f),
+          store: deps.noteFileStore,
+          id: f.id,
+          date: f.createdAt,
+        });
+      else missingFiles.push({ id: f.id, reason: 'missing' });
+    }
+
     const data = {
       format: 'bokydo-export',
       version: 1,
@@ -95,6 +180,33 @@ export function buildExport(deps: ExportDeps, userId: string): ZipWriter {
       tasks: allTasks,
       habits: ownedHabits,
       habitCheckIns: ownedCheckIns,
+      notes: ownedNotes.map((n) => ({
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        tags: n.tags,
+        /** The stored state; a note in the trash keeps `active`/`archived` plus `trashedAt`. */
+        state: n.state,
+        pinned: n.pinned,
+        trashedAt: n.trashedAt?.toISOString() ?? null,
+        createdAt: n.createdAt.toISOString(),
+        updatedAt: n.updatedAt.toISOString(),
+      })),
+      noteLinks: ownedNoteLinks,
+      noteTaskLinks: ownedNoteTaskLinks,
+      noteFiles: ownedNoteFiles.map((f) => ({
+        id: f.id,
+        noteId: f.noteId,
+        filename: f.filename,
+        contentType: f.contentType,
+        size: f.size,
+        sha256: f.sha256,
+        referenced: f.referenced,
+        createdAt: f.createdAt.toISOString(),
+        file: noteFileEntry(f),
+      })),
+      /** Rows whose bytes are gone from disk: they are not in the archive. */
+      missingFiles,
       labels: snapshot.labels,
       filters: snapshot.filters,
       comments: snapshot.comments,
@@ -122,23 +234,39 @@ export function buildExport(deps: ExportDeps, userId: string): ZipWriter {
     await zip.add(
       'README.txt',
       'Your BokyDo data.\n\n' +
-        'export.json  everything, machine-readable (projects, tasks incl. completed, comments, labels, filters, reminders, teams, settings, habits and check-ins)\n' +
+        'export.json  everything, machine-readable (projects, tasks incl. completed, comments, labels, filters, reminders, teams, settings, habits and check-ins, notes and their links)\n' +
         'tasks.csv    your tasks for spreadsheets (cells that look like formulas start with an apostrophe)\n' +
-        'attachments/ the files attached to comments\n\n' +
+        'attachments/ the files attached to comments\n' +
+        'notes/files/ the files attached to your notes (censored spans in note bodies stay encrypted and need the password you set for them to decrypt)\n\n' +
+        'A file that was already gone from the server is listed under missingFiles in export.json and has no entry in this archive.\n' +
         'Passwords, two-factor secrets, passkeys, API keys and tokens are never exported.\n',
     );
     await zip.add('export.json', JSON.stringify(data, null, 2));
     await zip.add('tasks.csv', tasksCsv(allTasks, data));
-    for (const a of files) {
-      try {
-        await zip.add(attachmentFile(a), deps.store.read(a.id), { date: a.createdAt });
-      } catch {
-        // A file missing on disk shouldn't sink the whole export; export.json still lists it.
-      }
+    for (const f of entries) {
+      const added = await zip.addFile(f.entry, path.join(f.store.dir, f.id), { date: f.date });
+      // export.json said this file is present, so if it vanished after the probe the archive
+      // would be wrong: fail the download instead of leaving the entry out.
+      if (!added) throw new Error(`export file vanished: ${f.id}`);
     }
     await zip.finish();
   })().catch((err: unknown) => zip.abort(err instanceof Error ? err : new Error('export failed')));
   return zip;
+}
+
+/**
+ * Whether a file row still has bytes in its store. The id is a UUID from the database, so it can
+ * never escape the store's directory. Only ENOENT means "already gone"; any other error is a real
+ * failure and aborts the export.
+ */
+async function hasBytes(store: AttachmentStore, id: string): Promise<boolean> {
+  try {
+    await stat(path.join(store.dir, id));
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
 }
 
 function tasksCsv(

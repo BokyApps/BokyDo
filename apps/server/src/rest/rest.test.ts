@@ -1,3 +1,4 @@
+import type { ApiScope } from '@bokydo/shared';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tasks } from '../db/schema.js';
@@ -48,6 +49,17 @@ function bearer(token: string): Client {
 }
 
 const as = (who: string) => bearer(people[who]!.token);
+
+/** A token with exactly the scopes a notes test needs, minted the way Settings does. */
+async function notesToken(who: string, scopes: ApiScope[]): Promise<string> {
+  return (
+    await t.app.services.apiTokens.createPat(people[who]!.id, {
+      name: `notes-${who}`,
+      scopes,
+      expiresInDays: 1,
+    })
+  ).token;
+}
 const get = async (client: Client, url: string) => {
   const res = await client.request({ method: 'GET', url });
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
@@ -170,6 +182,65 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: read access with bearer tokens', (
       type: 'object',
     });
     expect(listed.parameters.map((p: { name: string }) => p.name)).toContain('projectId');
+
+    // Notes: the same generated contract covers every route, raw uploads and downloads included.
+    const noteOperations: [string, string, string[]][] = [
+      ['/api/v1/notes', 'get', ['notes:read']],
+      ['/api/v1/notes', 'post', ['notes:write']],
+      ['/api/v1/notes/tags', 'get', ['notes:read']],
+      ['/api/v1/notes/{id}', 'get', ['notes:read']],
+      ['/api/v1/notes/{id}', 'patch', ['notes:write']],
+      ['/api/v1/notes/{id}', 'delete', ['notes:write']],
+      ['/api/v1/notes/{id}/tasks/{taskId}', 'put', ['notes:write', 'tasks:read']],
+      ['/api/v1/notes/{id}/tasks/{taskId}', 'delete', ['notes:write']],
+      ['/api/v1/tasks/{taskId}/notes', 'get', ['notes:read', 'tasks:read']],
+      ['/api/v1/notes/{id}/files', 'post', ['notes:write']],
+      ['/api/v1/note-files/{id}', 'get', ['notes:read']],
+    ];
+    for (const [path, method, requiredScopes] of noteOperations)
+      expect(spec.body.paths[path]?.[method]?.security, `${method.toUpperCase()} ${path}`).toEqual([
+        { bearerAuth: requiredScopes },
+      ]);
+
+    const noteList = spec.body.paths['/api/v1/notes'].get;
+    expect(noteList.parameters.map((p: { name: string }) => p.name)).toEqual(
+      expect.arrayContaining(['q', 'tag', 'state', 'limit', 'cursor']),
+    );
+    expect(spec.body.paths['/api/v1/notes/{id}'].delete.responses['204']).toBeDefined();
+    const createNote = spec.body.paths['/api/v1/notes'].post;
+    // A create answers with the full note or the write-only receipt, and a retry is 200 vs 409.
+    expect(createNote.responses['201'].content['application/json'].schema.oneOf).toHaveLength(2);
+    // The idempotent retry answers with the same body as the first create.
+    expect(createNote.responses['200'].content['application/json'].schema.oneOf).toHaveLength(2);
+    expect(createNote.responses['409'].description).toContain('id_conflict');
+    expect(createNote.responses['403'].description).toContain('project_limited_token');
+    expect(
+      spec.body.paths['/api/v1/notes/{id}'].patch.responses['200'].content['application/json']
+        .schema.oneOf,
+    ).toHaveLength(2);
+    // A conditional PATCH documents the stale-revision conflict.
+    expect(spec.body.paths['/api/v1/notes/{id}'].patch.responses['409'].description).toContain(
+      'stale_revision',
+    );
+    const upload = spec.body.paths['/api/v1/notes/{id}/files'].post;
+    expect(upload.requestBody.content['application/octet-stream'].schema.format).toBe('binary');
+    expect(upload.parameters.map((p: { name: string }) => p.name)).toContain('X-Filename');
+    expect(upload.responses['201'].content['application/json']).toBeDefined();
+    expect(upload.responses['403'].description).toContain('uploads_disabled');
+    expect(upload.responses['413']).toBeDefined();
+    expect(upload.responses['429']).toBeDefined();
+    const download = spec.body.paths['/api/v1/note-files/{id}'].get;
+    expect(
+      download.parameters.find((p: { name: string }) => p.name === 'inline')?.schema.enum,
+    ).toEqual(['1']);
+    // Raster images keep their type inline; everything else is opaque binary.
+    expect(Object.keys(download.responses['200'].content)).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'application/octet-stream',
+    ]);
 
     const page = await new Client(t.app, null).request({ method: 'GET', url: '/api/docs' });
     expect(page.statusCode).toBe(200);
@@ -294,6 +365,130 @@ describe.skipIf(!TEST_DATABASE_URL)('REST v1: writes with bearer tokens', () => 
     // The occurrence completed, so the task is open again at its next date.
     expect(done.body.task.isCompleted).toBe(false);
     expect(done.body.task.due.date > '2026-01-01').toBe(true);
+  });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)('REST v1: notes with bearer tokens', () => {
+  it('round-trips notes, files and task links in exactly the documented shapes', async () => {
+    const rw = bearer(await notesToken('alice', ['notes:read', 'notes:write', 'tasks:read']));
+    const created = await call(rw, 'POST', '/api/v1/notes', {
+      title: 'REST note',
+      body: 'Hello **world**',
+      tags: ['Work'],
+    });
+    expect(created.status).toBe(201);
+    expect(RESPONSE_SCHEMAS.noteSingle.safeParse(created.body).error).toBeUndefined();
+    const noteId = created.body.note.id as string;
+    expect(created.body.note.tags).toEqual(['work']);
+
+    const fetched = await get(rw, `/api/v1/notes/${noteId}`);
+    expect(fetched.status).toBe(200);
+    expect(RESPONSE_SCHEMAS.noteSingle.safeParse(fetched.body).error).toBeUndefined();
+
+    const patched = await call(rw, 'PATCH', `/api/v1/notes/${noteId}`, { pinned: true });
+    expect(patched.status).toBe(200);
+    expect(RESPONSE_SCHEMAS.noteSingle.safeParse(patched.body).error).toBeUndefined();
+
+    const listed = await get(rw, '/api/v1/notes?tag=work');
+    expect(listed.status).toBe(200);
+    expect(listed.body.notes.map((n: { id: string }) => n.id)).toEqual([noteId]);
+    expect(RESPONSE_SCHEMAS.noteList.safeParse(listed.body).error).toBeUndefined();
+
+    const tags = await get(rw, '/api/v1/notes/tags');
+    expect(tags.body.tags).toEqual([{ tag: 'work', count: 1 }]);
+    expect(RESPONSE_SCHEMAS.noteTags.safeParse(tags.body).error).toBeUndefined();
+
+    const upload = await rw.request({
+      method: 'POST',
+      url: `/api/v1/notes/${noteId}/files`,
+      headers: { 'content-type': 'application/octet-stream', 'x-filename': 'hello.txt' },
+      payload: Buffer.from('hello note file'),
+    });
+    expect(upload.statusCode).toBe(201);
+    const stored = JSON.parse(upload.body) as { id: string };
+    expect(RESPONSE_SCHEMAS.noteFile.safeParse(stored).error).toBeUndefined();
+    const download = await rw.request({ method: 'GET', url: `/api/v1/note-files/${stored.id}` });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers['content-disposition']).toContain('attachment');
+    expect(download.rawPayload.toString()).toBe('hello note file');
+
+    const taskId = aliceTasks[0]!;
+    expect(
+      (await rw.request({ method: 'PUT', url: `/api/v1/notes/${noteId}/tasks/${taskId}` }))
+        .statusCode,
+    ).toBe(204);
+    const linked = await get(rw, `/api/v1/tasks/${taskId}/notes`);
+    expect(linked.status).toBe(200);
+    expect(linked.body.notes.map((n: { id: string }) => n.id)).toEqual([noteId]);
+    expect(linked.body.notes[0].sources).toEqual(['manual']);
+    expect(RESPONSE_SCHEMAS.taskNotes.safeParse(linked.body).error).toBeUndefined();
+    expect(
+      (await rw.request({ method: 'DELETE', url: `/api/v1/notes/${noteId}/tasks/${taskId}` }))
+        .statusCode,
+    ).toBe(204);
+
+    // Another user's token, with every note scope and the task scope the task route also needs,
+    // sees nothing of Alice's.
+    const bob = bearer(await notesToken('bob', ['notes:read', 'notes:write', 'tasks:read']));
+    expect((await get(bob, `/api/v1/notes/${noteId}`)).status).toBe(404);
+    expect((await get(bob, '/api/v1/notes')).body.notes).toEqual([]);
+    expect((await get(bob, `/api/v1/tasks/${taskId}/notes`)).status).toBe(404);
+    expect(
+      (
+        await bob.request({
+          method: 'POST',
+          url: `/api/v1/notes/${noteId}/files`,
+          headers: { 'content-type': 'application/octet-stream' },
+          payload: Buffer.from('not mine'),
+        })
+      ).statusCode,
+    ).toBe(404);
+
+    expect((await call(rw, 'DELETE', `/api/v1/notes/${noteId}`)).status).toBe(204);
+    expect((await get(rw, `/api/v1/notes/${noteId}`)).status).toBe(404);
+    expect((await call(rw, 'DELETE', `/api/v1/notes/${noteId}`)).status).toBe(404);
+  });
+
+  it('refuses a token without a notes scope', async () => {
+    const taskOnly = bearer(await notesToken('alice', ['tasks:read']));
+    const refused = await get(taskOnly, '/api/v1/notes');
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('insufficient_scope');
+  });
+
+  it('answers a write-only token with the receipt, and maps retries to 200 and 409', async () => {
+    const writeOnly = bearer(await notesToken('alice', ['notes:write']));
+    const noteId = id();
+    const created = await call(writeOnly, 'POST', '/api/v1/notes', {
+      id: noteId,
+      title: 'Receipt',
+      body: 'x',
+    });
+    expect(created.status).toBe(201);
+    expect(RESPONSE_SCHEMAS.noteReceipt.safeParse(created.body).error).toBeUndefined();
+    expect(created.body).toEqual({ note: { id: noteId, updatedAt: expect.any(String) } });
+
+    // The same id and content is the same create: 200, not 201.
+    const retried = await call(writeOnly, 'POST', '/api/v1/notes', {
+      id: noteId,
+      title: 'Receipt',
+      body: 'x',
+    });
+    expect(retried.status).toBe(200);
+    expect(RESPONSE_SCHEMAS.noteReceipt.safeParse(retried.body).error).toBeUndefined();
+
+    const conflict = await call(writeOnly, 'POST', '/api/v1/notes', {
+      id: noteId,
+      title: 'Other',
+      body: 'x',
+    });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toBe('id_conflict');
+
+    const patched = await call(writeOnly, 'PATCH', `/api/v1/notes/${noteId}`, { title: 'Renamed' });
+    expect(patched.status).toBe(200);
+    expect(RESPONSE_SCHEMAS.noteReceipt.safeParse(patched.body).error).toBeUndefined();
+    expect(patched.body).toEqual({ note: { id: noteId, updatedAt: expect.any(String) } });
   });
 });
 

@@ -12,8 +12,8 @@ import { pipeline } from 'node:stream/promises';
  */
 export class AttachmentStore {
   readonly dir: string;
-  constructor(dataDir: string) {
-    this.dir = path.join(dataDir, 'attachments');
+  constructor(dataDir: string, subdirectory = 'attachments') {
+    this.dir = path.join(dataDir, subdirectory);
   }
 
   private file(id: string): string {
@@ -113,7 +113,17 @@ export function cleanFilename(raw: string | undefined): string {
   } catch {
     decoded = '';
   }
-  const name = decoded
+  return sanitizeStoredName(decoded);
+}
+
+/**
+ * The same cleanup for a name that is already stored: **no percent-decoding**. Uploads pass
+ * through `cleanFilename` (which decodes once), so decoding again on the way out would turn a
+ * harmless literal `%7B%7Bcensored:…%7D%7D` back into a live token *after* redaction. Exporters
+ * use this, then redact.
+ */
+export function sanitizeStoredName(raw: string | undefined): string {
+  const name = (raw ?? '')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f/\\]/g, '_')
     .replace(/^\.+/, '')
