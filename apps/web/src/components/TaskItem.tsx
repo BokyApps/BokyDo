@@ -43,6 +43,12 @@ const RING: Record<number, string> = {
   3: 'border-p3 bg-p3/10',
   4: 'border-p4',
 };
+const COMPLETED_RING: Record<number, string> = {
+  1: 'border-p1 bg-[color-mix(in_srgb,var(--bk-p1)_65%,white)]',
+  2: 'border-p2 bg-[color-mix(in_srgb,var(--bk-p2)_65%,white)]',
+  3: 'border-p3 bg-[color-mix(in_srgb,var(--bk-p3)_65%,white)]',
+  4: 'border-p4 bg-p4',
+};
 
 export function TaskCheckbox({ task, onToggle }: { task: Task; onToggle: () => void }) {
   const { t } = useTranslation();
@@ -61,10 +67,10 @@ export function TaskCheckbox({ task, onToggle }: { task: Task; onToggle: () => v
       className="group/check -mt-0.5 -mr-1 -ml-1 flex size-6 shrink-0 items-center justify-center rounded-full"
     >
       <span
-        className={`flex size-[1.15rem] items-center justify-center rounded-full border-2 ${RING[task.priority]} ${PRIORITY_CLASS[task.priority]} ${task.isCompleted ? 'bg-current' : ''}`}
+        className={`flex size-[1.15rem] items-center justify-center rounded-full border-2 ${(task.isCompleted ? COMPLETED_RING : RING)[task.priority]} ${PRIORITY_CLASS[task.priority]}`}
       >
         <span
-          className={`scale-75 ${task.isCompleted ? 'text-bg' : 'opacity-0 group-hover/check:opacity-100'}`}
+          className={`scale-75 ${task.isCompleted ? (task.priority === 4 ? 'text-bg' : 'text-black') : 'opacity-0 group-hover/check:opacity-100'}`}
         >
           <CheckIcon />
         </span>
