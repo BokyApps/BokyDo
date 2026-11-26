@@ -991,3 +991,38 @@ export const importMappings = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.source, t.kind, t.externalId] })],
 );
+
+/** Personal habits have their own check-ins; task completion never changes these rows. */
+export const habits = pgTable(
+  'habits',
+  {
+    id: uuid('id').primaryKey(),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    period: text('period', { enum: ['day', 'week'] }).notNull(),
+    target: integer('target').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('habits_owner_idx').on(t.ownerUserId),
+    check('habits_name_check', sql`length(btrim(${t.name})) between 1 and 100`),
+    check(
+      'habits_target_check',
+      sql`(${t.period} = 'day' and ${t.target} = 1) or (${t.period} = 'week' and ${t.target} between 1 and 7)`,
+    ),
+  ],
+);
+
+export const habitCheckIns = pgTable(
+  'habit_check_ins',
+  {
+    habitId: uuid('habit_id')
+      .notNull()
+      .references(() => habits.id, { onDelete: 'cascade' }),
+    date: date('date', { mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.habitId, t.date] })],
+);

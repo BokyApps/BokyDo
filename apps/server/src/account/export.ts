@@ -2,7 +2,7 @@ import { writeCsv, type Task } from '@bokydo/shared';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { AttachmentStore } from '../attachments/store.js';
 import type { Database } from '../db/client.js';
-import { aiCredentials, attachments, tasks, users } from '../db/schema.js';
+import { aiCredentials, attachments, habitCheckIns, habits, tasks, users } from '../db/schema.js';
 import type { ApiTokenStore } from '../oauth/token-store.js';
 import { visibleProjects } from '../sync/policy.js';
 import { taskToWire } from '../sync/serialize.js';
@@ -67,6 +67,17 @@ export function buildExport(deps: ExportDeps, userId: string): ZipWriter {
       .from(aiCredentials)
       .where(eq(aiCredentials.ownerUserId, userId));
 
+    const ownedHabits = await deps.db.select().from(habits).where(eq(habits.ownerUserId, userId));
+    const ownedCheckIns = await deps.db
+      .select({
+        habitId: habitCheckIns.habitId,
+        date: habitCheckIns.date,
+        createdAt: habitCheckIns.createdAt,
+      })
+      .from(habitCheckIns)
+      .innerJoin(habits, eq(habitCheckIns.habitId, habits.id))
+      .where(eq(habits.ownerUserId, userId));
+
     const attachmentFile = (a: (typeof files)[number]) =>
       `attachments/${a.id}/${safeEntryName(a.filename).replace(/\//g, '_')}`;
     const data = {
@@ -82,6 +93,8 @@ export function buildExport(deps: ExportDeps, userId: string): ZipWriter {
       projects: snapshot.projects,
       sections: snapshot.sections,
       tasks: allTasks,
+      habits: ownedHabits,
+      habitCheckIns: ownedCheckIns,
       labels: snapshot.labels,
       filters: snapshot.filters,
       comments: snapshot.comments,
@@ -109,7 +122,7 @@ export function buildExport(deps: ExportDeps, userId: string): ZipWriter {
     await zip.add(
       'README.txt',
       'Your BokyDo data.\n\n' +
-        'export.json  everything, machine-readable (projects, tasks incl. completed, comments, labels, filters, reminders, teams, settings)\n' +
+        'export.json  everything, machine-readable (projects, tasks incl. completed, comments, labels, filters, reminders, teams, settings, habits and check-ins)\n' +
         'tasks.csv    your tasks for spreadsheets (cells that look like formulas start with an apostrophe)\n' +
         'attachments/ the files attached to comments\n\n' +
         'Passwords, two-factor secrets, passkeys, API keys and tokens are never exported.\n',

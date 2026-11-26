@@ -135,8 +135,99 @@ try {
   }
   assert(!(await layouts.innerText()).includes('view.'));
   assert.deepEqual(errors, []);
+  await reloaded.getByRole('link', { name: 'Habits', exact: true }).click();
+  await reloaded.getByRole('heading', { name: 'Habits', exact: true }).waitFor();
+  assert.equal(await reloaded.getByRole('link', { name: 'Productivity', exact: true }).count(), 0);
+  assert(!(await reloaded.locator('main').innerText()).includes('Karma'));
+  assert.equal((await api.get(`${base}/api/v1/productivity`)).status(), 404);
+
+  // Lose a response after committing. A stable draft ID must prevent duplicate creation, and
+  // pending saves must resist dismissal or opening another editor.
+  let releaseCreate;
+  let createReached;
+  const release = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
+  const reached = new Promise((resolve) => {
+    createReached = resolve;
+  });
+  let loseResponse = true;
+  await reloaded.route('**/api/v1/habits', async (route) => {
+    if (route.request().method() === 'POST' && loseResponse) {
+      loseResponse = false;
+      const response = await route.fetch();
+      assert.equal(response.status(), 201);
+      createReached();
+      await release;
+      await route.abort('failed');
+    } else await route.continue();
+  });
+  await reloaded.getByRole('button', { name: 'Add habit', exact: true }).click();
+  let habitDialog = reloaded.getByRole('dialog', { name: 'New habit', exact: true });
+  await habitDialog.getByRole('textbox', { name: 'Habit name' }).fill('Read daily');
+  await habitDialog.getByRole('button', { name: 'Create habit', exact: true }).click();
+  await reached;
+  assert(await reloaded.getByRole('button', { name: 'Add habit', exact: true }).isDisabled());
+  assert(await habitDialog.getByRole('textbox', { name: 'Habit name' }).isDisabled());
+  await reloaded.keyboard.press('Escape');
+  assert(await habitDialog.isVisible());
+  await reloaded.mouse.click(1, 1);
+  assert(await habitDialog.isVisible());
+  releaseCreate();
+  await habitDialog.getByRole('alert').waitFor();
+  await habitDialog.getByRole('button', { name: 'Create habit', exact: true }).click();
+  await habitDialog.waitFor({ state: 'hidden' });
+  await reloaded.unroute('**/api/v1/habits');
+  let habits = await (await api.get(`${base}/api/v1/habits`)).json();
+  assert.equal(habits.habits.length, 1, 'Lost responses must not create duplicate habits');
+  assert((await api.post(`${base}/api/v1/tasks/${parent.id}/complete`, { headers })).ok());
+  habits = await (await api.get(`${base}/api/v1/habits`)).json();
+  assert.equal(habits.habits[0].progress.completed, 0, 'Normal tasks must not count as habits');
+  assert.equal(habits.habits[0].streak.current, 0);
+  await reloaded.getByRole('button', { name: 'Today: Read daily', exact: true }).click();
+  await reloaded.getByRole('button', { name: 'Today: Read daily', pressed: true }).waitFor();
+  const yesterday = new Date(`${habits.today}T00:00:00Z`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yesterdayDate = yesterday.toISOString().slice(0, 10);
+  const history = reloaded.getByRole('group', { name: 'Read daily check-in history', exact: true });
+  assert.equal(await history.getByRole('button').count(), 14);
+  await history
+    .getByRole('button', { name: `${yesterdayDate}, Read daily, not completed`, exact: true })
+    .click();
+  await reloaded.getByText('2 day streak', { exact: true }).waitFor();
+
+  await reloaded.getByRole('button', { name: 'Add habit', exact: true }).click();
+  habitDialog = reloaded.getByRole('dialog', { name: 'New habit', exact: true });
+  await habitDialog.getByRole('textbox', { name: 'Habit name' }).fill('Walk');
+  await habitDialog.getByLabel('Frequency', { exact: true }).selectOption('week');
+  await habitDialog.getByRole('spinbutton', { name: 'Target each week' }).fill('3');
+  await habitDialog.getByRole('button', { name: 'Create habit', exact: true }).click();
+  await habitDialog.waitFor({ state: 'hidden' });
+  const walk = reloaded.getByRole('region', { name: 'Walk', exact: true });
+  await walk.getByRole('button', { name: 'Edit', exact: true }).click();
+  habitDialog = reloaded.getByRole('dialog', { name: 'Edit habit', exact: true });
+  await habitDialog.getByRole('spinbutton', { name: 'Target each week' }).fill('2');
+  await habitDialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await habitDialog.waitFor({ state: 'hidden' });
+  await walk.getByText('2 days a week · 0/2 this period', { exact: true }).waitFor();
+  await reloaded.reload();
+  await reloaded.getByRole('button', { name: 'Today: Read daily', pressed: true }).waitFor();
+  await reloaded.getByText('2 day streak', { exact: true }).waitFor();
+  await reloaded
+    .getByRole('region', { name: 'Walk', exact: true })
+    .getByRole('button', { name: 'Delete', exact: true })
+    .click();
+  await reloaded
+    .getByRole('dialog', { name: 'Delete habit?', exact: true })
+    .getByRole('button', { name: 'Delete', exact: true })
+    .click();
+  await reloaded.getByRole('region', { name: 'Walk', exact: true }).waitFor({ state: 'hidden' });
+  habits = await (await api.get(`${base}/api/v1/habits`)).json();
+  assert.equal(habits.habits.length, 1);
+  assert.equal(habits.habits[0].name, 'Read daily');
+  assert.deepEqual(errors, []);
   console.log(
-    'PASS: quick add, keyboard submit, parsed dates/priorities, persisted subtasks, View icons',
+    'PASS: task entry, persistence, View icons, habit CRUD/check-ins/streaks, retry safety and task isolation',
   );
 } finally {
   await browser.close();

@@ -52,7 +52,7 @@ import { createLiveConnector, type LiveConnector } from './net/outbound-ws.js';
 import { registerDeliveryRoutes } from './delivery/routes.js';
 import { registerCalendarRoutes } from './calendar/routes.js';
 import { VapidKeys } from './delivery/webpush.js';
-import { registerProductivityRoutes } from './productivity/routes.js';
+import { registerHabitRoutes } from './habits/routes.js';
 import { report } from './assist/report.js';
 import { registerAssistRoutes } from './assist/routes.js';
 import { registerImportRoutes } from './import/routes.js';
@@ -386,7 +386,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerAssistRoutes(app, { db, settings, ai, sync });
   registerWebhookRoutes(app, { db, settings, webhooks });
   registerCalendarRoutes(app, { db, settings, sessionKey: deps.secrets.sessionKey });
-  registerProductivityRoutes(app, { db, settings });
+  registerHabitRoutes(app, { db, settings });
   registerImportRoutes(app, importer);
   services.purgeAttachments = await registerAttachmentRoutes(app, {
     db,
