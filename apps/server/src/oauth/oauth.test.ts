@@ -421,6 +421,71 @@ describe.skipIf(!TEST_DATABASE_URL)('OAuth authorization server', () => {
     expect((await syncWith(tokens.access_token)).statusCode).toBe(401);
     expect((await alice.http.get('/api/v1/account/apps')).json().apps).toEqual([]);
   });
+  it('enforces the current MCP credential policy without disabling REST tokens', async () => {
+    const c = await codeFor(alice, {
+      resource: `${BASE}/mcp`,
+      scope: 'tasks:read habits:read habits:write',
+    });
+    const signedIn = (await exchange(c)).json();
+    const { token: pat } = await t.app.services.apiTokens.createPat(alice.id, {
+      name: 'Policy test',
+      scopes: ['sync'],
+      expiresInDays: 1,
+    });
+    const mode = (value: 'both' | 'sign-in' | 'pat') =>
+      t.app.services.settings.update({ 'api.mcpAuthMode': value }, { userId: null, ip: null });
+    expect((await mcpWith(signedIn.access_token)).statusCode).toBe(200);
+    expect((await mcpWith(pat)).statusCode).toBe(200);
+    await mode('sign-in');
+    const blockedPat = await mcpWith(pat);
+    expect(blockedPat.statusCode).toBe(401);
+    expect(blockedPat.headers['www-authenticate']).toContain('resource_metadata');
+    expect((await mcpWith(signedIn.access_token)).statusCode).toBe(200);
+    expect((await syncWith(pat)).statusCode).toBe(200);
+    await mode('pat');
+    expect((await mcpWith(signedIn.access_token)).statusCode).toBe(401);
+    expect((await mcpWith(pat)).statusCode).toBe(200);
+    expect((await mcpWith('bad')).headers['www-authenticate']).not.toContain('resource_metadata');
+    const metadata = (
+      await raw({ method: 'GET', url: '/.well-known/oauth-protected-resource/mcp' })
+    ).json();
+    expect(metadata).not.toHaveProperty('authorization_servers');
+    const deniedRefresh = await form('/oauth/token', {
+      grant_type: 'refresh_token',
+      refresh_token: signedIn.refresh_token,
+      client_id: c.clientId,
+    });
+    expect(deniedRefresh.statusCode).toBe(400);
+    await mode('both');
+    expect((await mcpWith(signedIn.access_token)).statusCode).toBe(200);
+    expect(
+      (await raw({ method: 'GET', url: '/.well-known/oauth-protected-resource/mcp' })).json()
+        .authorization_servers,
+    ).toEqual([BASE]);
+    expect((await raw({ method: 'GET', url: '/api/v1/instance' })).json().mcpAuthMode).toBe('both');
+  });
+
+  it('refuses new MCP sign-ins in PAT-only mode while API OAuth still works', async () => {
+    const pending = await codeFor(alice, { resource: `${BASE}/mcp`, scope: 'tasks:read' });
+    await t.app.services.settings.update({ 'api.mcpAuthMode': 'pat' }, { userId: null, ip: null });
+    expect((await exchange(pending)).statusCode).toBe(400);
+    const clientId = (await register()).json().client_id;
+    const denied = await authorize({
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: CALLBACK,
+      code_challenge: challengeOf(verifier()),
+      code_challenge_method: 'S256',
+      resource: `${BASE}/mcp`,
+      scope: 'tasks:read',
+    });
+    expect(new URL(denied.headers.location as string).searchParams.get('error')).toBe(
+      'access_denied',
+    );
+    const apiCode = await codeFor(alice, { scope: 'sync' });
+    const access = (await exchange(apiCode)).json().access_token;
+    expect((await syncWith(access)).statusCode).toBe(200);
+  });
 });
 
 describe.skipIf(!TEST_DATABASE_URL)('personal access tokens', () => {

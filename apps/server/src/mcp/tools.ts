@@ -25,6 +25,7 @@ import { visibleProjects, type ProjectScope } from '../sync/policy.js';
 import type { SyncService } from '../sync/sync-service.js';
 import { runFilter } from '../tasks/filter-sql.js';
 import { searchTasks } from '../tasks/routes.js';
+import { HABIT_TOOLS } from './habit-tools.js';
 
 /** Everything a tool may use. The user and their scopes come from the verified token. */
 export interface ToolContext {
@@ -36,6 +37,8 @@ export interface ToolContext {
   projectIds: ProjectScope;
   baseUrl: string;
   defaultTimeZone: string;
+  /** Publish a user-wide sync hint after a committed personal-habit write. */
+  publishHabitChange?: (userId: string) => Promise<void>;
 }
 
 export interface ToolDefinition {
@@ -189,7 +192,7 @@ const schema = (properties: Record<string, unknown>, required: string[] = []) =>
 });
 const limitProp = { type: 'integer', minimum: 1, maximum: 100, description: 'Default 30' };
 
-export const TOOLS: ToolDefinition[] = [
+const TASK_TOOLS: ToolDefinition[] = [
   {
     name: 'search_tasks',
     title: 'Search tasks',
@@ -513,3 +516,5 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
 ];
+
+export const TOOLS: ToolDefinition[] = [...TASK_TOOLS, ...HABIT_TOOLS];

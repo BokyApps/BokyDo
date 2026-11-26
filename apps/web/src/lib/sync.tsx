@@ -8,6 +8,8 @@ import {
   type SyncResponse,
 } from '@bokydo/shared';
 import { SyncStore, type SyncState } from '@bokydo/sync-client';
+import { useQueryClient } from '@tanstack/react-query';
+import { watchLiveChanges } from './live-sync.js';
 import {
   createContext,
   useContext,
@@ -24,6 +26,7 @@ import { offlineEnabled, pruneOffline, readOffline, writeOffline } from './offli
 import { useToast } from './toasts.js';
 
 const SyncContext = createContext<SyncStore | null>(null);
+const SyncReadyContext = createContext(false);
 
 const REJECTIONS: Record<string, string> = {
   forbidden: "You don't have permission to do that in this project.",
@@ -36,29 +39,36 @@ const REJECTIONS: Record<string, string> = {
 /** One sync engine per signed-in session: optimistic local state, server sync, live pokes. */
 export function SyncProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
-  const [store] = useState(
-    () =>
-      new SyncStore(
-        { sync: (request: SyncRequest) => api<SyncResponse>('POST', '/api/v1/sync', request) },
-        {
-          onRejected: (_command, result) =>
-            toast({
-              tone: 'error',
-              message: REJECTIONS[result.error] ?? 'A change could not be saved.',
-            }),
-          // Keep the opt-in offline copy current after every change and every confirmation.
-          onPersist: (snapshot) => {
-            const userId = snapshot.state.user?.id;
-            if (userId) void writeOffline(userId, snapshot);
-          },
+  const queryClient = useQueryClient();
+  const [serverSynced, setServerSynced] = useState(false);
+  const [store] = useState(() => {
+    let receivedServerResponse = false;
+    return new SyncStore(
+      {
+        sync: async (request: SyncRequest) => {
+          const response = await api<SyncResponse>('POST', '/api/v1/sync', request);
+          receivedServerResponse = true;
+          return response;
         },
-      ),
-  );
+      },
+      {
+        onRejected: (_command, result) =>
+          toast({
+            tone: 'error',
+            message: REJECTIONS[result.error] ?? 'A change could not be saved.',
+          }),
+        // Keep the opt-in offline copy current after every change and every confirmation.
+        onPersist: (snapshot) => {
+          if (receivedServerResponse) setServerSynced(true);
+          const userId = snapshot.state.user?.id;
+          if (userId) void writeOffline(userId, snapshot);
+        },
+      },
+    );
+  });
   useEffect(() => {
     let disposed = false;
-    let events: EventSource | null = null;
-    // Catch up after the tab was in the background or the network blipped.
-    const onVisible = () => document.visibilityState === 'visible' && void store.pull();
+    let stopLive: (() => void) | undefined;
     void (async () => {
       // Hydrate from the device before the first network round trip, when the setting is on.
       if (offlineEnabled()) {
@@ -72,19 +82,23 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       // A different user on this browser: their copy is not ours to keep.
       if (userId) void pruneOffline(userId);
       if (disposed) return;
-      events = new EventSource('/api/v1/sync/events');
-      events.addEventListener('poke', () => void store.pull());
-      document.addEventListener('visibilitychange', onVisible);
-      window.addEventListener('online', onVisible);
+      stopLive = watchLiveChanges(
+        () => store.pull(),
+        () => {
+          void queryClient.invalidateQueries({ queryKey: ['habits'] });
+        },
+      );
     })();
     return () => {
       disposed = true;
-      events?.close();
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('online', onVisible);
+      stopLive?.();
     };
-  }, [store]);
-  return <SyncContext.Provider value={store}>{children}</SyncContext.Provider>;
+  }, [store, queryClient]);
+  return (
+    <SyncContext.Provider value={store}>
+      <SyncReadyContext.Provider value={serverSynced}>{children}</SyncReadyContext.Provider>
+    </SyncContext.Provider>
+  );
 }
 
 export function useStore(): SyncStore {
@@ -102,6 +116,11 @@ export function useSyncState(): SyncState {
     },
     () => store.state,
   );
+}
+
+/** True only after applying a successful server response, never for an offline snapshot. */
+export function useSyncReady(): boolean {
+  return useContext(SyncReadyContext);
 }
 
 export function usePreferences(): Preferences {

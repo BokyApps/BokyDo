@@ -13,6 +13,8 @@ export const API_SCOPES = {
   'projects:write': 'Add, change and delete your projects, sections, labels and filters',
   'comments:read': 'See comments on your tasks and projects',
   'comments:write': 'Add, change and delete your comments',
+  'habits:read': 'See your personal habits and progress',
+  'habits:write': 'Add, change, check in and delete your personal habits',
   'ai:use': 'Retired: AI features are not available',
 } as const;
 /** Kept in the type for dormant legacy AI code; never accepted for new tokens. */
@@ -35,6 +37,8 @@ export const DEFAULT_OAUTH_SCOPES: readonly ApiScope[] = [
   'projects:read',
   'comments:read',
   'comments:write',
+  'habits:read',
+  'habits:write',
 ];
 
 /**
