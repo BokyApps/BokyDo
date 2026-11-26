@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseScopeString, redirectUriIssue, redirectUriMatches } from './api-auth.js';
+import {
+  API_SCOPE_KEYS,
+  parseScopeString,
+  redirectUriIssue,
+  redirectUriMatches,
+  scopesAllow,
+} from './api-auth.js';
 
 describe('redirect URIs', () => {
   it('accepts https, loopback http and reverse-domain app schemes only', () => {
@@ -46,5 +52,14 @@ describe('scope strings', () => {
     expect(parseScopeString('tasks:read  tasks:read sync')).toEqual(['tasks:read', 'sync']);
     expect(parseScopeString('tasks:read admin')).toBeNull();
     expect(parseScopeString('')).toEqual([]);
+    expect(parseScopeString('ai:use')).toBeNull();
+    expect(API_SCOPE_KEYS).not.toContain('ai:use');
+  });
+
+  it('treats full sync as every current core permission, but not retired AI', () => {
+    expect(scopesAllow(['sync'], ['tasks:read', 'comments:write'])).toBe(true);
+    expect(scopesAllow(['tasks:read'], ['tasks:read'])).toBe(true);
+    expect(scopesAllow(['tasks:read'], ['tasks:write'])).toBe(false);
+    expect(scopesAllow(['sync'], ['ai:use'])).toBe(false);
   });
 });

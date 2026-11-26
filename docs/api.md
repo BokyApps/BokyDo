@@ -2,7 +2,7 @@
 
 BokyDo exposes two ways for an integration to talk to it:
 
-- **`/mcp`** — a Model Context Protocol server (Streamable HTTP) for AI assistants. See
+- **`/mcp`** — a Model Context Protocol server (Streamable HTTP) for external AI assistants. See
   [ADR 0009](adr/0009-mcp-server.md).
 - **`/api/v1/…`** — a resource-oriented REST API for everything else: scripts, n8n, Home
   Assistant, a custom connector. This document covers the REST API.
@@ -11,8 +11,9 @@ Everything is scoped to what the token's owner can see. Both surfaces authentica
 
 ## Authenticating
 
-Create a token in **Settings → Apps & tokens** (or authorize an app over OAuth 2.1, which is what
-assistants use). Send it as a bearer token:
+Create one token in **Settings → API & MCP** and select the permissions it needs. The same
+personal access token works with REST clients such as n8n and external MCP clients such as Hermes.
+Send it as a bearer token:
 
 ```bash
 curl -H "Authorization: Bearer $BOKYDO_TOKEN" https://your-instance/api/v1/tasks
@@ -30,7 +31,11 @@ allowed only if the token holds every scope it needs:
 | `projects:write` | Add, change and delete projects, sections, labels and filters |
 | `comments:read`  | Read comments                                                 |
 | `comments:write` | Add, change and delete comments                               |
-| `ai:use`         | Use AI features, which may spend money                        |
+
+`sync` is full account access and covers all current REST and MCP permissions. Other tokens need
+each permission an operation requires. AI features are retired, and new tokens cannot request an
+AI scope. Instance administrator routes remain session-only; a bearer token never grants admin
+access.
 
 A token missing a scope gets `403 {"error":"insufficient_scope"}`; a bad or unknown token gets
 `401`. Anything you cannot see answers `404`, the same as something that does not exist.
@@ -40,6 +45,37 @@ Everything outside them answers `404`, as if it did not exist, on REST and MCP a
 token can't create projects (`403`), change sharing, or touch labels, filters or settings; tick
 sub-projects and the Inbox explicitly if it should reach them. Full access (`sync`) can't be
 limited. See [ADR 0019](adr/0019-project-limited-tokens.md).
+
+### MCP (Streamable HTTP)
+
+Use the public URL ending in `/mcp`; this is the complete MCP endpoint. Send JSON-RPC requests as
+HTTP POST with `Content-Type: application/json`, `Accept: application/json, text/event-stream`,
+and the same `Authorization: Bearer …` header used for REST. For example, initialize a client:
+
+```bash
+curl -sS https://your-instance/mcp \
+  -H "Authorization: Bearer $BOKYDO_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"my-client","version":"1.0"}}}'
+```
+
+For Hermes, add this to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  bokydo:
+    url: https://your-instance/mcp
+    headers:
+      Authorization: 'Bearer bkd_pat_REPLACE_WITH_TOKEN'
+```
+
+MCP uses the same token scopes and project limits as REST. A full-access token can use both
+protocols; OAuth tokens remain bound to their requested resource, so an OAuth token issued for
+`/mcp` cannot be used with `/api/v1` or vice versa.
+
+For n8n, configure an **HTTP Header Auth** credential with header name `Authorization` and value
+`Bearer bkd_pat_REPLACE_WITH_TOKEN`; use it for requests to `https://your-instance/api/v1/...`.
 
 ## The contract
 
@@ -100,9 +136,8 @@ curl -s -X POST -H "Authorization: Bearer $BOKYDO_TOKEN" \
 
 Writes go through the same command layer the app uses, so every authorization and validation rule
 applies unchanged: writing into a project you cannot see answers `404`, and a token without
-`projects:write` answers `403 insufficient_scope`. Comment resources, and the per-token project
-restriction deferred from W10a, are still to come — until then use the MCP `add_comment` tool or
-the sync endpoint for comments.
+`projects:write` answers `403 insufficient_scope`. Comment REST resources are still to come; use the MCP `add_comment` tool or the sync endpoint
+for comments.
 
 ## Recipes
 
@@ -158,39 +193,21 @@ Both can call a REST API with an `Authorization: Bearer …` header. Set the bas
 `https://your-instance/api/v1` and, for n8n, import `/api/docs/openapi.json` as the node's
 definition.
 
-## AI features (suggestions over REST)
+## External AI clients
 
-The suggestion endpoints below work with personal access tokens, so a connector or script can
-use them without a browser session. They only suggest: nothing is written. Apply what you
-accept through `/sync` or the REST resources above. The model used is the token owner's own
-AI routing, and a project-limited token only sees its projects (ADR 0019).
+Built-in AI, Assist, reports, and Ramble are retired for now. Their routes return `404`,
+no provider calls or AI jobs run, and new tokens cannot request the retired `ai:use` scope.
+Existing encrypted provider credentials are preserved but unused.
 
-| Endpoint                                            | Scopes needed              | Request (JSON unless noted)                                                             | Response                                                                                                                                |
-| --------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/assist/task`                          | `ai:use` + `tasks:read`    | `{ "taskId": "uuid" }`                                                                  | `{ "suggestion": { "content", "subtasks", "due", "priority", "why" } }`                                                                 |
-| `POST /api/v1/assist/filter`                        | `ai:use` + `projects:read` | `{ "text": "overdue work" }` (1–500 chars)                                              | `{ "query", "explanation", "warnings", "matches" }`                                                                                     |
-| `POST /api/v1/assist/report`                        | `ai:use` + `tasks:read`    | `{ "kind": "day" }`, `"week"`, or `{ "kind": "project", "projectId": "uuid" }`          | `{ "report", "counts", "generatedAt" }`                                                                                                 |
-| `POST /api/v1/assist/triage`                        | `ai:use` + `tasks:read`    | `{ "taskIds": ["uuid", …] }` (1–20, no repeats)                                         | `{ "suggestions": [{ "taskId", "projectId", "labels", "priority", "confidence", "why" }] }`                                             |
-| `POST /api/v1/ramble/transcribe?seconds=&language=` | `ai:use`                   | Raw `audio/*` chunk (≤ 5 MiB, ≤ 60 s)                                                   | `{ "text" }`                                                                                                                            |
-| `POST /api/v1/ramble/extract`                       | `ai:use`                   | `{ "text": "…", "draft": […] }` (text ≤ 20 000 chars, ≤ 50 draft tasks)                 | `{ "draft": [{ …task, "resolved": { "projectId", "sectionId", "due", "labels", "assigneeId", "issues" } }], "ops": [{ "op", "ref" }] }` |
-| `POST /api/v1/ramble/commit`                        | `tasks:write`              | `{ "tasks": […] }` (1–50 reviewed draft tasks; `projectId` overrides the named project) | `201 { "created": [{ "ref", "taskId" }] }` (all or nothing)                                                                             |
-
-Shapes match the Zod schemas in `packages/shared/src/assist.ts` and `packages/shared/src/ramble.ts`.
-
-Rate limits are per user: 30 requests/min across the four `assist/*` suggestion endpoints,
-and separately 40/min for transcriptions, 30/min for extractions and 30/min for commits.
-Common errors: `404 not_found` (unknown task/project), `409 ai_not_configured`,
-`422 ai_unusable` / `ai_refused`, `429 ai_budget_exceeded` / `too_many_requests`,
-`502 ai_provider_error`. Transcriptions also answer `400 validation_failed`,
-`413 audio_too_long` and `415 unsupported_media_type`.
-
-Ask your tasks (`/assist/ask`, `/assist/ask/confirm`) and the eval harness (`/assist/eval`)
-are session-only: they declare no token scopes, so a bearer token gets
-`403 token_not_accepted` there.
+Use an external client such as Hermes through MCP instead. The same personal token works
+with both MCP and REST; its permissions, project limits, expiry and revocation apply to both.
+The Settings → API & MCP page provides the URLs and a Hermes configuration when you create
+a token. Natural-language quick add remains available and uses the local date/priority parser.
 
 ## Security notes
 
-- Tokens are never sent to the browser and never appear in logs or error bodies.
+- A personal token is shown in the browser once when you create it; only its hash is stored.
+  Provider credentials are never sent to the browser, and secrets never appear in logs or error bodies.
 - Grant the narrowest scope that does the job; `sync` is the whole account.
 - Revoking a token or removing someone from a project takes effect immediately: the next request
   re-checks project access, so history does not leak after access is lost.

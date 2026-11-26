@@ -13,10 +13,20 @@ export const API_SCOPES = {
   'projects:write': 'Add, change and delete your projects, sections, labels and filters',
   'comments:read': 'See comments on your tasks and projects',
   'comments:write': 'Add, change and delete your comments',
-  'ai:use': 'Use AI features on your behalf (may cost money on your or the instance’s keys)',
+  'ai:use': 'Retired: AI features are not available',
 } as const;
+/** Kept in the type for dormant legacy AI code; never accepted for new tokens. */
 export type ApiScope = keyof typeof API_SCOPES;
-export const API_SCOPE_KEYS = Object.keys(API_SCOPES) as ApiScope[];
+export const API_SCOPE_KEYS = (Object.keys(API_SCOPES) as ApiScope[]).filter(
+  (scope) => scope !== 'ai:use',
+);
+
+/** Whether a token's scopes cover a route or tool's current core permissions. */
+export function scopesAllow(granted: readonly ApiScope[], required: readonly ApiScope[]): boolean {
+  return required.every(
+    (scope) => scope !== 'ai:use' && (granted.includes(scope) || granted.includes('sync')),
+  );
+}
 
 /** Granted when an OAuth client asks for no particular scope. Never includes `sync` or AI. */
 export const DEFAULT_OAUTH_SCOPES: readonly ApiScope[] = [

@@ -3,7 +3,6 @@ import { FAMILIES, FONTS, getTheme, TEXT_SIZES, THEMES, type Mode } from '@bokyd
 import { useEffect, type ReactNode } from 'react';
 import { Link } from '@tanstack/react-router';
 import { AccountDataSettings } from '../components/AccountDataSettings.js';
-import { AiSettings } from '../components/AiSettings.js';
 import { ApiAccessSettings } from '../components/ApiAccessSettings.js';
 import { DeviceSettings } from '../components/DeviceSettings.js';
 import { WebhookSettings } from '../components/WebhookSettings.js';
@@ -25,15 +24,7 @@ import { AdminBackupsPage } from './AdminBackupsPage.js';
 const LANGUAGE_NAMES: Record<(typeof LANGUAGES)[number], string> = { en: 'English' };
 
 type Tab =
-  | 'themes'
-  | 'general'
-  | 'notifications'
-  | 'calendar'
-  | 'apps'
-  | 'ai'
-  | 'webhooks'
-  | 'data'
-  | 'device';
+  'themes' | 'general' | 'notifications' | 'calendar' | 'apps' | 'webhooks' | 'data' | 'device';
 type SettingsSection = Tab | 'security' | 'admin-users' | 'admin-instance' | 'admin-backups';
 export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsSection }) {
   const { t } = useTranslation();
@@ -57,8 +48,7 @@ export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsS
   ] as const;
   const integrations = [
     ['calendar', t('settings.tabs.calendar'), '/settings/calendar'],
-    ['apps', t('settings.tabs.apps'), '/settings/apps'],
-    ['ai', t('settings.tabs.ai'), '/settings/ai'],
+    ['apps', 'API & MCP', '/settings/apps'],
     ['webhooks', t('settings.tabs.webhooks'), '/settings/webhooks'],
   ] as const;
   const administration = [
@@ -124,7 +114,6 @@ export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsS
           {tab === 'notifications' && <NotificationSettings prefs={prefs} update={update} />}
           {tab === 'calendar' && <CalendarSettings />}
           {tab === 'apps' && <ApiAccessSettings />}
-          {tab === 'ai' && <AiSettings />}
           {tab === 'webhooks' && <WebhookSettings />}
           {tab === 'data' && <AccountDataSettings />}
           {tab === 'device' && <DeviceSettings />}

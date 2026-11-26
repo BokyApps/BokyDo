@@ -7,7 +7,6 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AiAdminSettings } from '../components/AiSettings.js';
 import { EmailSettingsForm } from '../components/EmailSettingsForm.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import {
@@ -41,9 +40,6 @@ export function AdminSettingsPage({ embedded = false }: { embedded?: boolean }) 
       </Section>
       <Section title={t('admin.push.title')}>
         <PushHostsForm settings={settings} />
-      </Section>
-      <Section title={t('settings.tabs.ai')}>
-        <AiAdminSettings />
       </Section>
     </div>
   );

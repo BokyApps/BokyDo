@@ -1,5 +1,11 @@
 import { localNow, parseDate, parseQuickAdd, type QuickAddOptions } from '@bokydo/nlp';
-import { resolvePreferences, type ApiScope, type CommandType, type Task } from '@bokydo/shared';
+import {
+  scopesAllow,
+  resolvePreferences,
+  type ApiScope,
+  type CommandType,
+  type Task,
+} from '@bokydo/shared';
 import { and, asc, desc, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Database } from '../db/client.js';
@@ -242,7 +248,7 @@ export const TOOLS: ToolDefinition[] = [
         .where(and(eq(tasks.parentId, task.id), isNull(tasks.deletedAt)))
         .orderBy(asc(tasks.childOrder))
         .limit(100);
-      const notes = ctx.scopes.includes('comments:read')
+      const notes = scopesAllow(ctx.scopes, ['comments:read'])
         ? await ctx.db
             .select({
               id: comments.id,

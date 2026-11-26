@@ -52,7 +52,7 @@ export function registerAndroidRoutes(
       android: {
         clientId: ANDROID_CLIENT_ID,
         redirectUri: ANDROID_REDIRECT_URI,
-        scope: 'sync ai:use tasks:write',
+        scope: 'sync',
       },
       api: { sync: `${base}/api/v1/sync`, events: `${base}/api/v1/sync/events` },
     };
