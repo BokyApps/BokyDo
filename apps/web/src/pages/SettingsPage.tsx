@@ -5,6 +5,7 @@ import { Link } from '@tanstack/react-router';
 import { AccountDataSettings } from '../components/AccountDataSettings.js';
 import { ApiAccessSettings } from '../components/ApiAccessSettings.js';
 import { DeviceSettings } from '../components/DeviceSettings.js';
+import { MobileAppSettings } from '../components/MobileAppSettings.js';
 import { WebhookSettings } from '../components/WebhookSettings.js';
 import { TimeZonePicker } from '../components/TimeZonePicker.js';
 import { Card, Checkbox, SelectField } from '../components/ui.js';
@@ -24,7 +25,15 @@ import { AdminBackupsPage } from './AdminBackupsPage.js';
 const LANGUAGE_NAMES: Record<(typeof LANGUAGES)[number], string> = { en: 'English' };
 
 type Tab =
-  'themes' | 'general' | 'notifications' | 'calendar' | 'apps' | 'webhooks' | 'data' | 'device';
+  | 'themes'
+  | 'general'
+  | 'notifications'
+  | 'calendar'
+  | 'apps'
+  | 'webhooks'
+  | 'data'
+  | 'device'
+  | 'mobile';
 type SettingsSection = Tab | 'security' | 'admin-users' | 'admin-instance' | 'admin-backups';
 export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsSection }) {
   const { t } = useTranslation();
@@ -45,6 +54,7 @@ export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsS
     ],
     ['data', t('settings.tabs.data'), '/settings/data'],
     ['device', t('settings.tabs.device'), '/settings/device'],
+    ['mobile', t('settings.tabs.mobile', { defaultValue: 'Mobile app' }), '/settings/mobile'],
   ] as const;
   const integrations = [
     ['calendar', t('settings.tabs.calendar'), '/settings/calendar'],
@@ -117,6 +127,7 @@ export function SettingsPage({ initialTab = 'themes' }: { initialTab?: SettingsS
           {tab === 'webhooks' && <WebhookSettings />}
           {tab === 'data' && <AccountDataSettings />}
           {tab === 'device' && <DeviceSettings />}
+          {tab === 'mobile' && <MobileAppSettings />}
           {tab === 'security' && <AccountSecurityPage embedded />}
           {tab === 'admin-users' && isAdmin && <AdminUsersPage embedded />}
           {tab === 'admin-instance' && isAdmin && <AdminSettingsPage embedded />}

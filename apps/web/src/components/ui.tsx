@@ -13,8 +13,13 @@ import {
 
 export function Logo({ className = '' }: { className?: string }) {
   return (
-    <span className={`font-brand text-xl font-semibold tracking-tight ${className}`}>
-      <span className="text-accent">Boky</span>Do
+    <span
+      className={`inline-flex items-center gap-2 font-brand text-xl font-semibold tracking-tight ${className}`}
+    >
+      <img src="/branding/bokydo-mark-small.png" alt="" className="size-7 shrink-0" />
+      <span>
+        <span className="text-accent">Boky</span>Do
+      </span>
     </span>
   );
 }
