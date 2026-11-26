@@ -23,13 +23,13 @@ import { api } from '../lib/api.js';
 import { errorMessage } from '../lib/messages.js';
 import { adminSettingsQuery } from '../lib/queries.js';
 
-export function AdminSettingsPage() {
+export function AdminSettingsPage({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const { data: settings } = useQuery(adminSettingsQuery);
   if (!settings) return null;
   return (
-    <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">{t('admin.title')}</h1>
+    <div className={`mx-auto max-w-2xl space-y-6 ${embedded ? '' : 'px-4 py-8'}`}>
+      {!embedded && <h1 className="text-2xl font-semibold">{t('admin.title')}</h1>}
       <Section title={t('admin.instance.title')}>
         <InstanceForm settings={settings} />
       </Section>

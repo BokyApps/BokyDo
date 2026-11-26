@@ -1,25 +1,20 @@
 /** Font choices (all SIL Open Font License; self-hosted, see NOTICE). */
 export const FONTS = [
-  {
-    id: 'system',
-    name: 'System',
-    stack: 'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif',
-  },
-  { id: 'inter', name: 'Inter', stack: '"Inter Variable", system-ui, sans-serif' },
-  { id: 'ibm-plex-sans', name: 'IBM Plex Sans', stack: '"IBM Plex Sans", system-ui, sans-serif' },
+  { id: 'inter', name: 'Inter', stack: '"Inter Variable"' },
+  { id: 'ibm-plex-sans', name: 'IBM Plex Sans', stack: '"IBM Plex Sans", "Inter Variable"' },
   {
     id: 'atkinson',
     name: 'Atkinson Hyperlegible',
-    stack: '"Atkinson Hyperlegible", system-ui, sans-serif',
+    stack: '"Atkinson Hyperlegible", "Inter Variable"',
   },
-  { id: 'lexend', name: 'Lexend', stack: '"Lexend Variable", system-ui, sans-serif' },
-  { id: 'opendyslexic', name: 'OpenDyslexic', stack: '"OpenDyslexic", system-ui, sans-serif' },
+  { id: 'lexend', name: 'Lexend', stack: '"Lexend Variable", "Inter Variable"' },
+  { id: 'opendyslexic', name: 'OpenDyslexic', stack: '"OpenDyslexic", "Inter Variable"' },
   {
     id: 'jetbrains-mono',
     name: 'JetBrains Mono',
-    stack: '"JetBrains Mono Variable", ui-monospace, monospace',
+    stack: '"JetBrains Mono Variable", "Inter Variable"',
   },
-  { id: 'fira-code', name: 'Fira Code', stack: '"Fira Code Variable", ui-monospace, monospace' },
+  { id: 'fira-code', name: 'Fira Code', stack: '"Fira Code Variable", "Inter Variable"' },
 ] as const;
 
 export type FontId = (typeof FONTS)[number]['id'];

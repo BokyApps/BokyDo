@@ -59,9 +59,6 @@ const AccountSecurityPage = lazy(
   () => import('./pages/AccountSecurityPage.js'),
   'AccountSecurityPage',
 );
-const AdminSettingsPage = lazy(() => import('./pages/AdminSettingsPage.js'), 'AdminSettingsPage');
-const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage.js'), 'AdminUsersPage');
-const AdminBackupsPage = lazy(() => import('./pages/AdminBackupsPage.js'), 'AdminBackupsPage');
 
 type Gate =
   | '/setup/admin'
@@ -210,6 +207,26 @@ const routeTree = rootRoute.addChildren([
     appPage('/templates', TemplatesPage),
     appPage('/archived', ArchivedPage),
     appPage('/settings', SettingsPage),
+    appPage('/settings/themes', () => <SettingsPage initialTab="themes" />),
+    appPage('/settings/general', () => <SettingsPage initialTab="general" />),
+    appPage('/settings/security', () => <SettingsPage initialTab="security" />),
+    appPage('/settings/webhooks', () => <SettingsPage initialTab="webhooks" />),
+    appPage('/settings/admin/users', () => <SettingsPage initialTab="admin-users" />, {
+      adminOnly: true,
+    }),
+    appPage('/settings/admin/instance', () => <SettingsPage initialTab="admin-instance" />, {
+      adminOnly: true,
+    }),
+    appPage('/settings/admin/backups', () => <SettingsPage initialTab="admin-backups" />, {
+      adminOnly: true,
+    }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/settings/appearance',
+      beforeLoad: () => {
+        throw redirect({ to: '/settings/themes' });
+      },
+    }),
     appPage('/settings/notifications', () => <SettingsPage initialTab="notifications" />),
     appPage('/settings/calendar', () => <SettingsPage initialTab="calendar" />),
     appPage('/settings/apps', () => <SettingsPage initialTab="apps" />),
@@ -223,9 +240,30 @@ const routeTree = rootRoute.addChildren([
     filterRoute,
     taskRoute,
     appPage('/account/security', AccountSecurityPage),
-    appPage('/admin/settings', AdminSettingsPage, { adminOnly: true }),
-    appPage('/admin/users', AdminUsersPage, { adminOnly: true }),
-    appPage('/admin/backups', AdminBackupsPage, { adminOnly: true }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/admin/settings',
+      beforeLoad: async () => {
+        await guard('/admin/settings', { adminOnly: true });
+        throw redirect({ to: '/settings/admin/instance' });
+      },
+    }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/admin/users',
+      beforeLoad: async () => {
+        await guard('/admin/users', { adminOnly: true });
+        throw redirect({ to: '/settings/admin/users' });
+      },
+    }),
+    createRoute({
+      getParentRoute: () => appRoute,
+      path: '/admin/backups',
+      beforeLoad: async () => {
+        await guard('/admin/backups', { adminOnly: true });
+        throw redirect({ to: '/settings/admin/backups' });
+      },
+    }),
   ]),
 ]);
 

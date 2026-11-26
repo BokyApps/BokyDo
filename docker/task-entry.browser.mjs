@@ -21,7 +21,7 @@ const browser = await chromium.launch({
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
 try {
-  const context = await browser.newContext({ timezoneId: 'UTC' });
+  const context = await browser.newContext({ timezoneId: 'UTC', serviceWorkers: 'block' });
   context.setDefaultTimeout(15000);
   const api = context.request;
   const instance = await (await api.get(`${base}/api/v1/instance`)).json();
@@ -110,6 +110,7 @@ try {
   const fresh = await browser.newContext({
     storageState: await context.storageState(),
     timezoneId: 'UTC',
+    serviceWorkers: 'block',
   });
   fresh.setDefaultTimeout(15000);
   const reloaded = await fresh.newPage();
@@ -226,8 +227,172 @@ try {
   assert.equal(habits.habits.length, 1);
   assert.equal(habits.habits[0].name, 'Read daily');
   assert.deepEqual(errors, []);
+  // Keep a non-Latin subset pending to prove that switching waits for every font file.
+  const gate = () => {
+    let resolve;
+    const wait = new Promise((done) => {
+      resolve = done;
+    });
+    return { wait, release: () => resolve() };
+  };
+  const firaExtended = gate();
+  const firaSeen = gate();
+  const lexend = gate();
+  const lexendSeen = gate();
+  await reloaded.route('**/*.woff2', async (route) => {
+    const url = route.request().url();
+    if (url.includes('fira-code-latin-ext')) {
+      firaSeen.release();
+      await firaExtended.wait;
+    } else if (url.includes('lexend-')) {
+      lexendSeen.release();
+      await lexend.wait;
+    }
+    await route.continue();
+  });
+  await reloaded.getByRole('button', { name: /account menu/ }).click();
+  assert.equal(await reloaded.getByRole('button', { name: /^Admin:/ }).count(), 0);
+  assert.equal(
+    await reloaded.getByRole('button', { name: 'Account security', exact: true }).count(),
+    0,
+  );
+  await reloaded.getByRole('button', { name: 'Settings', exact: true }).click();
+  const sections = reloaded.getByRole('navigation', { name: 'Settings sections', exact: true });
+  await sections.getByRole('link', { name: 'Themes', exact: true }).waitFor();
+  await reloaded.getByRole('heading', { name: 'Fonts', exact: true }).waitFor();
+  const font = reloaded.getByRole('combobox', { name: 'Font', exact: true });
+  assert.equal(await font.getByRole('option').count(), 7);
+  assert.equal(await font.getByRole('option', { name: 'System', exact: true }).count(), 0);
+  await font.selectOption('fira-code');
+  const bounded = (promise) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Font request not observed')), 15000),
+      ),
+    ]);
+  await bounded(firaSeen.wait);
+  const currentFont = () =>
+    reloaded.evaluate(() =>
+      globalThis.document.documentElement.style.getPropertyValue('--bk-font'),
+    );
+  assert(
+    (await currentFont()).startsWith('"Inter Variable"'),
+    'Keep current font until all subsets load',
+  );
+  await font.selectOption('lexend');
+  await bounded(lexendSeen.wait);
+  lexend.release();
+  await reloaded.waitForFunction(() =>
+    globalThis.document.documentElement.style
+      .getPropertyValue('--bk-font')
+      .startsWith('"Lexend Variable"'),
+  );
+  firaExtended.release();
+  await reloaded.waitForFunction(() =>
+    [...globalThis.document.fonts]
+      .filter((face) => face.family.includes('Fira Code'))
+      .every((face) => face.status === 'loaded'),
+  );
+  assert(
+    (await currentFont()).startsWith('"Lexend Variable"'),
+    'A slow older choice must not overwrite the latest font',
+  );
+  await reloaded.unroute('**/*.woff2');
+
+  const cdp = await fresh.newCDPSession(reloaded);
+  await cdp.send('DOM.enable');
+  await cdp.send('CSS.enable');
+  await reloaded.evaluate(() => {
+    const sample = globalThis.document.createElement('p');
+    sample.id = 'font-regression-sample';
+    sample.textContent = 'Readable Łódź Ελληνικά Привет';
+    globalThis.document.querySelector('main').append(sample);
+  });
+  const actualFonts = async (selector) => {
+    const { root } = await cdp.send('DOM.getDocument');
+    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+    return (await cdp.send('CSS.getPlatformFontsForNode', { nodeId })).fonts;
+  };
+  for (const [id, family] of [
+    ['inter', 'Inter Variable'],
+    ['ibm-plex-sans', 'IBM Plex Sans'],
+    ['atkinson', 'Atkinson Hyperlegible'],
+    ['lexend', 'Lexend Variable'],
+    ['opendyslexic', 'OpenDyslexic'],
+    ['jetbrains-mono', 'JetBrains Mono Variable'],
+    ['fira-code', 'Fira Code Variable'],
+  ]) {
+    await font.selectOption(id);
+    await reloaded.waitForFunction(
+      (name) =>
+        globalThis.document.documentElement.style
+          .getPropertyValue('--bk-font')
+          .startsWith(`"${name}"`),
+      family,
+    );
+    const rendered = await actualFonts('#font-regression-sample');
+    assert(
+      rendered.length > 0 && rendered.every((entry) => entry.isCustomFont),
+      `No system fallback for ${id}`,
+    );
+    const logo = await actualFonts('.font-brand');
+    assert(
+      logo.length > 0 &&
+        logo.every((entry) => entry.isCustomFont && entry.familyName.includes('JetBrains')),
+      'Logo stays JetBrains Mono',
+    );
+  }
+  const families = [
+    ['Doist', 'bokydo-light', 'bokydo-dark'],
+    ['Catppuccin', 'catppuccin-latte', 'catppuccin-mocha'],
+    ['Gruvbox', 'gruvbox-light', 'gruvbox-dark'],
+    ['Dracula', 'dracula-alucard', 'dracula'],
+    ['Nord', 'nord-light', 'nord'],
+    ['Tokyo Night', 'tokyonight-day', 'tokyonight-night'],
+    ['Solarized', 'solarized-light', 'solarized-dark'],
+    ['One Dark / One Light', 'one-light', 'one-dark'],
+    ['Rosé Pine', 'rosepine-dawn', 'rosepine'],
+    ['Everforest', 'everforest-light', 'everforest-dark'],
+    ['Kanagawa', 'kanagawa-lotus', 'kanagawa-wave'],
+  ];
+  for (const [mode, column] of [
+    ['Light', 1],
+    ['Dark', 2],
+  ]) {
+    await reloaded.getByRole('button', { name: mode, exact: true }).click();
+    for (const family of families) {
+      await reloaded.getByRole('button', { name: family[0], exact: true }).click();
+      await reloaded.waitForFunction(
+        (id) => globalThis.document.documentElement.dataset.theme === id,
+        family[column],
+      );
+    }
+  }
+  await sections.getByRole('link', { name: 'Notifications', exact: true }).click();
+  await sections.getByRole('link', { name: 'Themes', exact: true }).click();
+  await reloaded.goBack();
+  assert.equal(
+    await sections
+      .getByRole('link', { name: 'Notifications', exact: true })
+      .getAttribute('aria-current'),
+    'page',
+  );
+  await sections.getByRole('link', { name: 'Account security', exact: true }).click();
+  await reloaded.getByRole('heading', { name: 'Two-factor authentication', exact: true }).waitFor();
+  await reloaded.goto(`${base}/admin/backups`);
+  await reloaded.waitForURL(`${base}/settings/admin/backups`);
+  await reloaded.getByRole('navigation', { name: 'Settings sections', exact: true }).waitFor();
+  await reloaded.goto(`${base}/settings/themes`);
+  await reloaded.getByRole('combobox', { name: 'Font', exact: true }).waitFor();
+  assert.equal(await font.inputValue(), 'fira-code');
+  assert.equal(
+    await reloaded.evaluate(() => globalThis.document.documentElement.dataset.theme),
+    'kanagawa-wave',
+  );
+  assert.deepEqual(errors, []);
   console.log(
-    'PASS: task entry, persistence, View icons, habit CRUD/check-ins/streaks, retry safety and task isolation',
+    'PASS: task and habit entry, unified Settings, all theme families, bundled font switching/subsets/races and fixed logo',
   );
 } finally {
   await browser.close();

@@ -39,7 +39,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Settings → Appearance (PLAN §4a): the theme family and its variants, the mode (system, light
+ * Settings → Themes: the theme family and its variants, the mode (system, light
  * or dark), the font, the text size and the density. Everything but Material You's dynamic
  * colour is the user's synced setting, so the web app follows it too.
  */
@@ -129,7 +129,7 @@ fun AppearanceSection(state: AppState) {
     )
     ChoiceRow(
         label = "Font",
-        value = Appearance.FONTS[appearance.font] ?: "System",
+        value = Appearance.FONTS[appearance.font] ?: Appearance.FONTS["inter"].orEmpty(),
         options = Appearance.FONTS.values.toList(),
         onPick = { label ->
             val id = Appearance.FONTS.entries.firstOrNull { it.value == label }?.key ?: return@ChoiceRow

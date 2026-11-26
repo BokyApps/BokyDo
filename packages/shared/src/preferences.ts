@@ -9,7 +9,7 @@ export const appearanceSchema = z
     mode: z.enum(['system', 'light', 'dark']),
     lightTheme: z.enum(THEME_IDS as [string, ...string[]]),
     darkTheme: z.enum(THEME_IDS as [string, ...string[]]),
-    font: z.enum(FONT_IDS),
+    font: z.preprocess((value) => (value === 'system' ? 'inter' : value), z.enum(FONT_IDS)),
     textSize: z.enum(Object.keys(TEXT_SIZES) as [TextSize, ...TextSize[]]),
     density: z.enum(['comfortable', 'compact']),
   })
@@ -117,7 +117,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     mode: 'system',
     lightTheme: 'bokydo-light',
     darkTheme: 'bokydo-dark',
-    font: 'system',
+    font: 'inter',
     textSize: 'default',
     density: 'comfortable',
   },

@@ -31,7 +31,7 @@ function useAdminAction<V>(fn: (v: V) => Promise<unknown>, onSuccess?: (data: un
   });
 }
 
-export function AdminUsersPage() {
+export function AdminUsersPage({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const { data: users } = useQuery(usersQuery);
   const { data: session } = useQuery(sessionQuery);
@@ -58,8 +58,8 @@ export function AdminUsersPage() {
   const errors = [update, resetMfa, resetLink].filter((m) => m.isError);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
-      <h1 className="text-2xl font-semibold">{t('admin.users.title')}</h1>
+    <div className={`mx-auto max-w-3xl space-y-6 ${embedded ? '' : 'px-4 py-8'}`}>
+      {!embedded && <h1 className="text-2xl font-semibold">{t('admin.users.title')}</h1>}
       <Card>
         <CreateUser onCreated={setShown} />
       </Card>
