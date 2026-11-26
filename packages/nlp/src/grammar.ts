@@ -25,6 +25,7 @@ import {
   PERIODS,
   PM_PERIODS,
   TOMORROW,
+  TOMORROW_PERIODS,
   UNITS,
   table,
   WEEKDAYS,
@@ -115,7 +116,14 @@ interface TimeMatch {
 
 const hhmm = (h: number, m: number) =>
   `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-const SUFFIX = table<'am' | 'pm'>({ am: 'am', pm: 'pm', 'a.m': 'am', 'p.m': 'pm' });
+const SUFFIX = table<'am' | 'pm'>({
+  am: 'am',
+  pm: 'pm',
+  a: 'am',
+  p: 'pm',
+  'a.m': 'am',
+  'p.m': 'pm',
+});
 
 /**
  * "5pm", "5:30 pm", "17:00", "at 9", "at noon", "midnight". A bare number only counts after
@@ -366,8 +374,17 @@ export function dateCore(
   if (!t) return null;
 
   if (t === 'today' || t === 'tod') return withPeriod(w, { end: i + 1, date: today });
-  if (t === 'tonight') return { end: i + 1, date: today, time: '19:00', pmBias: true };
+  if (t === 'tonight') return { end: i + 1, date: today, time: '22:00', pmBias: true };
   if (TOMORROW.has(t)) return withPeriod(w, { end: i + 1, date: addDays(today, 1) });
+  const tomorrowPeriod = TOMORROW_PERIODS[t];
+  const tomorrowTime = tomorrowPeriod && PERIODS[tomorrowPeriod];
+  if (tomorrowPeriod && tomorrowTime)
+    return {
+      end: i + 1,
+      date: addDays(today, 1),
+      time: tomorrowTime,
+      pmBias: PM_PERIODS.has(tomorrowPeriod),
+    };
   if (t === 'yesterday') return withPeriod(w, { end: i + 1, date: addDays(today, -1) });
   if (t === 'day' || t === 'the') {
     const j = t === 'the' ? i + 1 : i;
@@ -702,7 +719,7 @@ export function recurrencePhrase(
   let anchor: 'scheduled' | 'completion' = 'scheduled';
   let p: Pattern | null;
   const head = T(w, i);
-  if (head === 'every' || head === 'each') {
+  if (head === 'every' || head === 'ev' || head === 'each') {
     const word = w[i];
     if (word?.bang && word.end + 1 === word.rawEnd) anchor = 'completion';
     else if (word?.bang) return null;
