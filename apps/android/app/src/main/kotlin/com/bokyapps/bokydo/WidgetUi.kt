@@ -12,12 +12,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
-import androidx.glance.action.Action
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.CheckBox
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
@@ -40,10 +40,12 @@ import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.text.FontWeight
-import androidx.glance.text.Text
+import com.bokyapps.bokydo.WidgetText as Text
 import androidx.glance.text.TextDecoration
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import androidx.glance.semantics.semantics
+import androidx.glance.semantics.contentDescription
 import com.bokyapps.bokydo.core.AppState
 import com.bokyapps.bokydo.core.Appearance
 import com.bokyapps.bokydo.core.Dates
@@ -68,6 +70,7 @@ import kotlinx.coroutines.withContext
 private val KEY_CONFIG = stringPreferencesKey("config")
 
 /** Which task a tap-to-complete checkbox refers to. */
+private val KEY_ACCOUNT = ActionParameters.Key<String>("account")
 private val KEY_TASK_ID = ActionParameters.Key<String>("taskId")
 
 /** What a widget shows and the colours it uses, resolved for the device now. */
@@ -107,12 +110,12 @@ private fun quickAddIntent(context: Context) =
 
 /** The task-list widget. */
 class TodayWidget : GlanceAppWidget() {
+    override val sizeMode = SizeMode.Exact
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val state = withContext(Dispatchers.Default) { context.app.appState() }
-        val dark = systemDark(context)
         provideContent {
+            val snapshot = widgetSnapshot()
             val config = Widgets.decode(currentState<Preferences>()[KEY_CONFIG])
-            TaskWidgetContent(state, config, dark)
+            TaskWidgetContent(snapshot.state, config, systemDark(context), snapshot.account)
         }
     }
 }
@@ -120,9 +123,9 @@ class TodayWidget : GlanceAppWidget() {
 /** The quick-add widget: one tap opens the app with the add sheet already up. */
 class QuickAddWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val state = withContext(Dispatchers.Default) { context.app.appState() }
-        val dark = systemDark(context)
         provideContent {
+            val state = widgetSnapshot().state
+            val dark = systemDark(context)
             val appearance = state.user?.prefs?.appearance ?: Appearance.DEFAULT
             val tokens = Widgets.tokens(appearance, "system", dark)
             val context = LocalContext.current
@@ -143,13 +146,23 @@ class QuickAddWidget : GlanceAppWidget() {
 }
 
 @Composable
-private fun TaskWidgetContent(state: AppState, config: Widgets.Config, dark: Boolean) {
+private fun TaskWidgetContent(state: AppState, config: Widgets.Config, dark: Boolean, account: String?) {
     // Signed out: the widget shows nothing (and so no task titles) until the user signs in.
-    if (state.user == null) return
+    if (state.user == null || account == null || LocalContext.current.app.accountEpoch() != account) {
+        Text("Sign in to see tasks", modifier = GlanceModifier.padding(12.dp).clickable(actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))))
+        return
+    }
 
     val context = LocalContext.current
     val view = screen(state, config, dark, todayIn(state))
-    val openApp = actionStartActivity(Intent(context, MainActivity::class.java))
+    val intent = Intent(context, MainActivity::class.java)
+    when (val target = config.target) {
+        Widgets.Target.Inbox -> intent.putExtra(MainActivity.EXTRA_DESTINATION, "inbox")
+        Widgets.Target.Upcoming -> intent.putExtra(MainActivity.EXTRA_DESTINATION, "upcoming")
+        is Widgets.Target.Project -> intent.putExtra(MainActivity.EXTRA_DESTINATION, "project").putExtra(MainActivity.EXTRA_PROJECT_ID, target.id)
+        Widgets.Target.Today -> Unit
+    }
+    val openApp = actionStartActivity(intent)
     val tokens = view.tokens
 
     Column(
@@ -165,30 +178,36 @@ private fun TaskWidgetContent(state: AppState, config: Widgets.Config, dark: Boo
             Spacer(GlanceModifier.size(8.dp))
             Text(
                 "＋",
-                modifier = GlanceModifier.clickable(actionStartActivity(quickAddIntent(context))),
+                modifier = GlanceModifier.padding(8.dp).clickable(actionStartActivity(Intent(intent).putExtra(MainActivity.EXTRA_QUICK_ADD, true))),
                 style = TextStyle(color = provider(tokens.accent, view.alpha), fontWeight = FontWeight.Bold, fontSize = 18.sp),
                 maxLines = 1,
             )
         }
+        Text("Refresh", modifier = GlanceModifier.padding(vertical = 4.dp).clickable(actionRunCallback<RefreshWidgetsAction>()), style = TextStyle(color = provider(tokens.accent, view.alpha), fontSize = 12.sp))
         if (view.rows.isEmpty()) {
             Text("Nothing here.", style = TextStyle(color = provider(tokens.muted, view.alpha), fontSize = 13.sp))
         } else {
             LazyColumn(modifier = GlanceModifier.fillMaxSize()) {
-                items(view.rows) { row -> TaskLine(row, view, openApp) }
+                items(view.rows.take(12)) { row -> TaskLine(row, view, account) }
+                if (view.rows.size > 12) item { Text("Open list for more", GlanceModifier.padding(8.dp).clickable(openApp), style = TextStyle(color = provider(tokens.accent, view.alpha))) }
             }
         }
     }
 }
 
 @Composable
-private fun TaskLine(row: Widgets.Row, screen: Screen, openApp: Action) {
+private fun TaskLine(row: Widgets.Row, screen: Screen, account: String) {
+    val context = LocalContext.current
+    val openApp = actionStartActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_DESTINATION, "task").putExtra(MainActivity.EXTRA_TASK_ID, row.id))
     val tokens = screen.tokens
     val meta = listOfNotNull(row.due, row.project).joinToString(" · ")
     Column(modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp).clickable(openApp)) {
+        Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         CheckBox(
             checked = row.completed,
-            onCheckedChange = actionRunCallback<CompleteTaskAction>(actionParametersOf(KEY_TASK_ID to row.id)),
-            text = row.content,
+            modifier = GlanceModifier.semantics { contentDescription = row.content },
+            onCheckedChange = actionRunCallback<CompleteTaskAction>(actionParametersOf(KEY_TASK_ID to row.id, KEY_ACCOUNT to account)),
+            text = "",
             style = TextStyle(
                 color = provider(tokens.fg, screen.alpha),
                 fontSize = 14.sp,
@@ -196,6 +215,8 @@ private fun TaskLine(row: Widgets.Row, screen: Screen, openApp: Action) {
             ),
             maxLines = 1,
         )
+        Text(row.content, maxLines = 2, style = TextStyle(color = provider(tokens.fg, screen.alpha), fontSize = 14.sp))
+        }
         if (meta.isNotEmpty()) {
             Text(
                 meta,
@@ -217,7 +238,10 @@ private fun toneColor(tone: Dates.Tone?, tokens: ThemeTokens): Long = when (tone
 class CompleteTaskAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val id = parameters[KEY_TASK_ID] ?: return
-        withContext(Dispatchers.IO) { context.app.send("task_complete", id) }
+        val account = parameters[KEY_ACCOUNT] ?: return
+        withContext(Dispatchers.IO) {
+            context.app.sendForAccount(account, "task_complete", id)
+        }
         TodayWidget().update(context, glanceId)
     }
 }
@@ -243,5 +267,6 @@ object WidgetRefresh {
     suspend fun updateAll(context: Context) {
         TodayWidget().updateAll(context)
         QuickAddWidget().updateAll(context)
+        HabitWidget().updateAll(context)
     }
 }

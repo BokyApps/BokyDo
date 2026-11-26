@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
                                 val parsed = parseLaunch(launch.value)
                                 AppShell(
                                     state,
+                                    startRoute = parsed.route,
                                     startWithQuickAdd = parsed.quickAdd,
                                     quickAddText = parsed.text,
                                     quickAddDetails = parsed.details,
@@ -120,6 +121,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        const val EXTRA_DESTINATION = "com.bokyapps.bokydo.extra.DESTINATION"
+        const val EXTRA_PROJECT_ID = "com.bokyapps.bokydo.extra.PROJECT_ID"
+        const val EXTRA_TASK_ID = "com.bokyapps.bokydo.extra.TASK_ID"
         const val EXTRA_QUICK_ADD = "com.bokyapps.bokydo.extra.QUICK_ADD"
     }
 }
@@ -135,6 +139,15 @@ private fun parseLaunch(intent: Intent?): Launch {
         if (shared != null) return Launch(Route.Today, true, shared.title, shared.details)
         return Launch(Route.Today, false, "", "")
     }
+    val destination = when (intent.getStringExtra(MainActivity.EXTRA_DESTINATION)) {
+        "inbox" -> Route.Inbox
+        "upcoming" -> Route.Upcoming
+        "habits" -> Route.Habits
+        "project" -> intent.getStringExtra(MainActivity.EXTRA_PROJECT_ID)?.let { Route.Project(it) }
+        "task" -> intent.getStringExtra(MainActivity.EXTRA_TASK_ID)?.let { Route.TaskDetail(it) }
+        else -> null
+    }
+    if (destination != null) return Launch(destination, intent.getBooleanExtra(MainActivity.EXTRA_QUICK_ADD, false), "", "")
     // The quick-add widget asks for the sheet with an extra rather than an action.
     if (intent.getBooleanExtra(MainActivity.EXTRA_QUICK_ADD, false)) return Launch(Route.Today, true, "", "")
     return when (intent.action) {

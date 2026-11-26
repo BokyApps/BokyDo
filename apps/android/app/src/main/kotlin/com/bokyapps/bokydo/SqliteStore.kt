@@ -4,6 +4,9 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.bokyapps.bokydo.core.HabitStore
+import com.bokyapps.bokydo.core.HabitCheckIn
+import com.bokyapps.bokydo.core.HabitsResponse
 import com.bokyapps.bokydo.core.Command
 import com.bokyapps.bokydo.core.ENTITY_TYPES
 import com.bokyapps.bokydo.core.Json
@@ -13,6 +16,7 @@ import com.bokyapps.bokydo.core.SyncResponse
 import com.bokyapps.bokydo.core.id
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -24,9 +28,14 @@ import kotlinx.serialization.json.JsonObject
  * which the unit tests pin down. Plain SQLite rather than Room: no annotation processing in the
  * build, and screens read the state into memory like the web app does (ADR 0010).
  */
-class SqliteStore(context: Context) : LocalStore {
-    private val helper = object : SQLiteOpenHelper(context, "bokydo.db", null, 1) {
+class SqliteStore(context: Context, databaseName: String = "bokydo.db") : LocalStore, HabitStore {
+    private val helper = object : SQLiteOpenHelper(context, databaseName, null, 2) {
+        private fun createHabitTables(db: SQLiteDatabase) {
+            db.execSQL("create table if not exists habit_cache (owner text primary key, json text not null)")
+            db.execSQL("create table if not exists habit_queue (seq integer primary key autoincrement, uuid text not null unique, owner text not null, habit_id text not null, date text not null, completed integer not null)")
+        }
         override fun onCreate(db: SQLiteDatabase) {
+            createHabitTables(db)
             db.execSQL("create table entities (type text not null, id text not null, json text not null, primary key (type, id))")
             db.execSQL("create table snapshots (name text primary key, json text not null)")
             db.execSQL("create table meta (key text primary key, value text not null)")
@@ -34,7 +43,9 @@ class SqliteStore(context: Context) : LocalStore {
             db.execSQL("create table rejections (uuid text primary key, type text not null, args text not null, error text not null, message text, at integer not null)")
         }
 
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            if (oldVersion < 2) createHabitTables(db)
+        }
     }
 
     private val _version = MutableStateFlow(0L)
@@ -42,7 +53,7 @@ class SqliteStore(context: Context) : LocalStore {
     val version: StateFlow<Long> = _version
 
     private fun changed() {
-        _version.value = _version.value + 1
+        _version.update { it + 1 }
     }
 
     override fun cursor(): String? =
@@ -163,7 +174,7 @@ class SqliteStore(context: Context) : LocalStore {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
-            for (t in listOf("entities", "snapshots", "meta", "queue", "rejections")) db.delete(t, null, null)
+            for (t in listOf("entities", "snapshots", "meta", "queue", "rejections", "habit_cache", "habit_queue")) db.delete(t, null, null)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -204,4 +215,81 @@ class SqliteStore(context: Context) : LocalStore {
             it.moveToFirst()
             it.getInt(0)
         }
+    /** Stable across token refresh/process restarts; replaced for every new sign-in. */
+    fun close() = helper.close()
+
+    fun accountEpoch(): String? = helper.readableDatabase.rawQuery("select value from meta where key = 'accountEpoch'", null).use {
+        if (it.moveToFirst()) it.getString(0) else null
+    }
+
+    fun ensureAccountEpoch() {
+        helper.writableDatabase.execSQL("insert or ignore into meta (key,value) values ('accountEpoch',?)", arrayOf(java.util.UUID.randomUUID().toString()))
+    }
+
+    private fun habitWrite(owner: String, write: (SQLiteDatabase) -> Unit) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            if (accountEpoch() != owner) return
+            write(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        changed()
+    }
+
+    fun enqueueForAccount(owner: String, command: Command) = habitWrite(owner) { db ->
+        db.insertOrThrow("queue", null, ContentValues().apply {
+            put("uuid", command.uuid)
+            put("type", command.type)
+            put("args", command.args.toString())
+        })
+    }
+
+    override fun cachedHabits(owner: String): HabitsResponse? {
+        if (accountEpoch() != owner) return null
+        return helper.readableDatabase.rawQuery("select json from habit_cache where owner = ?", arrayOf(owner)).use {
+            if (it.moveToFirst()) Json.decodeFromString(HabitsResponse.serializer(), it.getString(0)) else null
+        }
+    }
+
+    override fun saveHabits(owner: String, response: HabitsResponse) = habitWrite(owner) { db ->
+        db.insertWithOnConflict("habit_cache", null, ContentValues().apply {
+            put("owner", owner)
+            put("json", Json.encodeToString(HabitsResponse.serializer(), response))
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    override fun pendingHabits(owner: String): List<HabitCheckIn> {
+        if (accountEpoch() != owner) return emptyList()
+        return helper.readableDatabase.rawQuery("select uuid,habit_id,date,completed from habit_queue where owner = ? order by seq", arrayOf(owner)).use {
+            buildList { while (it.moveToNext()) add(HabitCheckIn(it.getString(0), it.getString(1), it.getString(2), it.getInt(3) != 0)) }
+        }
+    }
+
+    override fun enqueueHabit(owner: String, change: HabitCheckIn) = habitWrite(owner) { db ->
+        db.insertOrThrow("habit_queue", null, ContentValues().apply {
+            put("uuid", change.uuid)
+            put("owner", owner)
+            put("habit_id", change.habitId)
+            put("date", change.date)
+            put("completed", if (change.completed) 1 else 0)
+        })
+    }
+
+    override fun acknowledgeHabit(owner: String, uuid: String) = habitWrite(owner) { db ->
+        db.delete("habit_queue", "owner = ? and uuid = ?", arrayOf(owner, uuid))
+    }
+
+    override fun habitError(owner: String): String? {
+        if (accountEpoch() != owner) return null
+        return helper.readableDatabase.rawQuery("select value from meta where key = 'habitError'", null).use {
+            if (it.moveToFirst()) it.getString(0) else null
+        }
+    }
+
+    override fun setHabitError(owner: String, message: String?) = habitWrite(owner) { db ->
+        if (message == null) db.delete("meta", "key = 'habitError'", null)
+        else db.execSQL("insert or replace into meta (key,value) values ('habitError',?)", arrayOf(message))
+    }
+
 }

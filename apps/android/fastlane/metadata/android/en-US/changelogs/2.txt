@@ -1,0 +1,1 @@
+Task widgets for Inbox, Today, Upcoming and projects, with direct task navigation. New habit widget and Habits screen support daily/weekly progress and offline check-ins. Widgets use bundled fonts, refresh controls and account-safe actions. Existing task data and widget configurations are retained on upgrade.

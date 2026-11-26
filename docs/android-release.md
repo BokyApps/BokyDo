@@ -56,3 +56,54 @@ Lives in `apps/android/fastlane/metadata/android/en-US/` (F-Droid reads
 F-Droid's scanner flags Google's encrypted dependency-metadata block.
 
 Keystores, signing and publishing are A7b (blocked by A6 hardening), not this card.
+
+## Task and habit widgets (0.1.1)
+
+After signing in, long-press the home screen and choose Widgets → BokyDo. **BokyDo tasks**
+asks for Inbox, Today (including overdue), Upcoming (the next two weeks), or a specific project.
+Add multiple instances for different lists. Tap a task to open its details or its checkbox to
+complete it; the header opens its list and + starts an addition there. **BokyDo habits** shows
+personal daily/weekly habits and today's check-ins. Its header opens Browse → Habits in the app.
+Manage habits opens the web tracker for creation and editing.
+
+Both list widgets resize and scroll, have a refresh action, and follow the app's palette and
+bundled font (task widgets also offer a light/dark override). Up to 12 entries appear in a widget;
+open its list for additional entries. Text bitmaps retain full accessibility labels. Updates
+follow local changes, foreground sync, periodic WorkManager sync and launcher refreshes. Android
+may defer background work during Doze; Refresh requests a catch-up. Habit taps are stored in
+SQLite with their original date and desired checked state and retried idempotently. A stale
+widget from a previous day refreshes before accepting another check-in. Signing out clears
+caches/queues, and actions from an earlier login cannot write to a new account.
+
+Version 2 of the device database adds habit tables without rebuilding task tables. VersionCode 2
+uses the existing release signing certificate, so installing the APK over the trial preserves
+accounts, tasks and widget placements. Debug-only widget-host/test classes are absent from release.
+
+### Device regression
+
+Run against a **disposable emulator and a fresh loopback server**. `docker/android-widgets-fixture.mjs`
+refuses an initialized instance and writes its temporary token to a new private file. Install
+`playwright-core` outside the repo (as for other browser regressions), then set `NODE_PATH` and run:
+
+```bash
+BOKYDO_TEST_BASE_URL=http://127.0.0.1:18090 \
+BOKYDO_WIDGET_FIXTURE_PATH=/tmp/bokydo-widget-fixture.json \
+node docker/android-widgets-fixture.mjs
+cd apps/android
+./gradlew :core:test :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb reverse tcp:18090 tcp:18090
+adb shell appwidget grantbind --package com.bokyapps.bokydo --user 0
+# Copy the private fixture into the debug app without echoing it.
+adb shell run-as com.bokyapps.bokydo mkdir -p files
+adb shell 'run-as com.bokyapps.bokydo sh -c "cat > files/widget-fixture.json"' < /tmp/bokydo-widget-fixture.json
+adb shell am instrument -w -r com.bokyapps.bokydo.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The test uses a real AppWidgetHost and actual Glance callback PendingIntents, verifies all four
+task lists, persists a habit check-in to the server, reopens the SQLite queue and checks account
+isolation. A separate device test upgrades a version-one database with queued task changes.
+The JVM suite covers network/restart retry, success followed by failed refresh, rapid check-ins,
+permanent refusal, midnight and account week boundaries. Remove the emulator, stack and fixture
+after testing; never use these fixture steps on an owner's installation.
