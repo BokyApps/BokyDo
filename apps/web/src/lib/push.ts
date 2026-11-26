@@ -2,6 +2,27 @@ import { api } from './api.js';
 
 export type PushState = 'unsupported' | 'insecure' | 'denied' | 'off' | 'on';
 
+export type PushSetupProblem = 'dismissed' | 'worker' | 'browser' | 'server';
+
+/** Keep browser push-service failures distinct from failures saving to BokyDo. */
+export class PushSetupError extends Error {
+  constructor(
+    readonly problem: PushSetupProblem,
+    cause?: unknown,
+  ) {
+    super(`push_setup_${problem}`, { cause });
+    this.name = 'PushSetupError';
+  }
+}
+
+async function setupStep<T>(problem: PushSetupProblem, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (cause) {
+    throw new PushSetupError(problem, cause);
+  }
+}
+
 export const pushSupported = () =>
   'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 
@@ -20,8 +41,8 @@ export async function pushState(): Promise<PushState> {
   if (!pushSupported()) return 'unsupported';
   if (!window.isSecureContext) return 'insecure';
   if (Notification.permission === 'denied') return 'denied';
-  const reg = await navigator.serviceWorker.getRegistration('/');
-  const sub = await reg?.pushManager.getSubscription();
+  const reg = await setupStep('worker', () => navigator.serviceWorker.getRegistration('/'));
+  const sub = await setupStep('browser', async () => reg?.pushManager.getSubscription());
   return sub && Notification.permission === 'granted' ? 'on' : 'off';
 }
 
@@ -29,18 +50,26 @@ export async function pushState(): Promise<PushState> {
 export async function enablePush(): Promise<PushState> {
   if (!pushSupported()) return 'unsupported';
   if (!window.isSecureContext) return 'insecure';
-  if ((await Notification.requestPermission()) !== 'granted') return 'denied';
-  const reg = await registration();
-  const { publicKey } = await api<{ publicKey: string }>('GET', '/api/v1/push/key');
+  const permission = await Notification.requestPermission();
+  if (permission === 'denied') return 'denied';
+  if (permission !== 'granted') throw new PushSetupError('dismissed');
+  const reg = await setupStep('worker', registration);
+  const { publicKey } = await setupStep('server', () =>
+    api<{ publicKey: string }>('GET', '/api/v1/push/key'),
+  );
   const key = fromB64u(publicKey);
-  let sub = await reg.pushManager.getSubscription();
-  const current = sub?.options.applicationServerKey;
-  if (sub && (!current || !sameBytes(new Uint8Array(current), key))) {
-    await sub.unsubscribe();
-    sub = null;
-  }
-  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-  await api('POST', '/api/v1/push/subscriptions', sub.toJSON());
+  const sub = await setupStep('browser', async () => {
+    let currentSub = await reg.pushManager.getSubscription();
+    const current = currentSub?.options.applicationServerKey;
+    if (currentSub && (!current || !sameBytes(new Uint8Array(current), key))) {
+      await currentSub.unsubscribe();
+      currentSub = null;
+    }
+    return (
+      currentSub ?? reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
+    );
+  });
+  await setupStep('server', () => api('POST', '/api/v1/push/subscriptions', sub.toJSON()));
   return 'on';
 }
 
